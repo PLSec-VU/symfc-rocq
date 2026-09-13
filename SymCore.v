@@ -92,15 +92,15 @@ Proof.
 Defined.
 
 (** Symmetry of a coercion: sym γ witnesses τ2 ~ρ τ1 (Fig. 3, Rule App-Cast) *)
-Definition sym_coerc (c : coercion) : coercion :=
-  MkCoercion (coerc_dst c) (coerc_src c) (coerc_role c).
+Definition sym_coerc (γ : coercion) : coercion :=
+  MkCoercion (coerc_dst γ) (coerc_src γ) (coerc_role γ).
 
 (** Decomposition of arrow coercion: (γa -> γr) = γ (Fig. 3, Rule App-Cast) *)
-Definition decomp_coerc_arrow (c : coercion) : option (coercion * coercion) :=
-  match coerc_src c, coerc_dst c with
+Definition decomp_coerc_arrow (γ : coercion) : option (coercion * coercion) :=
+  match coerc_src γ, coerc_dst γ with
   | TyArrow s1 s2, TyArrow d1 d2 =>
-      Some (MkCoercion s1 d1 (coerc_role c),
-            MkCoercion s2 d2 (coerc_role c))
+      Some (MkCoercion s1 d1 (coerc_role γ),
+            MkCoercion s2 d2 (coerc_role γ))
   | _, _ => None
   end.
 
@@ -146,30 +146,30 @@ with environment : Type :=
                                                   (** Γ{x ↦ (Γ', e)}: substitution map *)
 
 (** Environment lookup: (Γ', e) = Γ(x) (Fig. 3, Rule Var) *)
-Fixpoint lookup_env (g : environment) (x : var) : option (environment * expr) :=
-  match g with
+Fixpoint lookup_env (Γ : environment) (x : var) : option (environment * expr) :=
+  match Γ with
   | EmptyEnv => None
-  | ExtendEnv y (MkClosure g' e) rest =>
-      if string_dec x y then Some (g', e) else lookup_env rest x
+  | ExtendEnv y (MkClosure Γ' e) rest =>
+      if string_dec x y then Some (Γ', e) else lookup_env rest x
   end.
 
 (** Predicate checking whether a variable is in the environment Γ *)
-Definition in_env (g : environment) (x : var) : bool :=
-  match lookup_env g x with
+Definition in_env (Γ : environment) (x : var) : bool :=
+  match lookup_env Γ x with
   | Some _ => true
   | None => false
   end.
 
 (** Single-variable environment extension: Γ{x ↦ (Γ', e)} (Fig. 3, Rule App-Abs) *)
-Definition extend_env (g : environment) (x : var) (g' : environment) (e : expr) : environment :=
-  ExtendEnv x (MkClosure g' e) g.
+Definition extend_env (Γ : environment) (x : var) (Γ' : environment) (e : expr) : environment :=
+  ExtendEnv x (MkClosure Γ' e) Γ.
 
 (** Multi-variable environment extension for pattern matching: Γ{x⃗ ↦ (Γ', e⃗)} (Fig. 3, fold-alts) *)
-Fixpoint extend_env_multi (g : environment) (xs : list var) (args : list expr) (g_arg : environment) : environment :=
+Fixpoint extend_env_multi (Γ : environment) (xs : list var) (args : list expr) (Γ_arg : environment) : environment :=
   match xs, args with
   | x :: xs', a :: args' =>
-      extend_env (extend_env_multi g xs' args' g_arg) x g_arg a
-  | _, _ => g
+      extend_env (extend_env_multi Γ xs' args' Γ_arg) x Γ_arg a
+  | _, _ => Γ
   end.
 
 (** ========================================================================= *)
@@ -189,15 +189,15 @@ Inductive path_condition : Set :=
 Parameter sat : path_condition -> bool.
 
 (** Conjunction of path conditions: Φ1 ∧ Φ2 *)
-Definition pc_and (p1 p2 : path_condition) : path_condition :=
-  PCPrim op_and [p1; p2].
+Definition pc_and (Φ1 Φ2 : path_condition) : path_condition :=
+  PCPrim op_and [Φ1; Φ2].
 
 (** Negation of a path condition: ¬Φ *)
-Definition pc_not (p : path_condition) : path_condition :=
-  PCPrim op_not [p].
+Definition pc_not (Φ : path_condition) : path_condition :=
+  PCPrim op_not [Φ].
 
-Notation "p1 '∧' p2" := (pc_and p1 p2) (at level 40, left associativity).
-Notation "'¬' p" := (pc_not p) (at level 35, right associativity).
+Notation "Φ1 '∧' Φ2" := (pc_and Φ1 Φ2) (at level 40, left associativity).
+Notation "'¬' Φ" := (pc_not Φ) (at level 35, right associativity).
 
 (** Convert a solvable expression into a path condition formula *)
 Fixpoint expr_to_pc (e : expr) : option path_condition :=
@@ -230,6 +230,13 @@ Parameter reduce_prim : primop -> list expr -> expr.
 (** Cast simplification: cast(e, γ) (Fig. 3, Rule Cast) *)
 Parameter cast_expr : expr -> coercion -> expr.
 
+(** Leaf expression merging (Fig. 3, Rule Case & Section 3.3) *)
+Parameter merge : expr -> expr.
+
+(** Type and Coercion substitution under environment Γ (Fig. 3, Rules Type and Coercion) *)
+Parameter subst_coerc : environment -> coercion -> coercion.
+Parameter subst_type : environment -> type_fc -> type_fc.
+
 (** ========================================================================= *)
 (** 7. Solvable and WHNF Definitions in Prop (§3.2)                            *)
 (** ========================================================================= *)
@@ -243,27 +250,27 @@ Fixpoint is_op_app (e : expr) : bool :=
   end.
 
 (**
-  Solvable g e in Prop (§3.2):
+  Solvable Γ e in Prop (§3.2):
     - Literals: e ≡ l
     - Symbolic variables: e ≡ x ∧ x ∉ Γ
     - Primitive operations: e ≡ ⊗ e⃗ where all arguments are solvable
 *)
-Inductive Solvable (g : environment) : expr -> Prop :=
+Inductive Solvable (Γ : environment) : expr -> Prop :=
   | Solvable_Lit : forall l,
-      Solvable g (ELit l)
+      Solvable Γ (ELit l)
   | Solvable_Var : forall x,
-      lookup_env g x = None ->
-      Solvable g (EVar x)
+      lookup_env Γ x = None ->
+      Solvable Γ (EVar x)
   | Solvable_PrimOp : forall p,
-      Solvable g (EPrimOp p)
+      Solvable Γ (EPrimOp p)
   | Solvable_AppPrim : forall f a,
       is_op_app (EApp f a) = true ->
-      Solvable g f ->
-      Solvable g a ->
-      Solvable g (EApp f a).
+      Solvable Γ f ->
+      Solvable Γ a ->
+      Solvable Γ (EApp f a).
 
 (**
-  Whnf g e in Prop (§3.2):
+  Whnf Γ e in Prop (§3.2):
     - Solvable(Γ, e)
     - e ≡ D
     - e ≡ b
@@ -271,48 +278,48 @@ Inductive Solvable (g : environment) : expr -> Prop :=
     - e ≡ eb ⊲ γ ∧ Whnf(Γ, eb)
     - e ≡ if ec then et else ef ∧ Solvable(Γ, ec) ∧ Whnf(Γ, et) ∧ Whnf(Γ, ef)
 *)
-Inductive Whnf (g : environment) : expr -> Prop :=
+Inductive Whnf (Γ : environment) : expr -> Prop :=
   | Whnf_Solvable : forall e,
-      Solvable g e ->
-      Whnf g e
+      Solvable Γ e ->
+      Whnf Γ e
   | Whnf_Con : forall d,
-      Whnf g (ECon d)
+      Whnf Γ (ECon d)
   | Whnf_Bot : forall b,
-      Whnf g (EBot b)
+      Whnf Γ (EBot b)
   | Whnf_Lam : forall x body,
-      Whnf g (ELam x body)
-  | Whnf_Clos : forall g_def x body,
-      Whnf g (EClos g_def x body)
-  | Whnf_Coercion : forall gamma,
-      Whnf g (ECoercion gamma)
-  | Whnf_Type : forall tau,
-      Whnf g (EType tau)
-  | Whnf_Cast : forall eb gamma,
-      Whnf g eb ->
-      Whnf g (ECast eb gamma)
+      Whnf Γ (ELam x body)
+  | Whnf_Clos : forall Γ_def x body,
+      Whnf Γ (EClos Γ_def x body)
+  | Whnf_Coercion : forall γ,
+      Whnf Γ (ECoercion γ)
+  | Whnf_Type : forall τ,
+      Whnf Γ (EType τ)
+  | Whnf_Cast : forall eb γ,
+      Whnf Γ eb ->
+      Whnf Γ (ECast eb γ)
   | Whnf_If : forall ec et ef,
-      Solvable g ec ->
-      Whnf g et ->
-      Whnf g ef ->
-      Whnf g (EIf ec et ef).
+      Solvable Γ ec ->
+      Whnf Γ et ->
+      Whnf Γ ef ->
+      Whnf Γ (EIf ec et ef).
 
 (** ========================================================================= *)
 (** 8. Decision Functions (Fixpoints) for Solvable and WHNF                    *)
 (** ========================================================================= *)
 
 (** Solvable is decidable *)
-Fixpoint solvable_dec (g : environment) (e : expr) : {Solvable g e} + {~ Solvable g e}.
+Fixpoint solvable_dec (Γ : environment) (e : expr) : {Solvable Γ e} + {~ Solvable Γ e}.
 Proof.
   destruct e.
-  - destruct (lookup_env g v) eqn:Heq.
+  - destruct (lookup_env Γ v) eqn:Heq.
     + right. intros H. inversion H. rewrite Heq in H1. discriminate.
     + left. apply Solvable_Var. assumption.
   - left. apply Solvable_Lit.
   - left. apply Solvable_PrimOp.
   - right. intros H. inversion H.
   - destruct (is_op_app (EApp e1 e2)) eqn:Hop.
-    + destruct (solvable_dec g e1) as [S1 | N1].
-      * destruct (solvable_dec g e2) as [S2 | N2].
+    + destruct (solvable_dec Γ e1) as [S1 | N1].
+      * destruct (solvable_dec Γ e2) as [S2 | N2].
         -- left. apply Solvable_AppPrim; auto.
         -- right. intros H. inversion H; subst. apply N2; auto.
       * right. intros H. inversion H; subst. apply N1; auto.
@@ -328,16 +335,16 @@ Proof.
 Defined.
 
 (** Helper inversion lemmas on Solvable *)
-Lemma solvable_not_cast : forall g e c, ~ Solvable g (ECast e c).
-Proof. intros g e c H. inversion H. Qed.
+Lemma solvable_not_cast : forall Γ e γ, ~ Solvable Γ (ECast e γ).
+Proof. intros Γ e γ H. inversion H. Qed.
 
-Lemma solvable_not_if : forall g c t f, ~ Solvable g (EIf c t f).
-Proof. intros g c t f H. inversion H. Qed.
+Lemma solvable_not_if : forall Γ c t f, ~ Solvable Γ (EIf c t f).
+Proof. intros Γ c t f H. inversion H. Qed.
 
 (** WHNF is decidable *)
-Fixpoint whnf_dec (g : environment) (e : expr) : {Whnf g e} + {~ Whnf g e}.
+Fixpoint whnf_dec (Γ : environment) (e : expr) : {Whnf Γ e} + {~ Whnf Γ e}.
 Proof.
-  destruct (solvable_dec g e) as [S | NS].
+  destruct (solvable_dec Γ e) as [S | NS].
   - left. apply Whnf_Solvable. assumption.
   - destruct e.
     + right. intros H. inversion H; subst; [contradiction | inversion H0..].
@@ -348,25 +355,25 @@ Proof.
     + left. apply Whnf_Lam.
     + left. apply Whnf_Clos.
     + right. intros H. inversion H; subst; [contradiction | inversion H0..].
-    + destruct (whnf_dec g e) as [W | NW].
+    + destruct (whnf_dec Γ e) as [W | NW].
       * left. apply Whnf_Cast. assumption.
       * right. intros H. inversion H; subst.
-        -- apply (solvable_not_cast g e c); auto.
+        -- apply (solvable_not_cast Γ e c); auto.
         -- apply NW; auto.
     + left. apply Whnf_Coercion.
     + left. apply Whnf_Type.
-    + destruct (solvable_dec g e1) as [S1 | NS1].
-      * destruct (whnf_dec g e2) as [W2 | NW2].
-        -- destruct (whnf_dec g e3) as [W3 | NW3].
+    + destruct (solvable_dec Γ e1) as [S1 | NS1].
+      * destruct (whnf_dec Γ e2) as [W2 | NW2].
+        -- destruct (whnf_dec Γ e3) as [W3 | NW3].
            ++ left. apply Whnf_If; auto.
            ++ right. intros H. inversion H; subst.
-              ** apply (solvable_not_if g e1 e2 e3); auto.
+              ** apply (solvable_not_if Γ e1 e2 e3); auto.
               ** apply NW3; auto.
         -- right. intros H. inversion H; subst.
-           ++ apply (solvable_not_if g e1 e2 e3); auto.
+           ++ apply (solvable_not_if Γ e1 e2 e3); auto.
            ++ apply NW2; auto.
       * right. intros H. inversion H; subst.
-        -- apply (solvable_not_if g e1 e2 e3); auto.
+        -- apply (solvable_not_if Γ e1 e2 e3); auto.
         -- apply NS1; auto.
     + left. apply Whnf_Bot.
 Defined.
@@ -409,41 +416,127 @@ Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
 
 (**
-  fold-alts(Φ, Γ, e, a⃗) (§3.2, lines 570-590):
-    case e ≡ if ec then et else ef:
-      if ec then fold-alts(Φ ∧ ec, Γ, et, a)
-             else fold-alts(Φ ∧ ¬ec, Γ, ef, a)
-    case e ≡ D e⃗a:
-      where Alt D x⃗ ep := find(D, a)
-      reduce: Φ; Γ{x⃗ ↦ e⃗a} ⊢ ep ⇓ er
-    case e ≡ b: b
-    otherwise: ⊥ (BUndefined)
-
-  Higher-order structural fixpoint over expressions e, parameterized by
-  the reduction function:
-    reduce : path_condition -> environment -> expr -> expr
+  Mutual inductive definitions of:
+  - Big-Step Reduction Judgement: Φ; Γ ⊢ e ⇓ e' (Figure 3)
+  - Pattern Matching and Branch Folding: fold-alts(Φ, Γ, e, a⃗) (§3.2, lines 570-590)
 *)
-Fixpoint fold_alts (reduce : path_condition -> environment -> expr -> expr)
-                   (phi : path_condition) (g : environment) (e : expr) (alts : list alt) : expr :=
-  match e with
-  | EIf ec et ef =>
-      match expr_to_pc ec with
-      | Some pc_c =>
-          let et' := fold_alts reduce (phi ∧ pc_c) g et alts in
-          let ef' := fold_alts reduce (phi ∧ ¬ pc_c) g ef alts in
-          EIf ec et' ef'
-      | None => EBot BUndefined
-      end
-  | EBot b =>
-      EBot b
-  | _ =>
-      match decompose_con_app e with
-      | Some (d, ea) =>
-          match find_alt d alts with
-          | Some (xs, ep) => reduce phi (extend_env_multi g xs ea g) ep
-          | None => EBot BUndefined
-          end
-      | None => EBot BUndefined
-      end
-  end.
+Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
+  (** Rule Var: Variable lookup in Γ and recursive evaluation *)
+  | Eval_Var : forall Φ Γ x Γ' e e',
+      lookup_env Γ x = Some (Γ', e) ->
+      eval Φ Γ' e e' ->
+      eval Φ Γ (EVar x) e'
+
+  (** Rule Lit: Literal reflexivity *)
+  | Eval_Lit : forall Φ Γ l,
+      eval Φ Γ (ELit l) (ELit l)
+
+  (** Rule Con: Data constructor reflexivity *)
+  | Eval_Con : forall Φ Γ d,
+      eval Φ Γ (ECon d) (ECon d)
+
+  (** Rule Cast: Evaluate expression and simplify cast *)
+  | Eval_Cast : forall Φ Γ e γ e',
+      eval Φ Γ e e' ->
+      eval Φ Γ (ECast e γ) (cast_expr e' γ)
+
+  (** Rule App-Abs: Beta-reduction with closure environment extension *)
+  | Eval_AppAbs : forall Φ Γ Γ' x eb ea eb',
+      eval Φ (extend_env Γ' x Γ ea) eb eb' ->
+      eval Φ Γ (EApp (EClos Γ' x eb) ea) eb'
+
+  (** Rule App-Spine: Reduce function head when not in WHNF *)
+  | Eval_AppSpine : forall Φ Γ ef ea ef' er,
+      ~ Whnf Γ ef ->
+      eval Φ Γ ef ef' ->
+      eval Φ Γ (EApp ef' ea) er ->
+      eval Φ Γ (EApp ef ea) er
+
+  (** Rule Bot: Bottom value reflexivity *)
+  | Eval_Bot : forall Φ Γ b,
+      eval Φ Γ (EBot b) (EBot b)
+
+  (** Rule App-Prim: Evaluate primitive operation arguments and reduce *)
+  | Eval_AppPrim : forall Φ Γ ef ea p args args',
+      unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+      Forall2 (eval Φ Γ) args args' ->
+      eval Φ Γ (EApp ef ea) (reduce_prim p args')
+
+  (** Rule Lam: Function abstraction evaluates to runtime closure *)
+  | Eval_Lam : forall Φ Γ x e,
+      eval Φ Γ (ELam x e) (EClos Γ x e)
+
+  (** Rule App-Cast: Higher-order coercion pushing *)
+  | Eval_AppCast : forall Φ Γ ef γ ea γ_a γ_r er,
+      decomp_coerc_arrow γ = Some (γ_a, γ_r) ->
+      eval Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
+      eval Φ Γ (EApp (ECast ef γ) ea) er
+
+  (** Rule App-Bot: Propagation of bottom in function position *)
+  | Eval_AppBot : forall Φ Γ b ea,
+      eval Φ Γ (EApp (EBot b) ea) (EBot b)
+
+  (** Rule Case: Evaluate scrutinee, merge common prefixes, and fold alternatives *)
+  | Eval_Case : forall Φ Γ es alts es' er,
+      eval Φ Γ es es' ->
+      fold_alts Φ Γ (merge es') alts er ->
+      eval Φ Γ (ECase es alts) er
+
+  (** Rule If: Evaluate condition, convert to path condition, and branch *)
+  | Eval_If : forall Φ Γ ec et ef ec' et' ef' pc_c,
+      eval Φ Γ ec ec' ->
+      expr_to_pc ec' = Some pc_c ->
+      eval (Φ ∧ pc_c) Γ et et' ->
+      eval (Φ ∧ ¬ pc_c) Γ ef ef' ->
+      eval Φ Γ (EIf ec et ef) (EIf ec' et' ef')
+
+  (** Rule Coercion: Evaluate coercion under substitution *)
+  | Eval_Coercion : forall Φ Γ γ,
+      eval Φ Γ (ECoercion γ) (ECoercion (subst_coerc Γ γ))
+
+  (** Rule Prune: Infeasible path conditions reduce to unreachable *)
+  | Eval_Prune : forall Φ Γ e,
+      sat Φ = false ->
+      eval Φ Γ e (EBot BUnreachable)
+
+  (** Rule Type: Evaluate type under substitution *)
+  | Eval_Type : forall Φ Γ τ,
+      eval Φ Γ (EType τ) (EType (subst_type Γ τ))
+
+with fold_alts : path_condition -> environment -> expr -> list alt -> expr -> Prop :=
+  (** Branch traversal: condition is converted to path condition *)
+  | FoldAlts_If : forall Φ Γ ec et ef alts et' ef' pc_c,
+      expr_to_pc ec = Some pc_c ->
+      fold_alts (Φ ∧ pc_c) Γ et alts et' ->
+      fold_alts (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
+      fold_alts Φ Γ (EIf ec et ef) alts (EIf ec et' ef')
+
+  (** Fallback for ill-formed condition in branching *)
+  | FoldAlts_IfFail : forall Φ Γ ec et ef alts,
+      expr_to_pc ec = None ->
+      fold_alts Φ Γ (EIf ec et ef) alts (EBot BUndefined)
+
+  (** Constructor match: find alternative and reduce body *)
+  | FoldAlts_Con : forall Φ Γ e d ea xs ep alts er,
+      decompose_con_app e = Some (d, ea) ->
+      find_alt d alts = Some (xs, ep) ->
+      eval Φ (extend_env_multi Γ xs ea Γ) ep er ->
+      fold_alts Φ Γ e alts er
+
+  (** Bottom propagation *)
+  | FoldAlts_Bot : forall Φ Γ b alts,
+      fold_alts Φ Γ (EBot b) alts (EBot b)
+
+  (** Otherwise: undefined behavior *)
+  | FoldAlts_Otherwise : forall Φ Γ e alts,
+      is_if e = false ->
+      (match decompose_con_app e with
+       | Some (d, _) => find_alt d alts = None
+       | None => True
+       end) ->
+      is_bot e = false ->
+      fold_alts Φ Γ e alts (EBot BUndefined).
+
+(** Notation for big-step reduction: Φ; Γ ⊢ e ⇓ e' *)
+Notation "Φ ';' Γ '⊢' e '⇓' e'" := (eval Φ Γ e e') (at level 70, no associativity).
 
