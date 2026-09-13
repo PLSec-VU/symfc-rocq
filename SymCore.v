@@ -172,6 +172,7 @@ Fixpoint extend_env_multi (Γ : environment) (xs : list var) (args : list expr) 
   | _, _ => Γ
   end.
 
+
 (** ========================================================================= *)
 (** 5. Path Condition Φ (Figure 2)                                            *)
 (** ========================================================================= *)
@@ -592,6 +593,102 @@ Notation "Φ ';' Γ '⊢' e '⇓' e'" := (eval Φ Γ e e') (at level 70, no asso
 (** ========================================================================= *)
 
 (** ------------------------------------------------------------------------- *)
+(** 10.0 Source Expressions (System FC Translated AST, Fig. 1)                *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  Source expressions represent pure System FC ASTs translated from Haskell
+  prior to evaluation. They contain no runtime environment closures (EClos)
+  and no runtime symbolic execution branch trees (EIf).
+*)
+
+
+
+(** ------------------------------------------------------------------------- *)
+(** Free Variables and Well-Formed Environments                               *)
+(** ------------------------------------------------------------------------- *)
+
+(** Free variables of an expression *)
+Fixpoint fv (e : expr) : list var :=
+  match e with
+  | EVar x => [x]
+  | EApp f a => fv f ++ fv a
+  | ELam x body => remove string_dec x (fv body)
+  | EClos _ x body => remove string_dec x (fv body)
+  | ECase es alts => fv es ++ flat_map fv_alt alts
+  | ECast e _ => fv e
+  | EIf ec et ef => fv ec ++ fv et ++ fv ef
+  | EBot (BRaise e) => fv e
+  | _ => []
+  end
+with fv_alt (a : alt) : list var :=
+  match a with
+  | Alt _ xs ep => fold_right (remove string_dec) (fv ep) xs
+  end.
+
+(** Domain (bound variables) of an environment *)
+Fixpoint dom_env (Γ : environment) : list var :=
+  match Γ with
+  | EmptyEnv => []
+  | ExtendEnv x _ rest => x :: dom_env rest
+  end.
+
+(**
+  An environment Γ is well-formed with respect to expression e if
+  no free variable of e occurs in Γ (i.e. all free variables of e
+  are fresh / unbound / symbolic).
+*)
+Definition wf_env (e : expr) (Γ : environment) : Prop :=
+  forall x, In x (fv e) -> lookup_env Γ x = None.
+
+(** The empty environment is universally well-formed for any expression *)
+Lemma wf_empty_env : forall e,
+  wf_env e EmptyEnv.
+Proof.
+  intros e x Hin.
+  reflexivity.
+Qed.
+
+(** In a well-formed environment, every free variable is Solvable *)
+Lemma wf_env_var_solvable : forall x Γ,
+  wf_env (EVar x) Γ ->
+  Solvable Γ (EVar x).
+Proof.
+  intros x Γ Hwf.
+  apply Solvable_Var.
+  apply Hwf.
+  simpl. left. reflexivity.
+Qed.
+
+(** Well-formedness distributes over sub-expressions *)
+Lemma wf_env_app_l : forall f a Γ,
+  wf_env (EApp f a) Γ ->
+  wf_env f Γ.
+Proof.
+  intros f a Γ Hwf x Hin.
+  apply Hwf.
+  simpl. apply in_or_app. left. assumption.
+Qed.
+
+Lemma wf_env_app_r : forall f a Γ,
+  wf_env (EApp f a) Γ ->
+  wf_env a Γ.
+Proof.
+  intros f a Γ Hwf x Hin.
+  apply Hwf.
+  simpl. apply in_or_app. right. assumption.
+Qed.
+
+Lemma wf_env_if_c : forall ec et ef Γ,
+  wf_env (EIf ec et ef) Γ ->
+  wf_env ec Γ.
+Proof.
+  intros ec et ef Γ Hwf x Hin.
+  apply Hwf.
+  simpl. apply in_or_app. left. assumption.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
 (** 10.1 Infeasible Path Invariance & Pruning Soundness (§3.3)                 *)
 (** ------------------------------------------------------------------------- *)
 
@@ -604,13 +701,6 @@ Proof.
   apply Eval_Prune.
   assumption.
 Qed.
-
-(** Any evaluation under an unsatisfiable path condition yields unreachable *)
-Lemma eval_unsat_unreachable : forall Φ Γ e v,
-  sat Φ = false ->
-  Φ ; Γ ⊢ e ⇓ v ->
-  v = EBot BUnreachable.
-Admitted.
 
 (** ------------------------------------------------------------------------- *)
 (** 10.2 Semantic Contract for Merge (§3.3)                                    *)
@@ -635,17 +725,6 @@ Axiom cast_expr_whnf : forall Γ e γ,
 (** Primitive reduction produces a WHNF (SMT / Grisette contract - Axiom 2) *)
 Axiom reduce_prim_whnf : forall Γ p args,
   Whnf Γ (reduce_prim p args).
-
-(** Evaluation under a satisfiable path condition produces a WHNF (or bottom) *)
-Theorem eval_whnf : forall Φ Γ e v,
-  Φ ; Γ ⊢ e ⇓ v ->
-  sat Φ = false \/ Whnf Γ v.
-Admitted.
-
-Lemma fold_alts_whnf : forall Φ Γ e alts r,
-  fold_alts Φ Γ e alts r ->
-  sat Φ = false \/ Whnf Γ r.
-Admitted.
 
 (** ------------------------------------------------------------------------- *)
 (** 10.4 Determinism of Evaluation (§3.2)                                      *)
@@ -919,28 +998,4 @@ Proof.
     subst. reflexivity.
 Qed.
 
-(** Evaluation in SymCore is deterministic *)
-Theorem eval_deterministic : forall Φ Γ e v1 v2,
-  sat Φ = true ->
-  Φ ; Γ ⊢ e ⇓ v1 ->
-  Φ ; Γ ⊢ e ⇓ v2 ->
-  v1 = v2.
-Admitted.
-
-Lemma fold_alts_deterministic : forall Φ Γ e alts r1 r2,
-  fold_alts Φ Γ e alts r1 ->
-  fold_alts Φ Γ e alts r2 ->
-  r1 = r2.
-Admitted.
-
-(** ------------------------------------------------------------------------- *)
-(** 10.5 Environment Extensionality                                           *)
-(** ------------------------------------------------------------------------- *)
-
-(** Evaluation depends only on the extensional behavior of environment lookup *)
-Lemma eval_extensional_env : forall Φ Γ1 Γ2 e v,
-  (forall x, lookup_env Γ1 x = lookup_env Γ2 x) ->
-  Φ ; Γ1 ⊢ e ⇓ v ->
-  Φ ; Γ2 ⊢ e ⇓ v.
-Admitted.
 

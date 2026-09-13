@@ -1,2 +1,3 @@
 -Q . SymCoreTheory
 SymCore.v
+ConCore.v
