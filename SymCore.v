@@ -206,7 +206,7 @@ Parameter reduce_prim : primop -> list expr -> expr.
 Parameter cast_expr : expr -> coercion -> expr.
 
 (** ========================================================================= *)
-(** 7. Solvable and WHNF Predicates (§3.2)                                    *)
+(** 7. Solvable and WHNF Definitions in Prop (§3.2)                            *)
 (** ========================================================================= *)
 
 (** Helper: checks if the head of an expression is a primitive operation *)
@@ -218,50 +218,130 @@ Fixpoint is_op_app (e : expr) : bool :=
   end.
 
 (**
-  solvable(Γ, e) predicate (§3.2):
-    solvable(Γ, e) =
-      True   if e ≡ l
-      True   if e ≡ x ∧ x ∉ Γ
-      True   if e ≡ ⊗ e⃗ ∧ ∀ ea ∈ e⃗, solvable(Γ, ea)
-      False  otherwise
+  Solvable g e in Prop (§3.2):
+    - Literals: e ≡ l
+    - Symbolic variables: e ≡ x ∧ x ∉ Γ
+    - Primitive operations: e ≡ ⊗ e⃗ where all arguments are solvable
 *)
-Fixpoint solvable (g : environment) (e : expr) : bool :=
-  match e with
-  | ELit _ => true
-  | EVar x => negb (in_env g x)
-  | EPrimOp _ => true
-  | EApp f a =>
-      if is_op_app e then
-        solvable g f && solvable g a
-      else
-        false
-  | _ => false
-  end.
+Inductive Solvable (g : environment) : expr -> Prop :=
+  | Solvable_Lit : forall l,
+      Solvable g (ELit l)
+  | Solvable_Var : forall x,
+      lookup_env g x = None ->
+      Solvable g (EVar x)
+  | Solvable_PrimOp : forall p,
+      Solvable g (EPrimOp p)
+  | Solvable_AppPrim : forall f a,
+      is_op_app (EApp f a) = true ->
+      Solvable g f ->
+      Solvable g a ->
+      Solvable g (EApp f a).
 
 (**
-  WHNF(Γ, e) predicate (§3.2):
-    WHNF(Γ, e) =
-      True   if solvable(Γ, e)
-      True   if e ≡ D
-      True   if e ≡ b
-      True   if e ≡ λx. e (or closure (Γ', λx. e))
-      True   if e ≡ eb ⊲ γ ∧ WHNF(Γ, eb)
-      True   if e ≡ if ec then et else ef ∧ solvable(Γ, ec) ∧ WHNF(Γ, et) ∧ WHNF(Γ, ef)
-      False  otherwise
+  Whnf g e in Prop (§3.2):
+    - Solvable(Γ, e)
+    - e ≡ D
+    - e ≡ b
+    - e ≡ λx. e (or closure (Γ', λx. e))
+    - e ≡ eb ⊲ γ ∧ Whnf(Γ, eb)
+    - e ≡ if ec then et else ef ∧ Solvable(Γ, ec) ∧ Whnf(Γ, et) ∧ Whnf(Γ, ef)
 *)
-Fixpoint whnf (g : environment) (e : expr) : bool :=
-  if solvable g e then
-    true
-  else
-    match e with
-    | ECon d => true
-    | EBot b => true
-    | ELam x body => true
-    | EClos env_def x body => true
-    | ECoercion gamma => true
-    | EType tau => true
-    | ECast eb gamma => whnf g eb
-    | EIf ec et ef =>
-        solvable g ec && whnf g et && whnf g ef
-    | _ => false
-    end.
+Inductive Whnf (g : environment) : expr -> Prop :=
+  | Whnf_Solvable : forall e,
+      Solvable g e ->
+      Whnf g e
+  | Whnf_Con : forall d,
+      Whnf g (ECon d)
+  | Whnf_Bot : forall b,
+      Whnf g (EBot b)
+  | Whnf_Lam : forall x body,
+      Whnf g (ELam x body)
+  | Whnf_Clos : forall g_def x body,
+      Whnf g (EClos g_def x body)
+  | Whnf_Coercion : forall gamma,
+      Whnf g (ECoercion gamma)
+  | Whnf_Type : forall tau,
+      Whnf g (EType tau)
+  | Whnf_Cast : forall eb gamma,
+      Whnf g eb ->
+      Whnf g (ECast eb gamma)
+  | Whnf_If : forall ec et ef,
+      Solvable g ec ->
+      Whnf g et ->
+      Whnf g ef ->
+      Whnf g (EIf ec et ef).
+
+(** ========================================================================= *)
+(** 8. Decision Functions (Fixpoints) for Solvable and WHNF                    *)
+(** ========================================================================= *)
+
+(** Solvable is decidable *)
+Fixpoint solvable_dec (g : environment) (e : expr) : {Solvable g e} + {~ Solvable g e}.
+Proof.
+  destruct e.
+  - destruct (lookup_env g v) eqn:Heq.
+    + right. intros H. inversion H. rewrite Heq in H1. discriminate.
+    + left. apply Solvable_Var. assumption.
+  - left. apply Solvable_Lit.
+  - left. apply Solvable_PrimOp.
+  - right. intros H. inversion H.
+  - destruct (is_op_app (EApp e1 e2)) eqn:Hop.
+    + destruct (solvable_dec g e1) as [S1 | N1].
+      * destruct (solvable_dec g e2) as [S2 | N2].
+        -- left. apply Solvable_AppPrim; auto.
+        -- right. intros H. inversion H; subst. apply N2; auto.
+      * right. intros H. inversion H; subst. apply N1; auto.
+    + right. intros H. inversion H; subst. congruence.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+  - right. intros H. inversion H.
+Defined.
+
+(** Helper inversion lemmas on Solvable *)
+Lemma solvable_not_cast : forall g e c, ~ Solvable g (ECast e c).
+Proof. intros g e c H. inversion H. Qed.
+
+Lemma solvable_not_if : forall g c t f, ~ Solvable g (EIf c t f).
+Proof. intros g c t f H. inversion H. Qed.
+
+(** WHNF is decidable *)
+Fixpoint whnf_dec (g : environment) (e : expr) : {Whnf g e} + {~ Whnf g e}.
+Proof.
+  destruct (solvable_dec g e) as [S | NS].
+  - left. apply Whnf_Solvable. assumption.
+  - destruct e.
+    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
+    + (* ELit *) exfalso. apply NS. apply Solvable_Lit.
+    + (* EPrimOp *) exfalso. apply NS. apply Solvable_PrimOp.
+    + left. apply Whnf_Con.
+    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
+    + left. apply Whnf_Lam.
+    + left. apply Whnf_Clos.
+    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
+    + destruct (whnf_dec g e) as [W | NW].
+      * left. apply Whnf_Cast. assumption.
+      * right. intros H. inversion H; subst.
+        -- apply (solvable_not_cast g e c); auto.
+        -- apply NW; auto.
+    + left. apply Whnf_Coercion.
+    + left. apply Whnf_Type.
+    + destruct (solvable_dec g e1) as [S1 | NS1].
+      * destruct (whnf_dec g e2) as [W2 | NW2].
+        -- destruct (whnf_dec g e3) as [W3 | NW3].
+           ++ left. apply Whnf_If; auto.
+           ++ right. intros H. inversion H; subst.
+              ** apply (solvable_not_if g e1 e2 e3); auto.
+              ** apply NW3; auto.
+        -- right. intros H. inversion H; subst.
+           ++ apply (solvable_not_if g e1 e2 e3); auto.
+           ++ apply NW2; auto.
+      * right. intros H. inversion H; subst.
+        -- apply (solvable_not_if g e1 e2 e3); auto.
+        -- apply NS1; auto.
+    + left. apply Whnf_Bot.
+Defined.
