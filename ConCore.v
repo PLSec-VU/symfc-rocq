@@ -459,10 +459,10 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 8.4 ConCore Subject Reduction (Preservation)                              *)
+(** 8.4 ConCore Closure under Evaluation (Syntactic Stability)                *)
 (** ------------------------------------------------------------------------- *)
 
-Theorem concore_preservation_mut :
+Theorem concore_eval_closed_mut :
   (forall Φ Γ e v (Heval : Φ; Γ ⊢ e ⇓ v),
      Φ = pc_true -> concrete_env Γ -> concore_expr e -> concore_expr v) /\
   (forall Φ Γ e alts er (Hfold : fold_alts Φ Γ e alts er),
@@ -551,9 +551,9 @@ Proof.
     intros. constructor.
 Qed.
 
-(** ConCore Preservation (Subject Reduction):
-    Concrete evaluation in a concrete environment produces a ConCore value. *)
-Theorem concore_preservation : forall Γ e v,
+(** ConCore Closure under Evaluation:
+    Concrete evaluation in a concrete environment never escapes ConCore. *)
+Theorem concore_eval_closed : forall Γ e v,
   concrete_env Γ ->
   concore_expr e ->
   Γ ⊢ᶜ e ⇓ᶜ v ->
@@ -561,29 +561,29 @@ Theorem concore_preservation : forall Γ e v,
 Proof.
   intros Γ e v Henv Hcon Heval.
   unfold eval_con in Heval.
-  destruct concore_preservation_mut as [Heval_pres _].
-  apply Heval_pres with (Φ := pc_true) (Γ := Γ) (e := e); auto.
+  destruct concore_eval_closed_mut as [Heval_closed _].
+  apply Heval_closed with (Φ := pc_true) (Γ := Γ) (e := e); auto.
 Qed.
 
 (** Closed ConCore expressions evaluate to ConCore values *)
-Corollary concore_preservation_closed : forall e v,
+Corollary concore_eval_closed_top : forall e v,
   concore_expr e ->
   ⊢ᶜ e ⇓ᶜ v ->
   concore_expr v.
 Proof.
   intros e v Hcon Heval.
-  apply (concore_preservation EmptyEnv e v); auto.
+  apply (concore_eval_closed EmptyEnv e v); auto.
   constructor.
 Qed.
 
 (** Closed Source System FC expressions evaluate to ConCore values *)
-Corollary source_preservation_closed : forall e v,
+Corollary source_eval_closed : forall e v,
   source_expr e ->
   ⊢ᶜ e ⇓ᶜ v ->
   concore_expr v.
 Proof.
   intros e v Hsrc Heval.
-  apply (concore_preservation_closed e v); auto.
+  apply (concore_eval_closed_top e v); auto.
   apply source_is_concore. assumption.
 Qed.
 
