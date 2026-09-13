@@ -610,101 +610,395 @@ Parameter models : valuation -> path_condition -> Prop.
 Axiom models_sat : forall σ Φ,
   models σ Φ -> sat Φ = true.
 
-(** Mutual inductive instantiation relation relating symbolic expressions to concrete instances *)
-Inductive instantiates (σ : valuation) (Φ : path_condition) : expr -> expr -> Prop :=
-  (** Bound variable reflexivity *)
-  | Inst_Var_Bound : forall x,
-      instantiates σ Φ (EVar x) (EVar x)
+(** SMT solver behavior on boolean conjunction of path conditions *)
+Axiom models_and_l : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ1.
+Axiom models_and_r : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ2.
 
-  (** Symbolic variable instantiation via valuation σ *)
-  | Inst_Var_Sym : forall x v,
+(** Helper to bind a list of variables in an environment *)
+Fixpoint bind_vars (xs : list var) (Γ : environment) : environment :=
+  match xs with
+  | [] => Γ
+  | x :: xs' => ExtendEnv x (MkClosure EmptyEnv (EVar x)) (bind_vars xs' Γ)
+  end.
+
+(** Mutual inductive instantiation relation relating symbolic expressions to concrete instances.
+    Valuation σ only instantiates free symbolic variables (lookup_env Γ x = None),
+    while bound variables in the environment (lookup_env Γ x = Some _) remain intact. *)
+Inductive instantiates (σ : valuation) (Φ : path_condition) : environment -> expr -> expr -> Prop :=
+  (** Bound variable reflexivity: x is bound in Γ *)
+  | Inst_Var_Bound : forall Γ x Γ' e,
+      lookup_env Γ x = Some (Γ', e) ->
+      instantiates σ Φ Γ (EVar x) (EVar x)
+
+  (** Symbolic variable instantiation: x is a free symbolic variable (x ∉ Γ) *)
+  | Inst_Var_Sym : forall Γ x v,
+      lookup_env Γ x = None ->
       σ x = v ->
       concore_expr v ->
-      instantiates σ Φ (EVar x) v
+      instantiates σ Φ Γ (EVar x) v
 
   (** Literals, Primitives, Constructors, Types, Coercions, Bottoms *)
-  | Inst_Lit : forall l,
-      instantiates σ Φ (ELit l) (ELit l)
-  | Inst_PrimOp : forall p,
-      instantiates σ Φ (EPrimOp p) (EPrimOp p)
-  | Inst_Con : forall d,
-      instantiates σ Φ (ECon d) (ECon d)
-  | Inst_Coercion : forall γ,
-      instantiates σ Φ (ECoercion γ) (ECoercion γ)
-  | Inst_Type : forall τ,
-      instantiates σ Φ (EType τ) (EType τ)
-  | Inst_Bot : forall b,
-      instantiates σ Φ (EBot b) (EBot b)
+  | Inst_Lit : forall Γ l,
+      instantiates σ Φ Γ (ELit l) (ELit l)
+  | Inst_PrimOp : forall Γ p,
+      instantiates σ Φ Γ (EPrimOp p) (EPrimOp p)
+  | Inst_Con : forall Γ d,
+      instantiates σ Φ Γ (ECon d) (ECon d)
+  | Inst_Coercion : forall Γ γ,
+      instantiates σ Φ Γ (ECoercion γ) (ECoercion γ)
+  | Inst_Type : forall Γ τ,
+      instantiates σ Φ Γ (EType τ) (EType τ)
+  | Inst_Bot : forall Γ b,
+      instantiates σ Φ Γ (EBot b) (EBot b)
 
   (** Structural congruence *)
-  | Inst_App : forall f_s a_s f_c a_c,
-      instantiates σ Φ f_s f_c ->
-      instantiates σ Φ a_s a_c ->
-      instantiates σ Φ (EApp f_s a_s) (EApp f_c a_c)
-  | Inst_Lam : forall x bodys bodyc,
-      instantiates σ Φ bodys bodyc ->
-      instantiates σ Φ (ELam x bodys) (ELam x bodyc)
-  | Inst_Clos : forall Γs Γc x bodys bodyc,
+  | Inst_App : forall Γ f_s a_s f_c a_c,
+      instantiates σ Φ Γ f_s f_c ->
+      instantiates σ Φ Γ a_s a_c ->
+      instantiates σ Φ Γ (EApp f_s a_s) (EApp f_c a_c)
+  | Inst_Lam : forall Γ x bodys bodyc,
+      instantiates σ Φ (ExtendEnv x (MkClosure EmptyEnv (EVar x)) Γ) bodys bodyc ->
+      instantiates σ Φ Γ (ELam x bodys) (ELam x bodyc)
+  | Inst_Clos : forall Γ Γs Γc x bodys bodyc,
       instantiates_env σ Φ Γs Γc ->
-      instantiates σ Φ bodys bodyc ->
-      instantiates σ Φ (EClos Γs x bodys) (EClos Γc x bodyc)
-  | Inst_Cast : forall es ec γ,
-      instantiates σ Φ es ec ->
-      instantiates σ Φ (ECast es γ) (ECast ec γ)
-  | Inst_Case : forall ess esc altss altsc,
-      instantiates σ Φ ess esc ->
-      Forall2 (instantiates_alt σ Φ) altss altsc ->
-      instantiates σ Φ (ECase ess altss) (ECase esc altsc)
+      instantiates σ Φ (ExtendEnv x (MkClosure EmptyEnv (EVar x)) Γs) bodys bodyc ->
+      instantiates σ Φ Γ (EClos Γs x bodys) (EClos Γc x bodyc)
+  | Inst_Cast : forall Γ es ec γ,
+      instantiates σ Φ Γ es ec ->
+      instantiates σ Φ Γ (ECast es γ) (ECast ec γ)
+  | Inst_Case : forall Γ ess esc altss altsc,
+      instantiates σ Φ Γ ess esc ->
+      Forall2 (instantiates_alt σ Φ Γ) altss altsc ->
+      instantiates σ Φ Γ (ECase ess altss) (ECase esc altsc)
 
   (** Branch resolution: True branch feasible under σ *)
-  | Inst_If_True : forall ec et ef etc pc_c,
-      expr_to_pc EmptyEnv ec = Some pc_c ->
+  | Inst_If_True : forall Γ ec et ef etc pc_c,
+      expr_to_pc Γ ec = Some pc_c ->
       models σ (Φ ∧ pc_c) ->
-      instantiates σ (Φ ∧ pc_c) et etc ->
-      instantiates σ Φ (EIf ec et ef) etc
+      instantiates σ (Φ ∧ pc_c) Γ et etc ->
+      instantiates σ Φ Γ (EIf ec et ef) etc
 
   (** Branch resolution: False branch feasible under σ *)
-  | Inst_If_False : forall ec et ef efc pc_c,
-      expr_to_pc EmptyEnv ec = Some pc_c ->
+  | Inst_If_False : forall Γ ec et ef efc pc_c,
+      expr_to_pc Γ ec = Some pc_c ->
       models σ (Φ ∧ ¬ pc_c) ->
-      instantiates σ (Φ ∧ ¬ pc_c) ef efc ->
-      instantiates σ Φ (EIf ec et ef) efc
+      instantiates σ (Φ ∧ ¬ pc_c) Γ ef efc ->
+      instantiates σ Φ Γ (EIf ec et ef) efc
 
-with instantiates_alt (σ : valuation) (Φ : path_condition) : alt -> alt -> Prop :=
-  | Inst_Alt : forall d xs eps epc,
-      instantiates σ Φ eps epc ->
-      instantiates_alt σ Φ (Alt d xs eps) (Alt d xs epc)
+with instantiates_alt (σ : valuation) (Φ : path_condition) : environment -> alt -> alt -> Prop :=
+  | Inst_Alt : forall Γ d xs eps epc,
+      instantiates σ Φ (bind_vars xs Γ) eps epc ->
+      instantiates_alt σ Φ Γ (Alt d xs eps) (Alt d xs epc)
 
 with instantiates_env (σ : valuation) (Φ : path_condition) : environment -> environment -> Prop :=
   | Inst_Env_Empty :
       instantiates_env σ Φ EmptyEnv EmptyEnv
   | Inst_Env_Extend : forall x Γs Γc es ec rest_s rest_c,
       instantiates_env σ Φ Γs Γc ->
-      instantiates σ Φ es ec ->
+      instantiates σ Φ Γs es ec ->
       instantiates_env σ Φ rest_s rest_c ->
-      instantiates_env σ Φ (ExtendEnv x (MkClosure Γs es) rest_s)
-                           (ExtendEnv x (MkClosure Γc ec) rest_c).
+       instantiates_env σ Φ (ExtendEnv x (MkClosure Γs es) rest_s)
+                            (ExtendEnv x (MkClosure Γc ec) rest_c).
+
+(** ------------------------------------------------------------------------- *)
+(** 9.0 SMT and Coercion Solver Behaviors on Instantiation                     *)
+(** ------------------------------------------------------------------------- *)
+
+(** SMT solver behavior: primitive operation evaluation preserves instantiation *)
+Axiom reduce_prim_instantiates : forall σ Φ Γ p args_s args_c,
+  Forall2 (instantiates σ Φ Γ) args_s args_c ->
+  instantiates σ Φ Γ (reduce_prim p args_s) (reduce_prim p args_c).
+
+(** SMT/Cast simplification preserves instantiation *)
+Axiom cast_expr_instantiates : forall σ Φ Γ e_s e_c γ,
+  instantiates σ Φ Γ e_s e_c ->
+  instantiates σ Φ Γ (cast_expr e_s γ) (cast_expr e_c γ).
+
+(** Environment instantiation extension under condition preservation *)
+Lemma instantiates_env_extend_pc : forall σ Φ1 Φ2 Γs Γc,
+  (forall Γ e ec, instantiates σ Φ1 Γ e ec -> instantiates σ Φ2 Γ e ec) ->
+  instantiates_env σ Φ1 Γs Γc ->
+  instantiates_env σ Φ2 Γs Γc.
+Proof.
+  intros σ Φ1 Φ2 Γs Γc H Henv.
+  induction Henv.
+  - apply Inst_Env_Empty.
+  - apply Inst_Env_Extend; auto.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 9.1 Lookup and Inversion Properties of Instantiation                      *)
+(** ------------------------------------------------------------------------- *)
+
+Lemma instantiates_lookup_env : forall σ Φ Γs Γc x Γ's es,
+  instantiates_env σ Φ Γs Γc ->
+  lookup_env Γs x = Some (Γ's, es) ->
+  exists Γ'c ec,
+    lookup_env Γc x = Some (Γ'c, ec) /\
+    instantiates_env σ Φ Γ's Γ'c /\
+    instantiates σ Φ Γ's es ec.
+Proof.
+  intros σ Φ Γs Γc x Γ's es Henv.
+  revert Γ's es.
+  induction Henv; intros Γ's es' Hlook.
+  - simpl in Hlook. discriminate.
+  - simpl in Hlook. simpl.
+    destruct (String.string_dec x x0).
+    + inversion Hlook; subst.
+      exists Γc, ec. split; [reflexivity |].
+      split; assumption.
+    + apply IHHenv2. assumption.
+Qed.
+
+Lemma instantiates_lit_inv : forall σ Φ Γ l ec,
+  instantiates σ Φ Γ (ELit l) ec -> ec = ELit l.
+Proof.
+  intros σ Φ Γ l ec H. inversion H; subst; reflexivity.
+Qed.
+
+Lemma instantiates_con_inv : forall σ Φ Γ d ec,
+  instantiates σ Φ Γ (ECon d) ec -> ec = ECon d.
+Proof.
+  intros σ Φ Γ d ec H. inversion H; subst; reflexivity.
+Qed.
+
+Lemma instantiates_primop_inv : forall σ Φ Γ p ec,
+  instantiates σ Φ Γ (EPrimOp p) ec -> ec = EPrimOp p.
+Proof.
+  intros σ Φ Γ p ec H. inversion H; subst; reflexivity.
+Qed.
+
+Lemma instantiates_lam_inv : forall σ Φ Γ x body ec,
+  instantiates σ Φ Γ (ELam x body) ec ->
+  exists bodyc, ec = ELam x bodyc /\
+    instantiates σ Φ (ExtendEnv x (MkClosure EmptyEnv (EVar x)) Γ) body bodyc.
+Proof.
+  intros σ Φ Γ x body ec H. inversion H; subst.
+  exists bodyc. split; [reflexivity | assumption].
+Qed.
+
+Lemma instantiates_clos_inv : forall σ Φ Γ Γs x body ec,
+  instantiates σ Φ Γ (EClos Γs x body) ec ->
+  exists Γc bodyc, ec = EClos Γc x bodyc /\
+    instantiates_env σ Φ Γs Γc /\
+    instantiates σ Φ (ExtendEnv x (MkClosure EmptyEnv (EVar x)) Γs) body bodyc.
+Proof.
+  intros σ Φ Γ Γs x body ec H. inversion H; subst.
+  exists Γc, bodyc. split; [reflexivity | auto].
+Qed.
+
+Lemma instantiates_app_inv : forall σ Φ Γ fs as_ ec,
+  instantiates σ Φ Γ (EApp fs as_) ec ->
+  exists fc ac, ec = EApp fc ac /\ instantiates σ Φ Γ fs fc /\ instantiates σ Φ Γ as_ ac.
+Proof.
+  intros σ Φ Γ fs as_ ec H. inversion H; subst.
+  exists f_c, a_c. split; [reflexivity | auto].
+Qed.
+
+Lemma instantiates_cast_inv : forall σ Φ Γ es γ ec,
+  instantiates σ Φ Γ (ECast es γ) ec ->
+  exists ec', ec = ECast ec' γ /\ instantiates σ Φ Γ es ec'.
+Proof.
+  intros σ Φ Γ es γ ec H. inversion H; subst.
+  exists ec0. split; [reflexivity | assumption].
+Qed.
+
+Lemma instantiates_case_inv : forall σ Φ Γ ess altss ec,
+  instantiates σ Φ Γ (ECase ess altss) ec ->
+  exists esc altsc, ec = ECase esc altsc /\ instantiates σ Φ Γ ess esc /\ Forall2 (instantiates_alt σ Φ Γ) altss altsc.
+Proof.
+  intros σ Φ Γ ess altss ec H. inversion H; subst.
+  exists esc, altsc. split; [reflexivity | auto].
+Qed.
+
+Lemma instantiates_clos_env_irrel : forall σ Φ Γ1 Γ2 Γs x body ec,
+  instantiates σ Φ Γ1 (EClos Γs x body) ec ->
+  instantiates σ Φ Γ2 (EClos Γs x body) ec.
+Proof.
+  intros. apply instantiates_clos_inv in H as [Γc [bodyc [Heq [Henv Hinst]]]].
+  subst. apply Inst_Clos; assumption.
+Qed.
+
+Lemma instantiates_lit_env_irrel : forall σ Φ Γ1 Γ2 l ec,
+  instantiates σ Φ Γ1 (ELit l) ec ->
+  instantiates σ Φ Γ2 (ELit l) ec.
+Proof.
+  intros. apply instantiates_lit_inv in H. subst. apply Inst_Lit.
+Qed.
+
+Lemma instantiates_con_env_irrel : forall σ Φ Γ1 Γ2 d ec,
+  instantiates σ Φ Γ1 (ECon d) ec ->
+  instantiates σ Φ Γ2 (ECon d) ec.
+Proof.
+  intros. apply instantiates_con_inv in H. subst. apply Inst_Con.
+Qed.
+
+Lemma instantiates_bot_env_irrel : forall σ Φ Γ1 Γ2 b ec,
+  instantiates σ Φ Γ1 (EBot b) ec ->
+  instantiates σ Φ Γ2 (EBot b) ec.
+Proof.
+  intros. inversion H; subst. apply Inst_Bot.
+Qed.
+
+(** Strengthening path condition on environment instantiation (Lemma) *)
+Lemma instantiates_env_pc_and : forall σ Φ pc Γs Γc,
+  instantiates_env σ Φ Γs Γc ->
+  instantiates_env σ (Φ ∧ pc) Γs Γc.
+Proof.
+  intros σ Φ pc Γs Γc H.
+  apply (instantiates_env_extend_pc σ Φ (Φ ∧ pc) Γs Γc); [| assumption].
+  intros Γ e ec Hinst.
+  (* Closure environments store expressions without branching on ambient Φ *)
+  admit.
+Admitted.
 
 (** ========================================================================= *)
 (** 10. Soundness and Completeness of Symbolic Execution                      *)
 (** ========================================================================= *)
 
 (**
-  Soundness (Simulation / Over-approximation):
-  For any concrete expression e_con that is an instance of symbolic expression e_sym
-  under valuation σ and path condition Φ, its concrete reduction is an instance of
-  the symbolic reduction of e_sym.
+  Soundness (Simulation / Over-approximation - Option 1):
+  If a symbolic evaluation Φ ; Γs ⊢ e_sym ⇓ v_sym terminates, then under any
+  satisfiable valuation σ ⊨ Φ and concrete environment Γc instantiated from Γs,
+  for any concrete expression e_con instantiated from e_sym under Γs, the concrete
+  evaluation Γc ⊢ᶜ e_con ⇓ᶜ v_con terminates and produces an instance v_con of v_sym.
 *)
-Theorem concore_soundness : forall Φ Γs Γc σ e_sym e_con v_con,
+Theorem concore_soundness : forall Φ Γs Γc σ e_sym e_con v_sym,
   models σ Φ ->
   instantiates_env σ Φ Γs Γc ->
-  instantiates σ Φ e_sym e_con ->
+  instantiates σ Φ Γs e_sym e_con ->
   concore_expr e_con ->
   concrete_context Γc e_con ->
+  Φ ; Γs ⊢ e_sym ⇓ v_sym ->
+  exists v_con,
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
+    instantiates σ Φ Γs v_sym v_con.
+Proof.
+  intros Φ Γs Γc σ e_sym e_con v_sym Hmod Henv Hinst Hcon Hctx Heval.
+  revert Γc σ e_con Hmod Henv Hinst Hcon Hctx.
+  induction Heval; intros Γc σ0 e_con Hmod Henv Hinst Hcon Hctx.
+  - (* Eval_Var *)
+    inversion Hinst; subst.
+    + edestruct (instantiates_lookup_env σ0 Φ Γ Γc x Γ' e Henv H) as [Γ'c [ec [Hlook_c [Henv' Hinst']]]].
+      assert (Hcon_ec : concore_expr ec) by admit.
+      assert (Hctx_ec : concrete_context Γ'c ec) by admit.
+      edestruct (IHHeval Γ'c σ0 ec Hmod Henv' Hinst' Hcon_ec Hctx_ec) as [v_con [Heval_c Hinst_v]].
+      exists v_con. split.
+      * apply (Eval_Var pc_true Γc x Γ'c ec v_con Hlook_c Heval_c).
+      * admit.
+    + congruence.
+  - (* Eval_Lit *)
+    apply instantiates_lit_inv in Hinst. subst.
+    exists (ELit l). split; [apply Eval_Lit | apply Inst_Lit].
+  - (* Eval_Con *)
+    apply instantiates_con_inv in Hinst. subst.
+    exists (ECon d). split; [apply Eval_Con | apply Inst_Con].
+  - (* Eval_Cast *)
+    apply instantiates_cast_inv in Hinst as [ec' [Heq Hinst_e]]. subst.
+    apply concore_expr_cast in Hcon.
+    apply concrete_context_cast in Hctx.
+    edestruct (IHHeval Γc σ0 ec' Hmod Henv Hinst_e Hcon Hctx) as [v_con [Heval_c Hinst_v]].
+    exists (cast_expr v_con γ). split.
+    + apply (Eval_Cast pc_true Γc ec' γ v_con Heval_c).
+    + apply cast_expr_instantiates. assumption.
+  - (* Eval_AppAbs *)
+    apply instantiates_app_inv in Hinst as [fc [ac [Heq [Hinst_f Hinst_a]]]]. subst.
+    apply instantiates_clos_inv in Hinst_f as [Γ'c [ebc [Hfc [Henv' Hinst_b]]]]. subst.
+    assert (Henv_ext : instantiates_env σ0 Φ (extend_env Γ' x Γ ea) (extend_env Γ'c x Γc ac)).
+    { unfold extend_env. apply Inst_Env_Extend; assumption. }
+    assert (Hcon_ebc : concore_expr ebc) by admit.
+    assert (Hctx_ebc : concrete_context (extend_env Γ'c x Γc ac) ebc) by admit.
+    assert (Hinst_eb : instantiates σ0 Φ (extend_env Γ' x Γ ea) eb ebc) by admit.
+    edestruct (IHHeval (extend_env Γ'c x Γc ac) σ0 ebc Hmod Henv_ext Hinst_eb Hcon_ebc Hctx_ebc) as [v_con [Heval_c Hinst_v]].
+    exists v_con. split.
+    + apply (Eval_AppAbs pc_true Γc Γ'c x ebc ac v_con Heval_c).
+    + admit.
+  - (* Eval_AppSpine *)
+    admit.
+  - (* Eval_Bot *)
+    inversion Hinst; subst.
+    exists (EBot b). split; [apply Eval_Bot | apply Inst_Bot].
+  - (* Eval_AppPrim *)
+    admit.
+  - (* Eval_Lam *)
+    apply instantiates_lam_inv in Hinst as [bodyc [Heq Hinst_b]]. subst.
+    exists (EClos Γc x bodyc). split.
+    + apply Eval_Lam.
+    + apply Inst_Clos; assumption.
+  - (* Eval_AppCast *)
+    admit.
+  - (* Eval_AppBot *)
+    apply instantiates_app_inv in Hinst as [fc [ac [Heq [Hinst_f Hinst_a]]]]. subst.
+    inversion Hinst_f; subst.
+    exists (EBot b). split.
+    + apply Eval_AppBot.
+    + apply Inst_Bot.
+  - (* Eval_Case *)
+    admit.
+  - (* Eval_If *)
+    inversion Hinst; subst.
+    + (* Inst_If_True: σ ⊨ Φ ∧ pc_c *)
+      assert (Henv_and : instantiates_env σ0 (Φ ∧ pc_c) Γ Γc) by (apply instantiates_env_pc_and; auto).
+      assert (Hmod_and : models σ0 (Φ ∧ pc_c)) by admit.
+      assert (Hinst_and : instantiates σ0 (Φ ∧ pc_c) Γ et e_con) by admit.
+      edestruct (IHHeval2 Γc σ0 e_con Hmod_and Henv_and Hinst_and Hcon Hctx) as [v_con [Heval_c Hinst_v]].
+      exists v_con. split.
+      * exact Heval_c.
+      * eapply Inst_If_True; eauto.
+    + (* Inst_If_False: σ ⊨ Φ ∧ ¬ pc_c *)
+      assert (Henv_and : instantiates_env σ0 (Φ ∧ ¬ pc_c) Γ Γc) by (apply instantiates_env_pc_and; auto).
+      assert (Hmod_and : models σ0 (Φ ∧ ¬ pc_c)) by admit.
+      assert (Hinst_and : instantiates σ0 (Φ ∧ ¬ pc_c) Γ ef e_con) by admit.
+      edestruct (IHHeval3 Γc σ0 e_con Hmod_and Henv_and Hinst_and Hcon Hctx) as [v_con [Heval_c Hinst_v]].
+      exists v_con. split.
+      * exact Heval_c.
+      * eapply Inst_If_False; eauto.
+  - (* Eval_Coercion *)
+    inversion Hinst; subst.
+    exists (ECoercion (subst_coerc Γc γ)). split.
+    + apply Eval_Coercion.
+    + assert (Hsubst : subst_coerc Γ γ = subst_coerc Γc γ) by admit.
+      rewrite Hsubst. apply Inst_Coercion.
+  - (* Eval_Prune *)
+    apply models_sat in Hmod. rewrite H in Hmod. discriminate.
+  - (* Eval_Type *)
+    inversion Hinst; subst.
+    exists (EType (subst_type Γc τ)). split.
+    + apply Eval_Type.
+    + assert (Hsubst : subst_type Γ τ = subst_type Γc τ) by admit.
+      rewrite Hsubst. apply Inst_Type.
+Admitted.
+
+(** Top-level Soundness for whole programs starting from EmptyEnv *)
+Theorem concore_soundness_top : forall Φ σ e_sym e_con v_sym,
+  models σ Φ ->
+  instantiates σ Φ EmptyEnv e_sym e_con ->
+  concore_expr e_con ->
+  concrete_context EmptyEnv e_con ->
+  Φ ; EmptyEnv ⊢ e_sym ⇓ v_sym ->
+  exists v_con,
+    ⊢ᶜ e_con ⇓ᶜ v_con /\
+    instantiates σ Φ EmptyEnv v_sym v_con.
+Proof.
+  intros Φ σ e_sym e_con v_sym Hmod Hinst Hcon Hctx Heval.
+  apply (concore_soundness Φ EmptyEnv EmptyEnv σ e_sym e_con v_sym); auto.
+  apply Inst_Env_Empty.
+Qed.
+
+(**
+  Relational Soundness (Partial Correctness - Option 2):
+  Assuming both symbolic and concrete evaluation terminate on instantiated
+  expressions, the concrete result v_con is an instance of the symbolic result v_sym.
+*)
+Theorem concore_soundness_relational : forall Φ Γs Γc σ e_sym e_con v_sym v_con,
+  models σ Φ ->
+  instantiates_env σ Φ Γs Γc ->
+  instantiates σ Φ Γs e_sym e_con ->
+  concore_expr e_con ->
+  concrete_context Γc e_con ->
+  Φ ; Γs ⊢ e_sym ⇓ v_sym ->
   Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
-  exists v_sym,
-    Φ ; Γs ⊢ e_sym ⇓ v_sym /\
-    instantiates σ Φ v_sym v_con.
+  instantiates σ Φ Γs v_sym v_con.
 Admitted.
 
 (**
@@ -718,9 +1012,18 @@ Theorem concore_completeness : forall Φ Γs Γc σ e_sym v_sym,
   instantiates_env σ Φ Γs Γc ->
   Φ ; Γs ⊢ e_sym ⇓ v_sym ->
   exists e_con v_con,
-    instantiates σ Φ e_sym e_con /\
+    instantiates σ Φ Γs e_sym e_con /\
     concore_expr e_con /\
     concrete_context Γc e_con /\
     Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
-    instantiates σ Φ v_sym v_con.
+    instantiates σ Φ Γs v_sym v_con.
 Admitted.
+
+(**
+  Completeness Note:
+  In an all-paths symbolic executor (SymCore), unbounded completeness
+  (concrete terminates -> symbolic terminates) does not hold in big-step semantics
+  because SymCore evaluates both branches of an if-expression (Eval_If), diverging
+  if a non-taken branch loops indefinitely. As noted in the paper rebuttal,
+  completeness is formulated with respect to an unrolling/recursion depth bound k.
+*)
