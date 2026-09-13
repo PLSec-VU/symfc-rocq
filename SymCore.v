@@ -30,17 +30,17 @@ Definition dcon : Set := string.
 (** 2. Literals and Primitive Operations (§3.1)                                *)
 (** ========================================================================= *)
 
-(** Literals mirror those found in SMT solvers; left abstract in §3.1 *)
-Parameter lit : Set.
-Parameter lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2}.
+(** Literals mirror those found in SMT solvers; axiomatized from external SMT (§3.1) *)
+Axiom lit : Set.
+Axiom lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2}.
 
-(** Primitive operations mirror SMT solver primitives; left abstract in §3.1 *)
-Parameter primop : Set.
-Parameter primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
+(** Primitive operations mirror SMT solver primitives; axiomatized from external SMT (§3.1) *)
+Axiom primop : Set.
+Axiom primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
 
 (** SMT boolean primitives for path condition connectives *)
-Parameter op_and : primop.
-Parameter op_not : primop.
+Axiom op_and : primop.
+Axiom op_not : primop.
 
 (** ========================================================================= *)
 (** 3. Types and Coercions in System FC / SymCore (§3.1)                      *)
@@ -185,8 +185,8 @@ Inductive path_condition : Set :=
   | PCLit  : lit -> path_condition
   | PCPrim : primop -> list path_condition -> path_condition.
 
-(** SMT satisfiability oracle SAT(Φ) (Fig. 3, Rule Prune) *)
-Parameter sat : path_condition -> bool.
+(** SMT satisfiability oracle SAT(Φ) (Fig. 3, Rule Prune); axiomatized from SMT solver *)
+Axiom sat : path_condition -> bool.
 
 (** Conjunction of path conditions: Φ1 ∧ Φ2 *)
 Definition pc_and (Φ1 Φ2 : path_condition) : path_condition :=
@@ -224,14 +224,14 @@ Fixpoint unspool_app (e : expr) (args : list expr) : (expr * list expr) :=
   | _ => (e, args)
   end.
 
-(** Theory-specific primitive reduction: reduce-prim(⊗ e⃗) (Fig. 3, Rule App-Prim) *)
-Parameter reduce_prim : primop -> list expr -> expr.
+(** Theory-specific primitive reduction: reduce-prim(⊗ e⃗) (Fig. 3, Rule App-Prim); axiomatized from SMT solver *)
+Axiom reduce_prim : primop -> list expr -> expr.
 
 (** Cast simplification: cast(e, γ) (Fig. 3, Rule Cast) *)
 Parameter cast_expr : expr -> coercion -> expr.
 
-(** Leaf expression merging (Fig. 3, Rule Case & Section 3.3) *)
-Parameter merge : expr -> expr.
+(** Leaf expression merging (Fig. 3, Rule Case & Section 3.3); axiomatized from Grisette *)
+Axiom merge : expr -> expr.
 
 (** Type and Coercion substitution under environment Γ (Fig. 3, Rules Type and Coercion) *)
 Parameter subst_coerc : environment -> coercion -> coercion.
@@ -539,4 +539,84 @@ with fold_alts : path_condition -> environment -> expr -> list alt -> expr -> Pr
 
 (** Notation for big-step reduction: Φ; Γ ⊢ e ⇓ e' *)
 Notation "Φ ';' Γ '⊢' e '⇓' e'" := (eval Φ Γ e e') (at level 70, no associativity).
+
+(** ========================================================================= *)
+(** 10. Metatheory of SymCore (§3.2, §3.3)                                     *)
+(** ========================================================================= *)
+
+(** ------------------------------------------------------------------------- *)
+(** 10.1 Infeasible Path Invariance & Pruning Soundness (§3.3)                 *)
+(** ------------------------------------------------------------------------- *)
+
+(** Under an unsatisfiable path condition, evaluation always prunes to unreachable *)
+Lemma eval_prune_sound : forall Φ Γ e,
+  sat Φ = false ->
+  Φ ; Γ ⊢ e ⇓ (EBot BUnreachable).
+Proof.
+  intros Φ Γ e Hsat.
+  apply Eval_Prune.
+  assumption.
+Qed.
+
+(** Any evaluation under an unsatisfiable path condition yields unreachable *)
+Lemma eval_unsat_unreachable : forall Φ Γ e v,
+  sat Φ = false ->
+  Φ ; Γ ⊢ e ⇓ v ->
+  v = EBot BUnreachable.
+Admitted.
+
+(** ------------------------------------------------------------------------- *)
+(** 10.2 Semantic Contract for Merge (§3.3)                                    *)
+(** ------------------------------------------------------------------------- *)
+
+(** Leaf merging preserves alternative folding in case expressions *)
+Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
+  fold_alts Φ Γ (merge e) alts r <-> fold_alts Φ Γ e alts r.
+
+(** Leaf merging preserves WHNF *)
+Axiom merge_preserves_whnf : forall Γ e,
+  Whnf Γ e -> Whnf Γ (merge e).
+
+(** ------------------------------------------------------------------------- *)
+(** 10.3 Normal Form / WHNF Guarantee (§3.2)                                   *)
+(** ------------------------------------------------------------------------- *)
+
+(** Evaluation under a satisfiable path condition produces a WHNF (or bottom) *)
+Theorem eval_whnf : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  sat Φ = false \/ Whnf Γ v.
+Admitted.
+
+Lemma fold_alts_whnf : forall Φ Γ e alts r,
+  fold_alts Φ Γ e alts r ->
+  sat Φ = false \/ Whnf Γ r.
+Admitted.
+
+(** ------------------------------------------------------------------------- *)
+(** 10.4 Determinism of Evaluation (§3.2)                                      *)
+(** ------------------------------------------------------------------------- *)
+
+(** Evaluation in SymCore is deterministic *)
+Theorem eval_deterministic : forall Φ Γ e v1 v2,
+  Φ ; Γ ⊢ e ⇓ v1 ->
+  Φ ; Γ ⊢ e ⇓ v2 ->
+  v1 = v2.
+Admitted.
+
+Lemma fold_alts_deterministic : forall Φ Γ e alts r1 r2,
+  fold_alts Φ Γ e alts r1 ->
+  fold_alts Φ Γ e alts r2 ->
+  r1 = r2.
+Admitted.
+
+(** ------------------------------------------------------------------------- *)
+(** 10.5 Environment Extensionality                                           *)
+(** ------------------------------------------------------------------------- *)
+
+(** Evaluation depends only on the extensional behavior of environment lookup *)
+Lemma eval_extensional_env : forall Φ Γ1 Γ2 e v,
+  (forall x, lookup_env Γ1 x = lookup_env Γ2 x) ->
+  Φ ; Γ1 ⊢ e ⇓ v ->
+  Φ ; Γ2 ⊢ e ⇓ v.
+Admitted.
 
