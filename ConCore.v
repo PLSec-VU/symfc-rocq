@@ -610,16 +610,14 @@ Parameter models : valuation -> path_condition -> Prop.
 Axiom models_sat : forall σ Φ,
   models σ Φ -> sat Φ = true.
 
-(** SMT solver behavior on boolean conjunction of path conditions *)
-Axiom models_and_l : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ1.
-Axiom models_and_r : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ2.
+(** SMT solver semantics: valuation satisfies conjunction iff it satisfies both conjuncts *)
+Axiom models_and_iff : forall σ Φ1 Φ2,
+  models σ (Φ1 ∧ Φ2) <-> models σ Φ1 /\ models σ Φ2.
+
 
 (** SMT solver evaluation on boolean expressions/conditions *)
 Parameter models_cond : valuation -> expr -> Prop.
 Parameter models_not_cond : valuation -> expr -> Prop.
-
-Axiom models_cond_dec : forall σ e,
-  models_cond σ e \/ models_not_cond σ e.
 
 Axiom models_cond_pc : forall σ Γ e pc,
   expr_to_pc Γ e = Some pc ->
@@ -634,74 +632,71 @@ Axiom models_not_cond_pc : forall σ Γ e pc,
   Takes valuation σ, path condition Φ, symbolic expression e_sym, and concrete expression e_con,
   and specifies when e_con is an instance of e_sym along path condition Φ under σ.
 *)
-Inductive contains (σ : valuation) (Φ : path_condition) : expr -> expr -> Prop :=
+Inductive contains (σ : valuation) : expr -> expr -> Prop :=
   (** Bound variable reflexivity *)
   | Cont_Var_Bound : forall x,
-      contains σ Φ (EVar x) (EVar x)
-
-  (** Symbolic variable instantiation: x is instantiated to concrete term σ(x) *)
-  | Cont_Var_Sym : forall x v,
-      σ x = v ->
-      concore_expr v ->
-      contains σ Φ (EVar x) v
+      contains σ (EVar x) (EVar x)
 
   (** Literals, Primitives, Constructors, Coercions, Types, Bottoms *)
   | Cont_Lit : forall l,
-      contains σ Φ (ELit l) (ELit l)
+      contains σ (ELit l) (ELit l)
   | Cont_PrimOp : forall p,
-      contains σ Φ (EPrimOp p) (EPrimOp p)
+      contains σ (EPrimOp p) (EPrimOp p)
   | Cont_Con : forall d,
-      contains σ Φ (ECon d) (ECon d)
+      contains σ (ECon d) (ECon d)
   | Cont_Coercion : forall γ,
-      contains σ Φ (ECoercion γ) (ECoercion γ)
+      contains σ (ECoercion γ) (ECoercion γ)
   | Cont_Type : forall τ,
-      contains σ Φ (EType τ) (EType τ)
+      contains σ (EType τ) (EType τ)
   | Cont_Bot : forall b,
-      contains σ Φ (EBot b) (EBot b)
+      contains σ (EBot b) (EBot b)
 
   (** Structural congruence *)
   | Cont_App : forall f_s a_s f_c a_c,
-      contains σ Φ f_s f_c ->
-      contains σ Φ a_s a_c ->
-      contains σ Φ (EApp f_s a_s) (EApp f_c a_c)
+      contains σ f_s f_c ->
+      contains σ a_s a_c ->
+      contains σ (EApp f_s a_s) (EApp f_c a_c)
   | Cont_Lam : forall x bodys bodyc,
-      contains σ Φ bodys bodyc ->
-      contains σ Φ (ELam x bodys) (ELam x bodyc)
+      contains σ bodys bodyc ->
+      contains σ (ELam x bodys) (ELam x bodyc)
   | Cont_Clos : forall Γs Γc x bodys bodyc,
-      contains_env σ Φ Γs Γc ->
-      contains σ Φ bodys bodyc ->
-      contains σ Φ (EClos Γs x bodys) (EClos Γc x bodyc)
+      contains_env σ Γs Γc ->
+      contains σ bodys bodyc ->
+      concrete_context Γc (ELam x bodyc) ->
+      contains σ (EClos Γs x bodys) (EClos Γc x bodyc)
   | Cont_Cast : forall es ec γ,
-      contains σ Φ es ec ->
-      contains σ Φ (ECast es γ) (ECast ec γ)
+      contains σ es ec ->
+      contains σ (ECast es γ) (ECast ec γ)
   | Cont_Case : forall ess esc altss altsc,
-      contains σ Φ ess esc ->
-      Forall2 (contains_alt σ Φ) altss altsc ->
-      contains σ Φ (ECase ess altss) (ECase esc altsc)
+      contains σ ess esc ->
+      Forall2 (contains_alt σ) altss altsc ->
+      contains σ (ECase ess altss) (ECase esc altsc)
 
   (** Branch resolution: along model σ, exactly one branch is active *)
   | Cont_If_True : forall ec et ef etc,
       models_cond σ ec ->
-      contains σ Φ et etc ->
-      contains σ Φ (EIf ec et ef) etc
+      contains σ et etc ->
+      contains σ (EIf ec et ef) etc
   | Cont_If_False : forall ec et ef efc,
       models_not_cond σ ec ->
-      contains σ Φ ef efc ->
-      contains σ Φ (EIf ec et ef) efc
+      contains σ ef efc ->
+      contains σ (EIf ec et ef) efc
 
-with contains_alt (σ : valuation) (Φ : path_condition) : alt -> alt -> Prop :=
+with contains_alt (σ : valuation) : alt -> alt -> Prop :=
   | Cont_Alt : forall d xs eps epc,
-      contains σ Φ eps epc ->
-      contains_alt σ Φ (Alt d xs eps) (Alt d xs epc)
+      contains σ eps epc ->
+      contains_alt σ (Alt d xs eps) (Alt d xs epc)
 
-with contains_env (σ : valuation) (Φ : path_condition) : environment -> environment -> Prop :=
+with contains_env (σ : valuation) : environment -> environment -> Prop :=
   | Cont_Env_Empty :
-      contains_env σ Φ EmptyEnv EmptyEnv
+      contains_env σ EmptyEnv EmptyEnv
   | Cont_Env_Extend : forall x Γs Γc es ec rest_s rest_c,
-      contains_env σ Φ Γs Γc ->
-      contains σ Φ es ec ->
-      contains_env σ Φ rest_s rest_c ->
-      contains_env σ Φ (ExtendEnv x (MkClosure Γs es) rest_s)
+      contains_env σ Γs Γc ->
+      contains σ es ec ->
+      concore_expr ec ->
+      concrete_context Γc ec ->
+      contains_env σ rest_s rest_c ->
+      contains_env σ (ExtendEnv x (MkClosure Γs es) rest_s)
                        (ExtendEnv x (MkClosure Γc ec) rest_c).
 
 (** Aliases for compatibility *)
@@ -714,20 +709,19 @@ Notation instantiates_env := contains_env.
 (** ------------------------------------------------------------------------- *)
 
 (** SMT solver behavior: primitive operations preserve concretion *)
-Axiom reduce_prim_contains : forall σ Φ p args_s args_c,
-  Forall2 (contains σ Φ) args_s args_c ->
-  contains σ Φ (reduce_prim p args_s) (reduce_prim p args_c).
+Axiom reduce_prim_contains : forall σ p args_s args_c,
+  Forall2 (contains σ) args_s args_c ->
+  contains σ (reduce_prim p args_s) (reduce_prim p args_c).
 
 (** Grisette state merging soundness (Lemma A.4 in the paper) *)
-Axiom merge_contains : forall σ Φ es ec,
-  models σ Φ ->
-  contains σ Φ es ec ->
-  contains σ Φ (merge es) ec.
+Axiom merge_contains : forall σ es ec,
+  contains σ es ec ->
+  contains σ (merge es) ec.
 
 (** Coercion cast simplification preserves concretion (Lemma A.5 in the paper) *)
-Axiom cast_expr_contains : forall σ Φ es ec γ,
-  contains σ Φ es ec ->
-  contains σ Φ (cast_expr es γ) (cast_expr ec γ).
+Axiom cast_expr_contains : forall σ es ec γ,
+  contains σ es ec ->
+  contains σ (cast_expr es γ) (cast_expr ec γ).
 
 (** SMT condition truth preservation across evaluation *)
 Axiom eval_models_cond : forall Φ Γ ec ec' σ,
@@ -736,104 +730,73 @@ Axiom eval_models_cond : forall Φ Γ ec ec' σ,
 Axiom eval_models_not_cond : forall Φ Γ ec ec' σ,
   Φ ; Γ ⊢ ec ⇓ ec' -> models_not_cond σ ec -> models_not_cond σ ec'.
 
-(** SMT path condition conjunction and monotonicity *)
-Axiom models_and : forall σ Φ1 Φ2,
-  models σ Φ1 -> models σ Φ2 -> models σ (Φ1 ∧ Φ2).
-
-Axiom contains_weaken : forall σ Φ1 Φ2 e1 e2,
-  contains σ (Φ1 ∧ Φ2) e1 e2 -> contains σ Φ1 e1 e2.
-
-Axiom contains_env_weaken : forall σ Φ1 Φ2 Γ1 Γ2,
-  contains_env σ Φ1 Γ1 Γ2 -> contains_env σ (Φ1 ∧ Φ2) Γ1 Γ2.
-
-Axiom contains_strengthen : forall σ Φ1 Φ2 e1 e2,
-  contains σ Φ1 e1 e2 -> contains σ (Φ1 ∧ Φ2) e1 e2.
-
-(** Bound variables in the environment cannot be replaced by symbolic valuation *)
-Axiom contains_var_bound : forall σ Φ Γs Γc x Γ's es ec,
-  contains_env σ Φ Γs Γc ->
-  lookup_env Γs x = Some (Γ's, es) ->
-  contains σ Φ (EVar x) ec ->
-  ec = EVar x.
-
-(** Environment lookup preserves concrete context and closure syntax *)
-Axiom lookup_env_context : forall σ Φ Γs Γc x Γ's es Γ'c ec,
-  contains_env σ Φ Γs Γc ->
-  lookup_env Γs x = Some (Γ's, es) ->
-  lookup_env Γc x = Some (Γ'c, ec) ->
-  concore_expr ec /\ concrete_context Γ'c ec.
-
-(** Application of closures preserves concrete context *)
-Axiom appabs_context : forall Γc Γ'c x ebc ac,
-  concrete_context Γc (EApp (EClos Γ'c x ebc) ac) ->
-  concrete_context (ExtendEnv x (MkClosure Γc ac) Γ'c) ebc.
 
 (** Substitution on coercions and types preserves concretion under matched environments *)
-Axiom subst_coerc_contains_env : forall σ Φ Γs Γc γ,
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ (ECoercion (subst_coerc Γs γ)) (ECoercion (subst_coerc Γc γ)).
+Axiom subst_coerc_contains_env : forall σ Γs Γc γ,
+  contains_env σ Γs Γc ->
+  contains σ (ECoercion (subst_coerc Γs γ)) (ECoercion (subst_coerc Γc γ)).
 
-Axiom subst_type_contains_env : forall σ Φ Γs Γc τ,
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ (EType (subst_type Γs τ)) (EType (subst_type Γc τ)).
+Axiom subst_type_contains_env : forall σ Γs Γc τ,
+  contains_env σ Γs Γc ->
+  contains σ (EType (subst_type Γs τ)) (EType (subst_type Γc τ)).
 
 (** SMT primitive evaluation simulation *)
 Axiom eval_app_prim_sound : forall Φ Γs Γc σ ef ea p args args' e_con,
   models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ (EApp ef ea) e_con ->
+  contains_env σ Γs Γc ->
+  contains σ (EApp ef ea) e_con ->
   concore_expr e_con ->
   concrete_context Γc e_con ->
   unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
   Forall2 (eval Φ Γs) args args' ->
   exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ (reduce_prim p args') v_con.
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ (reduce_prim p args') v_con.
 
 (** Higher-order coercion pushing simulation *)
 Axiom eval_app_cast_sound : forall Φ Γs Γc σ ef γ ea γ_a γ_r er e_con,
   models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ (EApp (ECast ef γ) ea) e_con ->
+  contains_env σ Γs Γc ->
+  contains σ (EApp (ECast ef γ) ea) e_con ->
   concore_expr e_con ->
   concrete_context Γc e_con ->
   decomp_coerc_arrow γ = Some (γ_a, γ_r) ->
   Φ ; Γs ⊢ ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r ⇓ er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
     models σ Φ ->
-    contains_env σ Φ Γs Γc ->
-    contains σ Φ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) e_con ->
+    contains_env σ Γs Γc ->
+    contains σ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) e_con ->
     concore_expr e_con ->
     concrete_context Γc e_con ->
     exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ er v_con) ->
+      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ er v_con) ->
   exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ er v_con.
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ er v_con.
 
 (** Grisette alternative folding simulation along path condition *)
 Axiom fold_alts_sound : forall Φ Γs Γc σ es alts es' er e_con,
   models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ (ECase es alts) e_con ->
+  contains_env σ Γs Γc ->
+  contains σ (ECase es alts) e_con ->
   concore_expr e_con ->
   concrete_context Γc e_con ->
   Φ ; Γs ⊢ es ⇓ es' ->
   fold_alts Φ Γs (merge es') alts er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
     models σ Φ ->
-    contains_env σ Φ Γs Γc ->
-    contains σ Φ es e_con ->
+    contains_env σ Γs Γc ->
+    contains σ es e_con ->
     concore_expr e_con ->
     concrete_context Γc e_con ->
     exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ es' v_con) ->
+      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ es' v_con) ->
   exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ er v_con.
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ er v_con.
 
 (** Concrete spine evaluation *)
 Axiom eval_app_spine_sound : forall Φ Γs Γc σ ef ea ef' er e_con,
   models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ (EApp ef ea) e_con ->
+  contains_env σ Γs Γc ->
+  contains σ (EApp ef ea) e_con ->
   concore_expr e_con ->
   concrete_context Γc e_con ->
   ~ Whnf Γs ef ->
@@ -841,45 +804,97 @@ Axiom eval_app_spine_sound : forall Φ Γs Γc σ ef ea ef' er e_con,
   Φ ; Γs ⊢ EApp ef' ea ⇓ er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
     models σ Φ ->
-    contains_env σ Φ Γs Γc ->
-    contains σ Φ ef e_con ->
+    contains_env σ Γs Γc ->
+    contains σ ef e_con ->
     concore_expr e_con ->
     concrete_context Γc e_con ->
     exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ ef' v_con) ->
+      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ ef' v_con) ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
     models σ Φ ->
-    contains_env σ Φ Γs Γc ->
-    contains σ Φ (EApp ef' ea) e_con ->
+    contains_env σ Γs Γc ->
+    contains σ (EApp ef' ea) e_con ->
     concore_expr e_con ->
     concrete_context Γc e_con ->
     exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ er v_con) ->
+      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ er v_con) ->
   exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ Φ er v_con.
-
-(** Existence of concrete instantiation for satisfiable symbolic state *)
-Axiom instantiate_expr_exists : forall σ Φ Γs Γc e_sym,
-  models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  exists e_con,
-    contains σ Φ e_sym e_con /\
-    concore_expr e_con /\
-    concrete_context Γc e_con.
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ er v_con.
 
 (** ------------------------------------------------------------------------- *)
-(** 9.1 Lookup and Inversion Properties of Concretion                         *)
+(** 9.1 Proven Lemmas on SMT Models, Inversion, and Contexts                 *)
 (** ------------------------------------------------------------------------- *)
 
-Lemma contains_lookup_env : forall σ Φ Γs Γc x Γ's es,
-  contains_env σ Φ Γs Γc ->
+(** 9.1.1 Logical Properties of SMT Models *)
+
+Lemma models_and : forall σ Φ1 Φ2,
+  models σ Φ1 -> models σ Φ2 -> models σ (Φ1 ∧ Φ2).
+Proof.
+  intros σ Φ1 Φ2 H1 H2. apply models_and_iff. split; assumption.
+Qed.
+
+Lemma models_and_l : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ1.
+Proof.
+  intros σ Φ1 Φ2 H. apply models_and_iff in H. destruct H; assumption.
+Qed.
+
+Lemma models_and_r : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ2.
+Proof.
+  intros σ Φ1 Φ2 H. apply models_and_iff in H. destruct H; assumption.
+Qed.
+
+(** 9.1.2 Environment and Closure Context Lemmas *)
+
+(** Bound variables in the environment cannot be replaced by symbolic valuation *)
+Lemma contains_var_bound : forall σ Γs Γc x Γ's es ec,
+  contains_env σ Γs Γc ->
+  lookup_env Γs x = Some (Γ's, es) ->
+  contains σ (EVar x) ec ->
+  ec = EVar x.
+Proof.
+  intros σ Γs Γc x Γ's es ec Henv Hlook Hcont.
+  inversion Hcont; subst; reflexivity.
+Qed.
+
+(** Environment lookup preserves concrete context and closure syntax *)
+Lemma lookup_env_context : forall σ Γs Γc x Γ's es Γ'c ec,
+  contains_env σ Γs Γc ->
+  lookup_env Γs x = Some (Γ's, es) ->
+  lookup_env Γc x = Some (Γ'c, ec) ->
+  concore_expr ec /\ concrete_context Γ'c ec.
+Proof.
+  intros σ Γs Γc x Γ's es Γ'c ec Henv.
+  revert Γ's es Γ'c ec.
+  induction Henv; intros Γ's es' Γ'c ec' Hlooks Hlookc.
+  - simpl in Hlooks. discriminate.
+  - simpl in Hlooks, Hlookc.
+    destruct (String.string_dec x x0).
+    + inversion Hlooks; inversion Hlookc; subst.
+      split; assumption.
+    + apply IHHenv2 with (Γ's := Γ's) (es := es'); assumption.
+Qed.
+
+(** Application of closures preserves concrete context *)
+Lemma appabs_context : forall Γc Γ'c x ebc ac,
+  concrete_context Γ'c (ELam x ebc) ->
+  concrete_context (ExtendEnv x (MkClosure Γc ac) Γ'c) ebc.
+Proof.
+  intros Γc Γ'c x ebc ac Hclos.
+  apply concrete_context_lam_extend.
+  exact Hclos.
+Qed.
+
+(** 9.1.3 Concretion Inversion and Lookup Properties *)
+
+Lemma contains_lookup_env : forall σ Γs Γc x Γ's es,
+  contains_env σ Γs Γc ->
   lookup_env Γs x = Some (Γ's, es) ->
   exists Γ'c ec,
     lookup_env Γc x = Some (Γ'c, ec) /\
-    contains_env σ Φ Γ's Γ'c /\
-    contains σ Φ es ec.
+    contains_env σ Γ's Γ'c /\
+    contains σ es ec.
 Proof.
-  intros σ Φ Γs Γc x Γ's es Henv.
+  intros σ Γs Γc x Γ's es Henv.
   revert Γ's es.
   induction Henv; intros Γ's es' Hlook.
   - simpl in Hlook. discriminate.
@@ -891,64 +906,65 @@ Proof.
     + apply IHHenv2. assumption.
 Qed.
 
-Lemma contains_lit_inv : forall σ Φ l ec,
-  contains σ Φ (ELit l) ec -> ec = ELit l.
+Lemma contains_lit_inv : forall σ l ec,
+  contains σ (ELit l) ec -> ec = ELit l.
 Proof.
-  intros σ Φ l ec H. inversion H; subst; reflexivity.
+  intros σ l ec H. inversion H; subst; reflexivity.
 Qed.
 
-Lemma contains_con_inv : forall σ Φ d ec,
-  contains σ Φ (ECon d) ec -> ec = ECon d.
+Lemma contains_con_inv : forall σ d ec,
+  contains σ (ECon d) ec -> ec = ECon d.
 Proof.
-  intros σ Φ d ec H. inversion H; subst; reflexivity.
+  intros σ d ec H. inversion H; subst; reflexivity.
 Qed.
 
-Lemma contains_primop_inv : forall σ Φ p ec,
-  contains σ Φ (EPrimOp p) ec -> ec = EPrimOp p.
+Lemma contains_primop_inv : forall σ p ec,
+  contains σ (EPrimOp p) ec -> ec = EPrimOp p.
 Proof.
-  intros σ Φ p ec H. inversion H; subst; reflexivity.
+  intros σ p ec H. inversion H; subst; reflexivity.
 Qed.
 
-Lemma contains_lam_inv : forall σ Φ x body ec,
-  contains σ Φ (ELam x body) ec ->
+Lemma contains_lam_inv : forall σ x body ec,
+  contains σ (ELam x body) ec ->
   exists bodyc, ec = ELam x bodyc /\
-    contains σ Φ body bodyc.
+    contains σ body bodyc.
 Proof.
-  intros σ Φ x body ec H. inversion H; subst.
+  intros σ x body ec H. inversion H; subst.
   exists bodyc. split; [reflexivity | assumption].
 Qed.
 
-Lemma contains_clos_inv : forall σ Φ Γs x body ec,
-  contains σ Φ (EClos Γs x body) ec ->
+Lemma contains_clos_inv : forall σ Γs x body ec,
+  contains σ (EClos Γs x body) ec ->
   exists Γc bodyc, ec = EClos Γc x bodyc /\
-    contains_env σ Φ Γs Γc /\
-    contains σ Φ body bodyc.
+    contains_env σ Γs Γc /\
+    contains σ body bodyc /\
+    concrete_context Γc (ELam x bodyc).
 Proof.
-  intros σ Φ Γs x body ec H. inversion H; subst.
+  intros σ Γs x body ec H. inversion H; subst.
   exists Γc, bodyc. split; [reflexivity | auto].
 Qed.
 
-Lemma contains_app_inv : forall σ Φ fs as_ ec,
-  contains σ Φ (EApp fs as_) ec ->
-  exists fc ac, ec = EApp fc ac /\ contains σ Φ fs fc /\ contains σ Φ as_ ac.
+Lemma contains_app_inv : forall σ fs as_ ec,
+  contains σ (EApp fs as_) ec ->
+  exists fc ac, ec = EApp fc ac /\ contains σ fs fc /\ contains σ as_ ac.
 Proof.
-  intros σ Φ fs as_ ec H. inversion H; subst.
+  intros σ fs as_ ec H. inversion H; subst.
   exists f_c, a_c. split; [reflexivity | auto].
 Qed.
 
-Lemma contains_cast_inv : forall σ Φ es γ ec,
-  contains σ Φ (ECast es γ) ec ->
-  exists ec', ec = ECast ec' γ /\ contains σ Φ es ec'.
+Lemma contains_cast_inv : forall σ es γ ec,
+  contains σ (ECast es γ) ec ->
+  exists ec', ec = ECast ec' γ /\ contains σ es ec'.
 Proof.
-  intros σ Φ es γ ec H. inversion H; subst.
+  intros σ es γ ec H. inversion H; subst.
   exists ec0. split; [reflexivity | assumption].
 Qed.
 
-Lemma contains_case_inv : forall σ Φ ess altss ec,
-  contains σ Φ (ECase ess altss) ec ->
-  exists esc altsc, ec = ECase esc altsc /\ contains σ Φ ess esc /\ Forall2 (contains_alt σ Φ) altss altsc.
+Lemma contains_case_inv : forall σ ess altss ec,
+  contains σ (ECase ess altss) ec ->
+  exists esc altsc, ec = ECase esc altsc /\ contains σ ess esc /\ Forall2 (contains_alt σ) altss altsc.
 Proof.
-  intros σ Φ ess altss ec H. inversion H; subst.
+  intros σ ess altss ec H. inversion H; subst.
   exists esc, altsc. split; [reflexivity | auto].
 Qed.
 
@@ -964,14 +980,14 @@ Qed.
 *)
 Theorem concore_soundness : forall Φ Γs Γc σ e_sym e_con v_sym,
   models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  contains σ Φ e_sym e_con ->
+  contains_env σ Γs Γc ->
+  contains σ e_sym e_con ->
   concore_expr e_con ->
   concrete_context Γc e_con ->
   Φ ; Γs ⊢ e_sym ⇓ v_sym ->
   exists v_con,
     Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
-    contains σ Φ v_sym v_con.
+    contains σ v_sym v_con.
 Proof.
   intros Φ Γs Γc σ e_sym e_con v_sym Hmod Henv Hcont Hcon Hctx Heval.
   revert Γc σ e_con Hmod Henv Hcont Hcon Hctx.
@@ -981,8 +997,8 @@ Proof.
     assert (Heq : e_con = EVar x).
     { eapply contains_var_bound; eassumption. }
     subst e_con.
-    destruct (contains_lookup_env σ Φ Γ Γc x Γ' e Henv H) as [Γ'c [ec [Hlookc [Henv' Hcont']]]].
-    destruct (lookup_env_context σ Φ Γ Γc x Γ' e Γ'c ec Henv H Hlookc) as [Hcon' Hctx'].
+    destruct (contains_lookup_env σ Γ Γc x Γ' e Henv H) as [Γ'c [ec [Hlookc [Henv' Hcont']]]].
+    destruct (lookup_env_context σ Γ Γc x Γ' e Γ'c ec Henv H Hlookc) as [Hcon' Hctx'].
     destruct (IHHeval Γ'c σ ec Hmod Henv' Hcont' Hcon' Hctx') as [v_con [Hevalc Hcont_v]].
     exists v_con.
     split; [| exact Hcont_v].
@@ -1009,14 +1025,16 @@ Proof.
   - (* Eval_AppAbs *)
     intros Γc σ e_con Hmod Henv Hcont Hcon Hctx.
     apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
-    apply contains_clos_inv in Hcont_f as [Γ'c [ebc [Heq_f [Henv_clos Hcont_b]]]]; subst.
+    apply contains_clos_inv in Hcont_f as [Γ'c [ebc [Heq_f [Henv_clos [Hcont_b Hctx_clos]]]]]; subst.
     inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
     inversion Hf as [| | | | | | Γ0 x0 body Henv_clos_c Hcon_b | | | | | | | ]; subst.
-    assert (Henv_ext : contains_env σ Φ (ExtendEnv x (MkClosure Γ ea) Γ')
-                                        (ExtendEnv x (MkClosure Γc ac) Γ'c)).
+    assert (Hctx_a : concrete_context Γc ac).
+    { apply concrete_context_app_r with (f := EClos Γ'c x ebc). exact Hctx. }
+    assert (Henv_ext : contains_env σ (ExtendEnv x (MkClosure Γ ea) Γ')
+                                      (ExtendEnv x (MkClosure Γc ac) Γ'c)).
     { apply Cont_Env_Extend; assumption. }
     assert (Hctx_b : concrete_context (ExtendEnv x (MkClosure Γc ac) Γ'c) ebc).
-    { apply appabs_context. exact Hctx. }
+    { apply appabs_context. exact Hctx_clos. }
     destruct (IHHeval (ExtendEnv x (MkClosure Γc ac) Γ'c) σ ebc Hmod Henv_ext Hcont_b Hcon_b Hctx_b) as [v_con [Heval_b Hcont_v]].
     exists v_con.
     split; [| exact Hcont_v].
@@ -1057,28 +1075,18 @@ Proof.
       { apply (models_cond_pc σ Γ ec' pc_c H). exact Hcond'. }
       assert (Hmod_and : models σ (Φ ∧ pc_c)).
       { apply models_and; assumption. }
-      assert (Henv' : contains_env σ (Φ ∧ pc_c) Γ Γc).
-      { apply contains_env_weaken; assumption. }
-      assert (Hcont' : contains σ (Φ ∧ pc_c) et e_con).
-      { apply contains_strengthen; assumption. }
-      destruct (IHHeval2 Γc σ e_con Hmod_and Henv' Hcont' Hcon Hctx) as [v_con [Hevalc' Hcont_v]].
+      destruct (IHHeval2 Γc σ e_con Hmod_and Henv H5 Hcon Hctx) as [v_con [Hevalc' Hcont_v]].
       exists v_con. split; [exact Hevalc' |].
-      apply Cont_If_True; [exact Hcond' |].
-      apply contains_weaken with (Φ2 := pc_c). exact Hcont_v.
+      apply Cont_If_True; [exact Hcond' | exact Hcont_v].
     + assert (Hnotcond' : models_not_cond σ ec').
       { apply eval_models_not_cond with (Φ := Φ) (Γ := Γ) (ec := ec); assumption. }
       assert (Hnotpc_mod : models σ (¬ pc_c)).
       { apply (models_not_cond_pc σ Γ ec' pc_c H). exact Hnotcond'. }
       assert (Hmod_and : models σ (Φ ∧ ¬ pc_c)).
       { apply models_and; assumption. }
-      assert (Henv' : contains_env σ (Φ ∧ ¬ pc_c) Γ Γc).
-      { apply contains_env_weaken; assumption. }
-      assert (Hcont' : contains σ (Φ ∧ ¬ pc_c) ef e_con).
-      { apply contains_strengthen; assumption. }
-      destruct (IHHeval3 Γc σ e_con Hmod_and Henv' Hcont' Hcon Hctx) as [v_con [Hevalc' Hcont_v]].
+      destruct (IHHeval3 Γc σ e_con Hmod_and Henv H5 Hcon Hctx) as [v_con [Hevalc' Hcont_v]].
       exists v_con. split; [exact Hevalc' |].
-      apply Cont_If_False; [exact Hnotcond' |].
-      apply contains_weaken with (Φ2 := ¬ pc_c). exact Hcont_v.
+      apply Cont_If_False; [exact Hnotcond' | exact Hcont_v].
   - (* Eval_Coercion *)
     intros Γc σ e_con Hmod Henv Hcont Hcon Hctx.
     inversion Hcont; subst.
@@ -1098,43 +1106,16 @@ Qed.
 (** Top-level Soundness for whole programs starting from EmptyEnv *)
 Theorem concore_soundness_top : forall Φ σ e_sym e_con v_sym,
   models σ Φ ->
-  contains σ Φ e_sym e_con ->
+  contains σ e_sym e_con ->
   concore_expr e_con ->
   concrete_context EmptyEnv e_con ->
   Φ ; EmptyEnv ⊢ e_sym ⇓ v_sym ->
   exists v_con,
     ⊢ᶜ e_con ⇓ᶜ v_con /\
-    contains σ Φ v_sym v_con.
+    contains σ v_sym v_con.
 Proof.
   intros Φ σ e_sym e_con v_sym Hmod Hcont Hcon Hctx Heval.
   apply (concore_soundness Φ EmptyEnv EmptyEnv σ e_sym e_con v_sym); auto.
   apply Cont_Env_Empty.
-Qed.
-
-(**
-  Completeness (Coverage / No Spurious Paths):
-  Every symbolic reduction Φ ; Γs ⊢ e_sym ⇓ v_sym corresponds, under each
-  satisfiable valuation σ ⊨ Φ, to a terminating concrete evaluation of the
-  instantiated expression e_con producing an instance v_con of v_sym.
-*)
-Theorem concore_completeness : forall Φ Γs Γc σ e_sym v_sym,
-  models σ Φ ->
-  contains_env σ Φ Γs Γc ->
-  Φ ; Γs ⊢ e_sym ⇓ v_sym ->
-  exists e_con v_con,
-    contains σ Φ e_sym e_con /\
-    concore_expr e_con /\
-    concrete_context Γc e_con /\
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
-    contains σ Φ v_sym v_con.
-Proof.
-  intros Φ Γs Γc σ e_sym v_sym Hmod Henv Heval.
-  destruct (instantiate_expr_exists σ Φ Γs Γc e_sym Hmod Henv) as [e_con [Hcont [Hcon Hctx]]].
-  destruct (concore_soundness Φ Γs Γc σ e_sym e_con v_sym Hmod Henv Hcont Hcon Hctx Heval) as [v_con [Heval_c Hcont_v]].
-  exists e_con, v_con.
-  split; [exact Hcont |].
-  split; [exact Hcon |].
-  split; [exact Hctx |].
-  split; [exact Heval_c | exact Hcont_v].
 Qed.
 
