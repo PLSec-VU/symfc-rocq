@@ -295,8 +295,6 @@ Inductive Whnf (Γ : environment) : expr -> Prop :=
       Whnf Γ (ECon d)
   | Whnf_Bot : forall b,
       Whnf Γ (EBot b)
-  | Whnf_Lam : forall x body,
-      Whnf Γ (ELam x body)
   | Whnf_Clos : forall Γ_def x body,
       Whnf Γ (EClos Γ_def x body)
   | Whnf_Coercion : forall γ,
@@ -361,7 +359,7 @@ Proof.
     + (* EPrimOp *) exfalso. apply NS. apply Solvable_PrimOp.
     + left. apply Whnf_Con.
     + right. intros H. inversion H; subst; [contradiction | inversion H0..].
-    + left. apply Whnf_Lam.
+    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
     + left. apply Whnf_Clos.
     + right. intros H. inversion H; subst; [contradiction | inversion H0..].
     + destruct (whnf_dec Γ e) as [W | NW].
@@ -386,6 +384,15 @@ Proof.
         -- apply NS1; auto.
     + left. apply Whnf_Bot.
 Defined.
+
+(** An abstraction ELam is never in WHNF: it must evaluate to a closure EClos before application *)
+Lemma not_whnf_lam : forall Γ x body,
+  ~ Whnf Γ (ELam x body).
+Proof.
+  intros Γ x body Hw.
+  inversion Hw; subst.
+  inversion H.
+Qed.
 
 (** Helper: path-condition convertible primitive application is an operator application *)
 Lemma expr_to_pc_prim_is_op_app : forall Γ e p args,
