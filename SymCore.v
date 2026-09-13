@@ -200,13 +200,17 @@ Notation "Φ1 '∧' Φ2" := (pc_and Φ1 Φ2) (at level 40, left associativity).
 Notation "'¬' Φ" := (pc_not Φ) (at level 35, right associativity).
 
 (** Convert a solvable expression into a path condition formula *)
-Fixpoint expr_to_pc (e : expr) : option path_condition :=
+Fixpoint expr_to_pc (Γ : environment) (e : expr) : option path_condition :=
   match e with
-  | EVar x => Some (PCVar x)
+  | EVar x =>
+      match lookup_env Γ x with
+      | None => Some (PCVar x)
+      | Some _ => None
+      end
   | ELit l => Some (PCLit l)
   | EPrimOp p => Some (PCPrim p [])
   | EApp f a =>
-      match expr_to_pc f, expr_to_pc a with
+      match expr_to_pc Γ f, expr_to_pc Γ a with
       | Some (PCPrim p args), Some pca => Some (PCPrim p (args ++ [pca]))
       | _, _ => None
       end
@@ -378,6 +382,49 @@ Proof.
     + left. apply Whnf_Bot.
 Defined.
 
+(** Helper: path-condition convertible primitive application is an operator application *)
+Lemma expr_to_pc_prim_is_op_app : forall Γ e p args,
+  expr_to_pc Γ e = Some (PCPrim p args) ->
+  is_op_app e = true.
+Proof.
+  intros Γ e.
+  induction e; intros p' args' H; simpl in *; try discriminate.
+  - destruct (lookup_env Γ v); discriminate.
+  - reflexivity.
+  - destruct (expr_to_pc Γ e1) eqn:He1; try discriminate.
+    destruct p; try discriminate.
+    destruct (expr_to_pc Γ e2) eqn:He2; try discriminate.
+    inversion H; subst.
+    eapply (IHe1 p' l). reflexivity.
+Qed.
+
+(** Any expression that successfully converts to a path condition is Solvable *)
+Lemma expr_to_pc_solvable : forall Γ e pc,
+  expr_to_pc Γ e = Some pc -> Solvable Γ e.
+Proof.
+  intros Γ e.
+  induction e; intros pc Hpc; simpl in Hpc; try discriminate.
+  - (* EVar *)
+    destruct (lookup_env Γ v) eqn:Heq; [discriminate |].
+    inversion Hpc; subst.
+    apply Solvable_Var. assumption.
+  - (* ELit *)
+    inversion Hpc; subst.
+    apply Solvable_Lit.
+  - (* EPrimOp *)
+    inversion Hpc; subst.
+    apply Solvable_PrimOp.
+  - (* EApp *)
+    destruct (expr_to_pc Γ e1) eqn:He1; try discriminate.
+    destruct p as [vx | vl | op args]; try discriminate.
+    destruct (expr_to_pc Γ e2) eqn:He2; try discriminate.
+    inversion Hpc; subst.
+    apply Solvable_AppPrim.
+    + simpl. eapply (expr_to_pc_prim_is_op_app Γ e1 op args He1).
+    + apply (IHe1 (PCPrim op args) eq_refl).
+    + apply (IHe2 p eq_refl).
+Qed.
+
 (** ========================================================================= *)
 (** 8. Pattern Matching and Branch Folding: fold-alts (§3.2, lines 570-590)   *)
 (** ========================================================================= *)
@@ -485,7 +532,7 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
   (** Rule If: Evaluate condition, convert to path condition, and branch *)
   | Eval_If : forall Φ Γ ec et ef ec' et' ef' pc_c,
       eval Φ Γ ec ec' ->
-      expr_to_pc ec' = Some pc_c ->
+      expr_to_pc Γ ec' = Some pc_c ->
       eval (Φ ∧ pc_c) Γ et et' ->
       eval (Φ ∧ ¬ pc_c) Γ ef ef' ->
       eval Φ Γ (EIf ec et ef) (EIf ec' et' ef')
@@ -506,14 +553,14 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
 with fold_alts : path_condition -> environment -> expr -> list alt -> expr -> Prop :=
   (** Branch traversal: condition is converted to path condition *)
   | FoldAlts_If : forall Φ Γ ec et ef alts et' ef' pc_c,
-      expr_to_pc ec = Some pc_c ->
+      expr_to_pc Γ ec = Some pc_c ->
       fold_alts (Φ ∧ pc_c) Γ et alts et' ->
       fold_alts (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
       fold_alts Φ Γ (EIf ec et ef) alts (EIf ec et' ef')
 
   (** Fallback for ill-formed condition in branching *)
   | FoldAlts_IfFail : forall Φ Γ ec et ef alts,
-      expr_to_pc ec = None ->
+      expr_to_pc Γ ec = None ->
       fold_alts Φ Γ (EIf ec et ef) alts (EBot BUndefined)
 
   (** Constructor match: find alternative and reduce body *)
@@ -581,6 +628,14 @@ Axiom merge_preserves_whnf : forall Γ e,
 (** 10.3 Normal Form / WHNF Guarantee (§3.2)                                   *)
 (** ------------------------------------------------------------------------- *)
 
+(** Cast simplification preserves WHNF (System FC contract - Axiom 1) *)
+Axiom cast_expr_whnf : forall Γ e γ,
+  Whnf Γ e -> Whnf Γ (cast_expr e γ).
+
+(** Primitive reduction produces a WHNF (SMT / Grisette contract - Axiom 2) *)
+Axiom reduce_prim_whnf : forall Γ p args,
+  Whnf Γ (reduce_prim p args).
+
 (** Evaluation under a satisfiable path condition produces a WHNF (or bottom) *)
 Theorem eval_whnf : forall Φ Γ e v,
   Φ ; Γ ⊢ e ⇓ v ->
@@ -596,8 +651,277 @@ Admitted.
 (** 10.4 Determinism of Evaluation (§3.2)                                      *)
 (** ------------------------------------------------------------------------- *)
 
+(** Branch folding on bottom always preserves the bottom value *)
+Lemma fold_alts_bot_same : forall Φ Γ b alts r,
+  fold_alts Φ Γ (EBot b) alts r ->
+  r = EBot b.
+Proof.
+  intros Φ Γ b alts r Hfold.
+  inversion Hfold; subst.
+  - simpl in H. discriminate.
+  - reflexivity.
+  - simpl in H1. discriminate.
+Qed.
+
+(** Branch folding on bottom is deterministic *)
+Lemma fold_alts_bot_deterministic : forall Φ Γ b alts r1 r2,
+  fold_alts Φ Γ (EBot b) alts r1 ->
+  fold_alts Φ Γ (EBot b) alts r2 ->
+  r1 = r2.
+Proof.
+  intros Φ Γ b alts r1 r2 H1 H2.
+  apply fold_alts_bot_same in H1.
+  apply fold_alts_bot_same in H2.
+  subst. reflexivity.
+Qed.
+
+(** Evaluation of bottom values under a satisfiable path condition *)
+Lemma eval_bot_same : forall Φ Γ b v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ EBot b ⇓ v ->
+  v = EBot b.
+Proof.
+  intros Φ Γ b v Hsat Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite Hsat in H. discriminate.
+Qed.
+
+(** Evaluation of literals under a satisfiable path condition *)
+Lemma eval_lit_same : forall Φ Γ l v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ ELit l ⇓ v ->
+  v = ELit l.
+Proof.
+  intros Φ Γ l v Hsat Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite Hsat in H. discriminate.
+Qed.
+
+(** Evaluation of constructors under a satisfiable path condition *)
+Lemma eval_con_same : forall Φ Γ d v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ ECon d ⇓ v ->
+  v = ECon d.
+Proof.
+  intros Φ Γ d v Hsat Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Evaluation of lambdas under a satisfiable path condition *)
+Lemma eval_lam_same : forall Φ Γ x body v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ ELam x body ⇓ v ->
+  v = EClos Γ x body.
+Proof.
+  intros Φ Γ x body v Hsat Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Evaluation of coercions under a satisfiable path condition *)
+Lemma eval_coercion_same : forall Φ Γ γ v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ ECoercion γ ⇓ v ->
+  v = ECoercion (subst_coerc Γ γ).
+Proof.
+  intros Φ Γ γ v Hsat Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Evaluation of types under a satisfiable path condition *)
+Lemma eval_type_same : forall Φ Γ τ v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ EType τ ⇓ v ->
+  v = EType (subst_type Γ τ).
+Proof.
+  intros Φ Γ τ v Hsat Heval.
+  inversion Heval; subst.
+  - rewrite Hsat in H; discriminate.
+  - reflexivity.
+Qed.
+
+(** Inversion of variable evaluation under a satisfiable path condition *)
+Lemma eval_var_inv : forall Φ Γ x v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ EVar x ⇓ v ->
+  exists Γ' e,
+    lookup_env Γ x = Some (Γ', e) /\
+    Φ ; Γ' ⊢ e ⇓ v.
+Proof.
+  intros Φ Γ x v Hsat Heval.
+  inversion Heval; subst.
+  - exists Γ', e. split; [assumption | assumption].
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Inversion of cast evaluation under a satisfiable path condition *)
+Lemma eval_cast_inv : forall Φ Γ e γ v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ ECast e γ ⇓ v ->
+  exists e',
+    Φ ; Γ ⊢ e ⇓ e' /\
+    v = cast_expr e' γ.
+Proof.
+  intros Φ Γ e γ v Hsat Heval.
+  inversion Heval; subst.
+  - exists e'. split; [assumption | reflexivity].
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Inversion of case evaluation under a satisfiable path condition *)
+Lemma eval_case_inv : forall Φ Γ es alts v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ ECase es alts ⇓ v ->
+  exists es',
+    Φ ; Γ ⊢ es ⇓ es' /\
+    fold_alts Φ Γ (merge es') alts v.
+Proof.
+  intros Φ Γ es alts v Hsat Heval.
+  inversion Heval; subst.
+  - exists es'. split; [assumption | assumption].
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Inversion of if-then-else evaluation under a satisfiable path condition *)
+Lemma eval_if_inv : forall Φ Γ ec et ef v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ EIf ec et ef ⇓ v ->
+  exists ec' et' ef' pc_c,
+    Φ ; Γ ⊢ ec ⇓ ec' /\
+    expr_to_pc Γ ec' = Some pc_c /\
+    (Φ ∧ pc_c) ; Γ ⊢ et ⇓ et' /\
+    (Φ ∧ ¬ pc_c) ; Γ ⊢ ef ⇓ ef' /\
+    v = EIf ec' et' ef'.
+Proof.
+  intros Φ Γ ec et ef v Hsat Heval.
+  inversion Heval; subst.
+  - exists ec', et', ef', pc_c. split; [assumption|].
+    split; [assumption|]. split; [assumption|].
+    split; [assumption|reflexivity].
+  - rewrite Hsat in H; discriminate.
+Qed.
+
+(** Inversion for fold_alts on if-expressions with valid path condition *)
+Lemma fold_alts_if_some_inv : forall Φ Γ ec et ef alts r pc_c,
+  expr_to_pc Γ ec = Some pc_c ->
+  fold_alts Φ Γ (EIf ec et ef) alts r ->
+  exists et' ef',
+    r = EIf ec et' ef' /\
+    fold_alts (Φ ∧ pc_c) Γ et alts et' /\
+    fold_alts (Φ ∧ ¬ pc_c) Γ ef alts ef'.
+Proof.
+  intros Φ Γ ec et ef alts r pc_c Hpc Hfold.
+  remember (EIf ec et ef) as e eqn:Heq.
+  revert ec et ef Heq Hpc.
+  induction Hfold; intros ec0 et0 ef0 Heq Hpc; inversion Heq; subst.
+  - rewrite H in Hpc. inversion Hpc; subst.
+    exists et', ef'. auto.
+  - rewrite H in Hpc; discriminate.
+  - discriminate.
+  - simpl in H; discriminate.
+Qed.
+
+(** Inversion for fold_alts on if-expressions with invalid path condition *)
+Lemma fold_alts_if_none_inv : forall Φ Γ ec et ef alts r,
+  expr_to_pc Γ ec = None ->
+  fold_alts Φ Γ (EIf ec et ef) alts r ->
+  r = EBot BUndefined.
+Proof.
+  intros Φ Γ ec et ef alts r Hpc Hfold.
+  remember (EIf ec et ef) as e eqn:Heq.
+  revert ec et ef Heq Hpc.
+  induction Hfold; intros ec0 et0 ef0 Heq Hpc; inversion Heq; subst.
+  - rewrite H in Hpc; discriminate.
+  - reflexivity.
+  - discriminate.
+  - simpl in H; discriminate.
+Qed.
+
+(** Inversion for fold_alts on matching constructor patterns *)
+Lemma fold_alts_con_inv : forall Φ Γ e alts r d ea xs ep,
+  decompose_con_app e = Some (d, ea) ->
+  find_alt d alts = Some (xs, ep) ->
+  is_if e = false ->
+  is_bot e = false ->
+  fold_alts Φ Γ e alts r ->
+  Φ ; (extend_env_multi Γ xs ea Γ) ⊢ ep ⇓ r.
+Proof.
+  intros Φ Γ e alts r d ea xs ep Hdec Halt Hnot_if Hnot_bot Hfold.
+  inversion Hfold; subst.
+  - simpl in Hnot_if; discriminate.
+  - simpl in Hnot_if; discriminate.
+  - rewrite H in Hdec. inversion Hdec; subst.
+    rewrite H0 in Halt. inversion Halt; subst.
+    assumption.
+  - simpl in Hnot_bot; discriminate.
+  - rewrite Hdec in H0. rewrite Halt in H0. discriminate.
+Qed.
+
+(** Inversion for fold_alts on non-matching fallback expressions *)
+Lemma fold_alts_otherwise_same : forall Φ Γ e alts r,
+  is_if e = false ->
+  (match decompose_con_app e with
+   | Some (d, _) => find_alt d alts = None
+   | None => True
+   end) ->
+  is_bot e = false ->
+  fold_alts Φ Γ e alts r ->
+  r = EBot BUndefined.
+Proof.
+  intros Φ Γ e alts r Hnot_if Hno_alt Hnot_bot Hfold.
+  inversion Hfold; subst.
+  - simpl in Hnot_if; discriminate.
+  - simpl in Hnot_if; discriminate.
+  - rewrite H in Hno_alt. rewrite H0 in Hno_alt. discriminate.
+  - simpl in Hnot_bot; discriminate.
+  - reflexivity.
+Qed.
+
+(** Alternative folding is completely deterministic given determinism of evaluation *)
+Theorem fold_alts_deterministic_given_eval :
+  (forall Φ Γ e v1 v2, Φ ; Γ ⊢ e ⇓ v1 -> Φ ; Γ ⊢ e ⇓ v2 -> v1 = v2) ->
+  forall Φ Γ e alts r1 r2,
+    fold_alts Φ Γ e alts r1 ->
+    fold_alts Φ Γ e alts r2 ->
+    r1 = r2.
+Proof.
+  intros Heval_det Φ Γ e alts r1 r2 H1.
+  revert r2.
+  induction H1; intros r2 H2.
+  - (* FoldAlts_If *)
+    apply (fold_alts_if_some_inv Φ Γ ec et ef alts r2 pc_c) in H2; [| assumption].
+    destruct H2 as [et'2 [ef'2 [Heq2 [Hfold_t2 Hfold_f2]]]].
+    subst.
+    f_equal.
+    + apply IHfold_alts1. assumption.
+    + apply IHfold_alts2. assumption.
+  - (* FoldAlts_IfFail *)
+    apply (fold_alts_if_none_inv Φ Γ ec et ef alts r2) in H2; [| assumption].
+    subst. reflexivity.
+  - (* FoldAlts_Con *)
+    assert (Hnot_if : is_if e = false).
+    { destruct e; simpl in H; try discriminate; reflexivity. }
+    assert (Hnot_bot : is_bot e = false).
+    { destruct e; simpl in H; try discriminate; reflexivity. }
+    apply (fold_alts_con_inv Φ Γ e alts r2 d ea xs ep H H0 Hnot_if Hnot_bot) in H2.
+    eapply Heval_det; eassumption.
+  - (* FoldAlts_Bot *)
+    apply fold_alts_bot_same in H2. subst. reflexivity.
+  - (* FoldAlts_Otherwise *)
+    apply (fold_alts_otherwise_same Φ Γ e alts r2 H H0 H1) in H2.
+    subst. reflexivity.
+Qed.
+
 (** Evaluation in SymCore is deterministic *)
 Theorem eval_deterministic : forall Φ Γ e v1 v2,
+  sat Φ = true ->
   Φ ; Γ ⊢ e ⇓ v1 ->
   Φ ; Γ ⊢ e ⇓ v2 ->
   v1 = v2.
