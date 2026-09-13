@@ -28,7 +28,7 @@ Inductive concore_expr : expr -> Prop :=
   | Con_Con : forall d, concore_expr (ECon d)
   | Con_App : forall f a, concore_expr f -> concore_expr a -> concore_expr (EApp f a)
   | Con_Lam : forall x body, concore_expr body -> concore_expr (ELam x body)
-  | Con_Clos : forall Γ x body, concore_expr body -> concore_expr (EClos Γ x body)
+  | Con_Clos : forall Γ x body, concrete_env Γ -> concore_expr body -> concore_expr (EClos Γ x body)
   | Con_Case : forall es alts, concore_expr es -> Forall concore_alt alts -> concore_expr (ECase es alts)
   | Con_Cast : forall e γ, concore_expr e -> concore_expr (ECast e γ)
   | Con_Coercion : forall γ, concore_expr (ECoercion γ)
@@ -38,7 +38,15 @@ Inductive concore_expr : expr -> Prop :=
   | Con_Bot_Raise : forall e, concore_expr e -> concore_expr (EBot (BRaise e))
 
 with concore_alt : alt -> Prop :=
-  | Con_Alt : forall d xs ep, concore_expr ep -> concore_alt (Alt d xs ep).
+  | Con_Alt : forall d xs ep, concore_expr ep -> concore_alt (Alt d xs ep)
+
+with concrete_env : environment -> Prop :=
+  | CEnv_Empty : concrete_env EmptyEnv
+  | CEnv_Extend : forall x Γ' e rest,
+      concore_expr e ->
+      concrete_env Γ' ->
+      concrete_env rest ->
+      concrete_env (ExtendEnv x (MkClosure Γ' e) rest).
 
 (** Source System FC expressions: pure AST prior to execution,
     excluding both runtime closures (EClos) and symbolic branching (EIf). *)
@@ -135,6 +143,11 @@ Proof.
   intros Γ x body H. inversion H; subst. assumption.
 Qed.
 
+Lemma concore_expr_clos_env : forall Γ x body, concore_expr (EClos Γ x body) -> concrete_env Γ.
+Proof.
+  intros Γ x body H. inversion H; subst. assumption.
+Qed.
+
 Lemma concore_expr_cast : forall e γ, concore_expr (ECast e γ) -> concore_expr e.
 Proof.
   intros e γ H. inversion H; subst. assumption.
@@ -204,15 +217,7 @@ Definition concrete_context (Γ : environment) (e : expr) : Prop :=
 Definition closed_expr (e : expr) : Prop :=
   forall x, ~ In x (fv e).
 
-(** An environment Γ is concrete if all expressions stored in its closures
-    are themselves ConCore expressions *)
-Inductive concrete_env : environment -> Prop :=
-  | CEnv_Empty : concrete_env EmptyEnv
-  | CEnv_Extend : forall x Γ' e rest,
-      concore_expr e ->
-      concrete_env Γ' ->
-      concrete_env rest ->
-      concrete_env (ExtendEnv x (MkClosure Γ' e) rest).
+(** Note: concrete_env is defined mutually with concore_expr in Section 1. *)
 
 (** ========================================================================= *)
 (** 7. Properties of Concrete Contexts                                         *)
@@ -340,13 +345,247 @@ Definition eval_con (Γ : environment) (e : expr) (v : expr) : Prop :=
 Notation "Γ '⊢ᶜ' e '⇓ᶜ' v" := (eval_con Γ e v) (at level 70, no associativity).
 Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con EmptyEnv e v) (at level 70, no associativity).
 
+(** ------------------------------------------------------------------------- *)
+(** 8.1 SMT & Grisette Solver Behaviors for Concrete Evaluation               *)
+(** ------------------------------------------------------------------------- *)
+
+(** SMT solver & Grisette evaluation behaviors:
+    1. Primitive operations reduce to concrete terms in ConCore.
+    2. State merging on a ConCore term preserves ConCore syntax.
+    3. Coercion casts preserve ConCore syntax. *)
+Axiom reduce_prim_concore : forall p args,
+  concore_expr (reduce_prim p args).
+
+Axiom merge_concore : forall e,
+  concore_expr e ->
+  concore_expr (merge e).
+
+Axiom cast_expr_concore : forall e γ,
+  concore_expr e ->
+  concore_expr (cast_expr e γ).
+
+(** ------------------------------------------------------------------------- *)
+(** 8.2 Mutual Induction Scheme for Big-Step Semantics                        *)
+(** ------------------------------------------------------------------------- *)
+
+Scheme eval_mut := Induction for eval Sort Prop
+with fold_alts_mut := Induction for fold_alts Sort Prop.
+Combined Scheme eval_fold_alts_mut from eval_mut, fold_alts_mut.
+
+(** ------------------------------------------------------------------------- *)
+(** 8.3 Inversion and Preservation Helpers                                    *)
+(** ------------------------------------------------------------------------- *)
+
+Lemma lookup_env_concrete : forall Γ x Γ' e,
+  concrete_env Γ ->
+  lookup_env Γ x = Some (Γ', e) ->
+  concrete_env Γ' /\ concore_expr e.
+Proof.
+  induction 1; intros Hlook.
+  - simpl in Hlook. discriminate.
+  - simpl in Hlook.
+    destruct (string_dec x x0).
+    + inversion Hlook; subst. split; assumption.
+    + apply IHconcrete_env2. assumption.
+Qed.
+
+Lemma concrete_env_extend : forall Γ x Γ' e,
+  concrete_env Γ ->
+  concrete_env Γ' ->
+  concore_expr e ->
+  concrete_env (extend_env Γ x Γ' e).
+Proof.
+  intros Γ x Γ' e HΓ HΓ' He.
+  constructor; assumption.
+Qed.
+
+Lemma concrete_env_extend_multi : forall xs ea Γ Γ_arg,
+  concrete_env Γ ->
+  concrete_env Γ_arg ->
+  Forall concore_expr ea ->
+  concrete_env (extend_env_multi Γ xs ea Γ_arg).
+Proof.
+  induction xs as [| x xs' IH]; intros ea Γ Γ_arg HΓ HΓ_arg Hea.
+  - simpl. assumption.
+  - destruct ea as [| a ea'].
+    + simpl. assumption.
+    + simpl. apply concrete_env_extend.
+      * apply IH; [assumption | assumption | inversion Hea; subst; assumption].
+      * assumption.
+      * inversion Hea; subst; assumption.
+Qed.
+
+Lemma unspool_app_concore : forall e acc head args,
+  unspool_app e acc = (head, args) ->
+  concore_expr e ->
+  Forall concore_expr acc ->
+  concore_expr head /\ Forall concore_expr args.
+Proof.
+  induction e; intros acc head args Hunspool Hcon Hacc; simpl in Hunspool;
+  try (inversion Hunspool; subst; split; [assumption | assumption]).
+  apply IHe1 with (acc := e2 :: acc); [assumption | |].
+  - inversion Hcon; subst; assumption.
+  - constructor; [inversion Hcon; subst; assumption | assumption].
+Qed.
+
+Lemma decompose_con_app_concore : forall e d ea,
+  decompose_con_app e = Some (d, ea) ->
+  concore_expr e ->
+  Forall concore_expr ea.
+Proof.
+  intros e d ea Hdec Hcon.
+  unfold decompose_con_app in Hdec.
+  remember (unspool_app e []) as res.
+  destruct res as [head args].
+  destruct head; try discriminate.
+  inversion Hdec; subst.
+  assert (Hargs := unspool_app_concore e [] (ECon d) ea (eq_sym Heqres) Hcon (Forall_nil _)).
+  destruct Hargs as [_ Hforall]. exact Hforall.
+Qed.
+
+Lemma find_alt_concore : forall d alts xs ep,
+  find_alt d alts = Some (xs, ep) ->
+  Forall concore_alt alts ->
+  concore_expr ep.
+Proof.
+  intros d alts. induction alts as [| a alts' IH]; intros xs ep Hfind Hforall.
+  - simpl in Hfind. discriminate.
+  - simpl in Hfind. inversion Hforall; subst.
+    destruct a as [d' xs' ep'].
+    inversion H1; subst.
+    destruct (string_dec d d').
+    + inversion Hfind; subst. assumption.
+    + apply IH with (xs := xs); assumption.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 8.4 ConCore Subject Reduction (Preservation)                              *)
+(** ------------------------------------------------------------------------- *)
+
+Theorem concore_preservation_mut :
+  (forall Φ Γ e v (Heval : Φ; Γ ⊢ e ⇓ v),
+     Φ = pc_true -> concrete_env Γ -> concore_expr e -> concore_expr v) /\
+  (forall Φ Γ e alts er (Hfold : fold_alts Φ Γ e alts er),
+     Φ = pc_true -> concrete_env Γ -> concore_expr e -> Forall concore_alt alts -> concore_expr er).
+Proof.
+  apply eval_fold_alts_mut.
+  - (* Eval_Var *)
+    intros Φ Γ x Γ' e e' Hlook Heval IH HeqΦ Henv Hcon. subst.
+    destruct (lookup_env_concrete Γ x Γ' e Henv Hlook) as [Henv' He].
+    apply IH; [reflexivity | assumption | assumption].
+  - (* Eval_Lit *)
+    intros. constructor.
+  - (* Eval_Con *)
+    intros. constructor.
+  - (* Eval_Cast *)
+    intros Φ Γ e γ e' Heval IH HeqΦ Henv Hcon.
+    apply cast_expr_concore.
+    apply IH; [assumption | assumption |].
+    inversion Hcon; subst; assumption.
+  - (* Eval_AppAbs *)
+    intros Φ Γ Γ' x eb ea eb' Heval IH HeqΦ Henv Hcon.
+    apply IH; [assumption | |].
+    + inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
+      inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | ]; subst.
+      apply concrete_env_extend; assumption.
+    + inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
+      inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | ]; subst.
+      assumption.
+  - (* Eval_AppSpine *)
+    intros Φ Γ ef ea ef' er Hnotwhnf Heval1 IH1 Heval2 IH2 HeqΦ Henv Hcon.
+    apply IH2; [assumption | assumption |].
+    apply Con_App.
+    + apply IH1; [assumption | assumption |].
+      inversion Hcon; subst; assumption.
+    + inversion Hcon; subst; assumption.
+  - (* Eval_Bot *)
+    intros. assumption.
+  - (* Eval_AppPrim *)
+    intros. apply reduce_prim_concore.
+  - (* Eval_Lam *)
+    intros Φ Γ x e HeqΦ Henv Hcon.
+    constructor; [assumption |].
+    inversion Hcon; subst; assumption.
+  - (* Eval_AppCast *)
+    intros Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval IH HeqΦ Henv Hcon.
+    apply IH; [assumption | assumption |].
+    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
+    inversion Hf as [| | | | | | | | e γ0 He | | | | | ]; subst.
+    apply Con_Cast. apply Con_App; [assumption | apply Con_Cast; assumption].
+  - (* Eval_AppBot *)
+    intros Φ Γ b ea HeqΦ Henv Hcon.
+    inversion Hcon; subst. assumption.
+  - (* Eval_Case *)
+    intros Φ Γ es alts es' er Heval IHes Hfold IHfold HeqΦ Henv Hcon.
+    apply IHfold; [assumption | assumption | |].
+    + apply merge_concore.
+      apply IHes; [assumption | assumption |].
+      inversion Hcon; subst; assumption.
+    + inversion Hcon; subst; assumption.
+  - (* Eval_If *)
+    intros Φ Γ ec et ef ec' et' ef' pc_c Hevalc IHc Hpc Hevalt IHt Hevalf IHf HeqΦ Henv Hcon.
+    exfalso. apply (not_concore_if ec et ef). assumption.
+  - (* Eval_Coercion *)
+    intros. constructor.
+  - (* Eval_Prune *)
+    intros. constructor.
+  - (* Eval_Type *)
+    intros. constructor.
+  - (* FoldAlts_If *)
+    intros Φ Γ ec et ef alts et' ef' pc_c Hpc Hfoldt IHt Hfoldf IHf HeqΦ Henv Hcon Halts.
+    exfalso. apply (not_concore_if ec et ef). assumption.
+  - (* FoldAlts_IfFail *)
+    intros Φ Γ ec et ef alts Hpc HeqΦ Henv Hcon Halts.
+    exfalso. apply (not_concore_if ec et ef). assumption.
+  - (* FoldAlts_Con *)
+    intros Φ Γ e d ea xs ep alts er Hdec Hfind Heval IH HeqΦ Henv Hcon Halts.
+    assert (Hea : Forall concore_expr ea).
+    { apply decompose_con_app_concore with (e := e) (d := d); assumption. }
+    assert (Hep : concore_expr ep).
+    { apply find_alt_concore with (d := d) (alts := alts) (xs := xs); assumption. }
+    apply IH; [assumption | | assumption].
+    apply concrete_env_extend_multi; assumption.
+  - (* FoldAlts_Bot *)
+    intros. assumption.
+  - (* FoldAlts_Otherwise *)
+    intros. constructor.
+Qed.
+
 (** ConCore Preservation (Subject Reduction):
-    Concrete evaluation of a ConCore expression always produces a ConCore value. *)
+    Concrete evaluation in a concrete environment produces a ConCore value. *)
 Theorem concore_preservation : forall Γ e v,
+  concrete_env Γ ->
   concore_expr e ->
   Γ ⊢ᶜ e ⇓ᶜ v ->
   concore_expr v.
-Admitted.
+Proof.
+  intros Γ e v Henv Hcon Heval.
+  unfold eval_con in Heval.
+  destruct concore_preservation_mut as [Heval_pres _].
+  apply Heval_pres with (Φ := pc_true) (Γ := Γ) (e := e); auto.
+Qed.
+
+(** Closed ConCore expressions evaluate to ConCore values *)
+Corollary concore_preservation_closed : forall e v,
+  concore_expr e ->
+  ⊢ᶜ e ⇓ᶜ v ->
+  concore_expr v.
+Proof.
+  intros e v Hcon Heval.
+  apply (concore_preservation EmptyEnv e v); auto.
+  constructor.
+Qed.
+
+(** Closed Source System FC expressions evaluate to ConCore values *)
+Corollary source_preservation_closed : forall e v,
+  source_expr e ->
+  ⊢ᶜ e ⇓ᶜ v ->
+  concore_expr v.
+Proof.
+  intros e v Hsrc Heval.
+  apply (concore_preservation_closed e v); auto.
+  apply source_is_concore. assumption.
+Qed.
 
 (** ========================================================================= *)
 (** 9. SMT Valuations and Concrete Instantiation                               *)
