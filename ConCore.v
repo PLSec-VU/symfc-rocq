@@ -327,3 +327,161 @@ Proof.
     apply Hctx. simpl.
     apply in_remove_helper; auto.
 Qed.
+
+(** ========================================================================= *)
+(** 8. Concrete Evaluation Semantics and Preservation                         *)
+(** ========================================================================= *)
+
+(** Concrete evaluation is SymCore evaluation under the canonical trivial path condition pc_true *)
+Definition eval_con (Γ : environment) (e : expr) (v : expr) : Prop :=
+  eval pc_true Γ e v.
+
+(** Notation for concrete big-step reduction: Γ ⊢ᶜ e ⇓ᶜ v *)
+Notation "Γ '⊢ᶜ' e '⇓ᶜ' v" := (eval_con Γ e v) (at level 70, no associativity).
+Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con EmptyEnv e v) (at level 70, no associativity).
+
+(** ConCore Preservation (Subject Reduction):
+    Concrete evaluation of a ConCore expression always produces a ConCore value. *)
+Theorem concore_preservation : forall Γ e v,
+  concore_expr e ->
+  Γ ⊢ᶜ e ⇓ᶜ v ->
+  concore_expr v.
+Admitted.
+
+(** ========================================================================= *)
+(** 9. SMT Valuations and Concrete Instantiation                               *)
+(** ========================================================================= *)
+
+(**
+  An SMT valuation σ maps symbolic variables to concrete terms.
+  Under valuation σ and path condition Φ:
+  1. Symbolic variables are instantiated to concrete values: σ(x).
+  2. Symbolic branching (EIf ec et ef) collapses to the single feasible
+     branch according to whether σ ⊨ ec or σ ⊨ ¬ec.
+  3. The resulting expression e_con contains no EIf and belongs to ConCore.
+*)
+
+(** SMT valuation mapping symbolic variable names to concrete expressions *)
+Definition valuation : Type := var -> expr.
+
+(** Valuation satisfies path condition Φ (σ ⊨ Φ) *)
+Parameter models : valuation -> path_condition -> Prop.
+
+(** A satisfiable model implies SMT satisfiability *)
+Axiom models_sat : forall σ Φ,
+  models σ Φ -> sat Φ = true.
+
+(** Mutual inductive instantiation relation relating symbolic expressions to concrete instances *)
+Inductive instantiates (σ : valuation) (Φ : path_condition) : expr -> expr -> Prop :=
+  (** Bound variable reflexivity *)
+  | Inst_Var_Bound : forall x,
+      instantiates σ Φ (EVar x) (EVar x)
+
+  (** Symbolic variable instantiation via valuation σ *)
+  | Inst_Var_Sym : forall x v,
+      σ x = v ->
+      concore_expr v ->
+      instantiates σ Φ (EVar x) v
+
+  (** Literals, Primitives, Constructors, Types, Coercions, Bottoms *)
+  | Inst_Lit : forall l,
+      instantiates σ Φ (ELit l) (ELit l)
+  | Inst_PrimOp : forall p,
+      instantiates σ Φ (EPrimOp p) (EPrimOp p)
+  | Inst_Con : forall d,
+      instantiates σ Φ (ECon d) (ECon d)
+  | Inst_Coercion : forall γ,
+      instantiates σ Φ (ECoercion γ) (ECoercion γ)
+  | Inst_Type : forall τ,
+      instantiates σ Φ (EType τ) (EType τ)
+  | Inst_Bot : forall b,
+      instantiates σ Φ (EBot b) (EBot b)
+
+  (** Structural congruence *)
+  | Inst_App : forall f_s a_s f_c a_c,
+      instantiates σ Φ f_s f_c ->
+      instantiates σ Φ a_s a_c ->
+      instantiates σ Φ (EApp f_s a_s) (EApp f_c a_c)
+  | Inst_Lam : forall x bodys bodyc,
+      instantiates σ Φ bodys bodyc ->
+      instantiates σ Φ (ELam x bodys) (ELam x bodyc)
+  | Inst_Clos : forall Γs Γc x bodys bodyc,
+      instantiates_env σ Φ Γs Γc ->
+      instantiates σ Φ bodys bodyc ->
+      instantiates σ Φ (EClos Γs x bodys) (EClos Γc x bodyc)
+  | Inst_Cast : forall es ec γ,
+      instantiates σ Φ es ec ->
+      instantiates σ Φ (ECast es γ) (ECast ec γ)
+  | Inst_Case : forall ess esc altss altsc,
+      instantiates σ Φ ess esc ->
+      Forall2 (instantiates_alt σ Φ) altss altsc ->
+      instantiates σ Φ (ECase ess altss) (ECase esc altsc)
+
+  (** Branch resolution: True branch feasible under σ *)
+  | Inst_If_True : forall ec et ef etc pc_c,
+      expr_to_pc EmptyEnv ec = Some pc_c ->
+      models σ (Φ ∧ pc_c) ->
+      instantiates σ (Φ ∧ pc_c) et etc ->
+      instantiates σ Φ (EIf ec et ef) etc
+
+  (** Branch resolution: False branch feasible under σ *)
+  | Inst_If_False : forall ec et ef efc pc_c,
+      expr_to_pc EmptyEnv ec = Some pc_c ->
+      models σ (Φ ∧ ¬ pc_c) ->
+      instantiates σ (Φ ∧ ¬ pc_c) ef efc ->
+      instantiates σ Φ (EIf ec et ef) efc
+
+with instantiates_alt (σ : valuation) (Φ : path_condition) : alt -> alt -> Prop :=
+  | Inst_Alt : forall d xs eps epc,
+      instantiates σ Φ eps epc ->
+      instantiates_alt σ Φ (Alt d xs eps) (Alt d xs epc)
+
+with instantiates_env (σ : valuation) (Φ : path_condition) : environment -> environment -> Prop :=
+  | Inst_Env_Empty :
+      instantiates_env σ Φ EmptyEnv EmptyEnv
+  | Inst_Env_Extend : forall x Γs Γc es ec rest_s rest_c,
+      instantiates_env σ Φ Γs Γc ->
+      instantiates σ Φ es ec ->
+      instantiates_env σ Φ rest_s rest_c ->
+      instantiates_env σ Φ (ExtendEnv x (MkClosure Γs es) rest_s)
+                           (ExtendEnv x (MkClosure Γc ec) rest_c).
+
+(** ========================================================================= *)
+(** 10. Soundness and Completeness of Symbolic Execution                      *)
+(** ========================================================================= *)
+
+(**
+  Soundness (Simulation / Over-approximation):
+  For any concrete expression e_con that is an instance of symbolic expression e_sym
+  under valuation σ and path condition Φ, its concrete reduction is an instance of
+  the symbolic reduction of e_sym.
+*)
+Theorem concore_soundness : forall Φ Γs Γc σ e_sym e_con v_con,
+  models σ Φ ->
+  instantiates_env σ Φ Γs Γc ->
+  instantiates σ Φ e_sym e_con ->
+  concore_expr e_con ->
+  concrete_context Γc e_con ->
+  Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+  exists v_sym,
+    Φ ; Γs ⊢ e_sym ⇓ v_sym /\
+    instantiates σ Φ v_sym v_con.
+Admitted.
+
+(**
+  Completeness (Coverage / No Spurious Paths):
+  Every symbolic reduction Φ ; Γs ⊢ e_sym ⇓ v_sym corresponds, under each
+  satisfiable valuation σ ⊨ Φ, to a terminating concrete evaluation of the
+  instantiated expression e_con producing an instance v_con of v_sym.
+*)
+Theorem concore_completeness : forall Φ Γs Γc σ e_sym v_sym,
+  models σ Φ ->
+  instantiates_env σ Φ Γs Γc ->
+  Φ ; Γs ⊢ e_sym ⇓ v_sym ->
+  exists e_con v_con,
+    instantiates σ Φ e_sym e_con /\
+    concore_expr e_con /\
+    concrete_context Γc e_con /\
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
+    instantiates σ Φ v_sym v_con.
+Admitted.

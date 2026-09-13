@@ -200,6 +200,10 @@ Definition pc_not (Φ : path_condition) : path_condition :=
 Notation "Φ1 '∧' Φ2" := (pc_and Φ1 Φ2) (at level 40, left associativity).
 Notation "'¬' Φ" := (pc_not Φ) (at level 35, right associativity).
 
+(** Canonical trivially satisfiable path condition (Top / True) *)
+Axiom pc_true : path_condition.
+Axiom sat_pc_true : sat pc_true = true.
+
 (** Convert a solvable expression into a path condition formula *)
 Fixpoint expr_to_pc (Γ : environment) (e : expr) : option path_condition :=
   match e with
