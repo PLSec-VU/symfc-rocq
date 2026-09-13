@@ -14,6 +14,7 @@ From Stdlib Require Import Strings.String.
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import ZArith.ZArith.
 From Stdlib Require Import Bool.Bool.
+From Stdlib Require Import Arith.PeanoNat.
 Import ListNotations.
 Open Scope string_scope.
 Open Scope Z_scope.
@@ -36,6 +37,10 @@ Parameter lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2}.
 (** Primitive operations mirror SMT solver primitives; left abstract in §3.1 *)
 Parameter primop : Set.
 Parameter primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
+
+(** SMT boolean primitives for path condition connectives *)
+Parameter op_and : primop.
+Parameter op_not : primop.
 
 (** ========================================================================= *)
 (** 3. Types and Coercions in System FC / SymCore (§3.1)                      *)
@@ -100,28 +105,7 @@ Definition decomp_coerc_arrow (c : coercion) : option (coercion * coercion) :=
   end.
 
 (** ========================================================================= *)
-(** 4. Path Condition Φ (Figure 2)                                            *)
-(** ========================================================================= *)
-
-(**
-  Path Condition (Fig. 2):
-    Φ ::= x | l | ⊗ Φ⃗
-  with boolean constants and connectives for branching (Φ ∧ ec, Φ ∧ ¬ec).
-*)
-Inductive path_condition : Set :=
-  | PCTrue  : path_condition
-  | PCFalse : path_condition
-  | PCVar   : var -> path_condition
-  | PCLit   : lit -> path_condition
-  | PCPrim  : primop -> list path_condition -> path_condition
-  | PCAnd   : path_condition -> path_condition -> path_condition
-  | PCNot   : path_condition -> path_condition.
-
-(** SMT satisfiability oracle SAT(Φ) (Fig. 3, Rule Prune) *)
-Parameter sat : path_condition -> bool.
-
-(** ========================================================================= *)
-(** 5. Expressions, Bottom, Closures, and Environment (Figures 1 & 2)          *)
+(** 4. Expressions, Bottom, Closures, and Environment (Figures 1 & 2)          *)
 (** ========================================================================= *)
 
 (**
@@ -186,6 +170,47 @@ Fixpoint extend_env_multi (g : environment) (xs : list var) (args : list expr) (
   | x :: xs', a :: args' =>
       extend_env (extend_env_multi g xs' args' g_arg) x g_arg a
   | _, _ => g
+  end.
+
+(** ========================================================================= *)
+(** 5. Path Condition Φ (Figure 2)                                            *)
+(** ========================================================================= *)
+
+(**
+  Path Condition (Fig. 2):
+    Φ ::= x | l | ⊗ Φ⃗
+*)
+Inductive path_condition : Set :=
+  | PCVar  : var -> path_condition
+  | PCLit  : lit -> path_condition
+  | PCPrim : primop -> list path_condition -> path_condition.
+
+(** SMT satisfiability oracle SAT(Φ) (Fig. 3, Rule Prune) *)
+Parameter sat : path_condition -> bool.
+
+(** Conjunction of path conditions: Φ1 ∧ Φ2 *)
+Definition pc_and (p1 p2 : path_condition) : path_condition :=
+  PCPrim op_and [p1; p2].
+
+(** Negation of a path condition: ¬Φ *)
+Definition pc_not (p : path_condition) : path_condition :=
+  PCPrim op_not [p].
+
+Notation "p1 '∧' p2" := (pc_and p1 p2) (at level 40, left associativity).
+Notation "'¬' p" := (pc_not p) (at level 35, right associativity).
+
+(** Convert a solvable expression into a path condition formula *)
+Fixpoint expr_to_pc (e : expr) : option path_condition :=
+  match e with
+  | EVar x => Some (PCVar x)
+  | ELit l => Some (PCLit l)
+  | EPrimOp p => Some (PCPrim p [])
+  | EApp f a =>
+      match expr_to_pc f, expr_to_pc a with
+      | Some (PCPrim p args), Some pca => Some (PCPrim p (args ++ [pca]))
+      | _, _ => None
+      end
+  | _ => None
   end.
 
 (** ========================================================================= *)
@@ -345,3 +370,80 @@ Proof.
         -- apply NS1; auto.
     + left. apply Whnf_Bot.
 Defined.
+
+(** ========================================================================= *)
+(** 8. Pattern Matching and Branch Folding: fold-alts (§3.2, lines 570-590)   *)
+(** ========================================================================= *)
+
+(** Helper predicate identifying if-then-else expressions *)
+Definition is_if (e : expr) : bool :=
+  match e with
+  | EIf _ _ _ => true
+  | _ => false
+  end.
+
+(** Helper predicate identifying bottom values *)
+Definition is_bot (e : expr) : bool :=
+  match e with
+  | EBot _ => true
+  | _ => false
+  end.
+
+(** Lookup a matching constructor alternative in a branch list: find(D, a⃗) *)
+Fixpoint find_alt (d : dcon) (alts : list alt) : option (list var * expr) :=
+  match alts with
+  | [] => None
+  | Alt d' xs ep :: rest =>
+      if string_dec d d' then Some (xs, ep) else find_alt d rest
+  end.
+
+(** Decompose constructor application into constructor name and argument list: D e⃗a *)
+Definition decompose_con_app (e : expr) : option (dcon * list expr) :=
+  match unspool_app e [] with
+  | (ECon d, args) => Some (d, args)
+  | _ => None
+  end.
+
+(** Construct curried constructor application from constructor name and argument list *)
+Definition make_con_app (d : dcon) (args : list expr) : expr :=
+  fold_left EApp args (ECon d).
+
+(**
+  fold-alts(Φ, Γ, e, a⃗) (§3.2, lines 570-590):
+    case e ≡ if ec then et else ef:
+      if ec then fold-alts(Φ ∧ ec, Γ, et, a)
+             else fold-alts(Φ ∧ ¬ec, Γ, ef, a)
+    case e ≡ D e⃗a:
+      where Alt D x⃗ ep := find(D, a)
+      reduce: Φ; Γ{x⃗ ↦ e⃗a} ⊢ ep ⇓ er
+    case e ≡ b: b
+    otherwise: ⊥ (BUndefined)
+
+  Higher-order structural fixpoint over expressions e, parameterized by
+  the reduction function:
+    reduce : path_condition -> environment -> expr -> expr
+*)
+Fixpoint fold_alts (reduce : path_condition -> environment -> expr -> expr)
+                   (phi : path_condition) (g : environment) (e : expr) (alts : list alt) : expr :=
+  match e with
+  | EIf ec et ef =>
+      match expr_to_pc ec with
+      | Some pc_c =>
+          let et' := fold_alts reduce (phi ∧ pc_c) g et alts in
+          let ef' := fold_alts reduce (phi ∧ ¬ pc_c) g ef alts in
+          EIf ec et' ef'
+      | None => EBot BUndefined
+      end
+  | EBot b =>
+      EBot b
+  | _ =>
+      match decompose_con_app e with
+      | Some (d, ea) =>
+          match find_alt d alts with
+          | Some (xs, ep) => reduce phi (extend_env_multi g xs ea g) ep
+          | None => EBot BUndefined
+          end
+      | None => EBot BUndefined
+      end
+  end.
+
