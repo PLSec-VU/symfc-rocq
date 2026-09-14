@@ -62,3 +62,22 @@ Section CompletenessFailsOnPlainEval.
       congruence.
   Qed.
 End CompletenessFailsOnPlainEval.
+
+(* Why "just don't pick the false branch" is not available.
+
+   The symbolic evaluator never consults a model: Eval_If mentions no
+   sigma at all, and its conclusion is EIf ec' et' ef', a tree carrying
+   BOTH arms.  sigma enters only afterwards, in contains, to say which
+   arm the concrete run corresponds to.  So the malformed arm blocks the
+   symbolic derivation whatever sigma would have chosen -- there is no
+   sigma in the statement below. *)
+Theorem stuck_regardless_of_any_model : forall Φ x l l',
+  sat Φ = true ->
+  (forall pc, sat (Φ ∧ ¬ pc) = true) ->
+  ~ (exists v, Φ ; · ⊢ EIf (EVar x) (ELit l') (EApp (ELit l) (ELit l)) ⇓ v).
+Proof.
+  intros Φ x l l' Hsat Hfeas [v Heval].
+  inversion Heval; subst.
+  - eapply app_lit_stuck; [apply Hfeas | exact H8].
+  - congruence.
+Qed.
