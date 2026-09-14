@@ -1840,6 +1840,20 @@ Proof.
 }
 Qed.
 
+(**
+  NOT DONE: determinism (the "exists v_con" weakness).
+
+  The conclusion is still existential. Strengthening it to
+    forall v_con, Γc ⊢ᶜ e_con ⇓ᶜ v_con -> contains σ S v_sym v_con
+  needs concrete evaluation to be deterministic, and eval is NOT proved
+  deterministic here - SymCore.v only has fold_alts_deterministic_given_eval,
+  which ASSUMES it. Determinism is not obviously true either: Rule App-Spine
+  and Rule App-Prim can both apply to the same application (App-Spine only
+  requires the head not to be in WHNF, which does not exclude a spine whose
+  head is a partially applied operator), so a determinism proof would first
+  need those two rules to be made disjoint. That is a change to the operational
+  semantics, not to this file, and it is left undone.
+*)
 Theorem concore_soundness : forall Φ Γs Γc σ S e_sym e_con v_sym,
   models σ Φ ->
   contains_env σ S Γs Γc ->
@@ -1869,3 +1883,220 @@ Proof.
   apply (concore_soundness Φ EmptyEnv EmptyEnv σ S e_sym e_con v_sym); auto.
   apply Cont_Env_Empty.
 Qed.
+
+
+(** ========================================================================= *)
+(** 11. NonVacuity: what the repaired statement actually says                 *)
+(** ========================================================================= *)
+
+(**
+  Four facts that the pre-repair development could not prove, and in three
+  cases actively refuted (see scratch/Audit.v, scratch/prim.v,
+  scratch/prim2.v):
+
+  (a) a free symbolic variable is genuinely instantiated to its value under
+      the model, and the soundness theorem has real instances that use it;
+  (b) a branch whose condition mentions a free symbolic variable DOES have a
+      concretion - the exact negation of soundness_vacuous_on_symbolic_branch;
+  (c) Rule Prune no longer kills every branch;
+  (d) reduce_prim is not forced to be a constant function on literals, and
+      the collapse is attributable exactly to the axiom that was weakened.
+
+  No new axiom is introduced by any of this.
+*)
+
+Section NonVacuity.
+
+Definition only (x : var) : symvars := fun y => if string_dec y x then true else false.
+
+Lemma only_self : forall x, only x x = true.
+Proof. intros x. unfold only. destruct (string_dec x x); congruence. Qed.
+
+(* ================= (a) symbolic variables are instantiated ============== *)
+
+Theorem symvar_instantiated : forall σ x,
+  contains σ (only x) (EVar x) (ELit (σ x)).
+Proof. intros. apply Cont_Var_Sym. apply only_self. Qed.
+
+Theorem symvar_instantiated_uniquely : forall σ S x ec,
+  S x = true -> contains σ S (EVar x) ec -> ec = ELit (σ x).
+Proof. intros. eapply contains_var_sym; eassumption. Qed.
+
+Theorem soundness_applies_to_symvar : forall σ S x,
+  models σ pc_true -> S x = true ->
+  exists v_con, EmptyEnv ⊢ᶜ ELit (σ x) ⇓ᶜ v_con /\ contains σ S (EVar x) v_con.
+Proof.
+  intros σ S x Hmod Hx.
+  apply (concore_soundness pc_true EmptyEnv EmptyEnv σ S (EVar x) (ELit (σ x)) (EVar x)).
+  - exact Hmod.
+  - apply Cont_Env_Empty.
+  - apply Cont_Var_Sym. exact Hx.
+  - apply Con_Lit.
+  - apply Eval_SymVar. reflexivity.
+Qed.
+
+Definition symprim (p : primop) (a : expr) (l : lit) : expr :=
+  EApp (EApp (EPrimOp p) a) (ELit l).
+
+Theorem soundness_on_symbolic_primop : forall σ S p x l,
+  models σ pc_true -> S x = true -> primop_arity p = 2%nat ->
+  exists v_con,
+    eval_con EmptyEnv (symprim p (ELit (σ x)) l) v_con /\
+    contains σ S (reduce_prim p (EVar x :: ELit l :: nil)) v_con.
+Proof.
+  intros σ S p x l Hmod Hx Har.
+  apply (concore_soundness pc_true EmptyEnv EmptyEnv σ S
+           (symprim p (EVar x) l) (symprim p (ELit (σ x)) l)
+           (reduce_prim p (EVar x :: ELit l :: nil))).
+  - exact Hmod.
+  - apply Cont_Env_Empty.
+  - apply Cont_App; [apply Cont_App; [apply Cont_PrimOp |] | apply Cont_Lit].
+    apply Cont_Var_Sym. exact Hx.
+  - apply Con_App; [apply Con_App; [apply Con_PrimOp | apply Con_Lit] | apply Con_Lit].
+  - unfold symprim. eapply Eval_AppPrim.
+    + reflexivity.
+    + simpl. rewrite Har. reflexivity.
+    + constructor; [apply Eval_SymVar; reflexivity |].
+      constructor; [apply Eval_Lit | constructor].
+Qed.
+
+(* ============== (b) symbolic branches have concretions ================== *)
+
+Definition symcond (p : primop) (x : var) (l : lit) : expr :=
+  EApp (EApp (EPrimOp p) (EVar x)) (ELit l).
+
+Lemma symcond_is_formula : forall p x l Γ,
+  lookup_env Γ x = None ->
+  expr_to_pc Γ (symcond p x l) = Some (PCPrim p (PCVar x :: PCLit l :: nil)).
+Proof.
+  intros p x l Γ Hnone. unfold symcond. simpl. rewrite Hnone. reflexivity.
+Qed.
+
+Theorem symbolic_branch_has_concretion : forall σ S p x l lt lf,
+  models σ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
+  contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
+Proof.
+  intros σ S p x l lt lf Hmod.
+  apply Cont_If_True; [| apply Cont_Lit].
+  apply (models_cond_pc σ S EmptyEnv (symcond p x l) (PCPrim p (PCVar x :: PCLit l :: nil))).
+  - apply symcond_is_formula. reflexivity.
+  - exact Hmod.
+Qed.
+
+(** The exact negation of scratch/Audit.v's soundness_vacuous_on_symbolic_branch,
+    modulo the one premise that cannot be dispensed with: that the SMT theory
+    is non-degenerate, i.e. some model satisfies some atom. The audit theorem
+    needed no such premise because it refuted the condition for EVERY model. *)
+Theorem soundness_not_vacuous_on_symbolic_branch :
+  (exists σ p x l, models σ (PCPrim p (PCVar x :: PCLit l :: nil))) ->
+  ~ (forall σ S p x l et ef ec, ~ contains σ S (EIf (symcond p x l) et ef) ec).
+Proof.
+  intros [σ [p [x [l Hmod]]]] Hvac.
+  apply (Hvac σ (only x) p x l (ELit l) (ELit l) (ELit l)).
+  apply symbolic_branch_has_concretion. exact Hmod.
+Qed.
+
+Theorem symbolic_branch_condition_is_judgeable : forall σ S p x l,
+  models_cond σ S (symcond p x l) <-> models σ (PCPrim p (PCVar x :: PCLit l :: nil)).
+Proof.
+  intros. apply (models_cond_pc σ S EmptyEnv).
+  apply symcond_is_formula. reflexivity.
+Qed.
+
+(* ==================== (c) the Prune attack is dead ====================== *)
+
+Theorem prune_attack_blocked : forall Φ σ,
+  models σ Φ -> sat Φ = false -> False.
+Proof.
+  intros Φ σ Hmod Hunsat. apply models_sat in Hmod. congruence.
+Qed.
+
+Theorem prune_does_not_kill_branches :
+  (exists Φ, sat Φ = false) ->
+  forall σ S p x l lt lf,
+    models σ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
+    contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
+Proof.
+  intros _ σ S p x l lt lf Hmod. apply symbolic_branch_has_concretion. exact Hmod.
+Qed.
+
+(* ============ (d) reduce_prim is not forced to be constant ============== *)
+
+Theorem contains_not_rigid_on_solvable : forall σ : valuation,
+  ~ (forall S Γ es ec, Solvable Γ es -> contains σ S es ec -> es = ec).
+Proof.
+  intros σ Hrigid.
+  specialize (Hrigid (only "x") EmptyEnv (EVar "x") (ELit (σ "x"))
+                     (Solvable_Var EmptyEnv "x" eq_refl)
+                     (Cont_Var_Sym σ (only "x") "x" (only_self "x"))).
+  discriminate.
+Qed.
+
+Lemma ground_solvable_contains_eq : forall σ S es ec,
+  contains σ S es ec ->
+  (forall Γ, Solvable Γ es) ->
+  es = ec.
+Proof.
+  induction 1; intros Hall;
+    try reflexivity;
+    try (exfalso;
+         specialize (Hall EmptyEnv); inversion Hall; fail).
+  - (* Cont_Var_Sym *)
+    exfalso.
+    specialize (Hall (ExtendEnv x (MkClosure EmptyEnv (EBot BUndefined)) EmptyEnv)).
+    inversion Hall as [| x0 Hnone | |]; subst.
+    simpl in Hnone. destruct (string_dec x x); [discriminate | congruence].
+  - (* Cont_App *)
+    assert (Hf : forall Γ, Solvable Γ f_s)
+      by (intros Γ; specialize (Hall Γ); inversion Hall; assumption).
+    assert (Ha : forall Γ, Solvable Γ a_s)
+      by (intros Γ; specialize (Hall Γ); inversion Hall; assumption).
+    rewrite (IHcontains1 Hf), (IHcontains2 Ha). reflexivity.
+Qed.
+
+(** The collapse is attributable exactly to the UNCONDITIONAL form of
+    reduce_prim_solvable, which this development no longer assumes. *)
+Theorem unconditional_solvable_forces_constancy :
+  (forall Γ p args, Solvable Γ (reduce_prim p args)) ->
+  forall σ S σ' S' p c l1 l2,
+    models_cond σ S c ->
+    models_not_cond σ' S' c ->
+    reduce_prim p [ELit l1] = reduce_prim p [ELit l2].
+Proof.
+  intros Hall σ S σ' S' p c l1 l2 Htrue Hfalse.
+  assert (H1 : reduce_prim p [EIf c (ELit l1) (ELit l2)] = reduce_prim p [ELit l1]).
+  { eapply (ground_solvable_contains_eq σ S).
+    - apply reduce_prim_contains. constructor; [| constructor].
+      apply Cont_If_True; [exact Htrue | apply Cont_Lit].
+    - intros Γ. apply Hall. }
+  assert (H2 : reduce_prim p [EIf c (ELit l1) (ELit l2)] = reduce_prim p [ELit l2]).
+  { eapply (ground_solvable_contains_eq σ' S').
+    - apply reduce_prim_contains. constructor; [| constructor].
+      apply Cont_If_False; [exact Hfalse | apply Cont_Lit].
+    - intros Γ. apply Hall. }
+  rewrite <- H1, H2. reflexivity.
+Qed.
+
+Section ReducePrimNotConstant.
+  Variable p : primop.
+  Variables l1 l2 : lit.
+  Hypothesis Hdistinct : reduce_prim p [ELit l1] <> reduce_prim p [ELit l2].
+
+  Theorem distinct_images_survive_resolvable_conditions :
+    forall σ S c,
+      models_cond σ S c ->
+      contains σ S (reduce_prim p [EIf c (ELit l1) (ELit l2)]) (reduce_prim p [ELit l1]).
+  Proof.
+    intros σ S c Hc. apply reduce_prim_contains. constructor; [| constructor].
+    apply Cont_If_True; [exact Hc | apply Cont_Lit].
+  Qed.
+
+  Theorem old_axiom_refutes_distinct_images :
+    (forall Γ q args, Solvable Γ (reduce_prim q args)) ->
+    forall σ S σ' S' c, models_cond σ S c -> models_not_cond σ' S' c -> False.
+  Proof.
+    intros Hall σ S σ' S' c Ht Hf. apply Hdistinct.
+    eapply unconditional_solvable_forces_constancy; eassumption.
+  Qed.
+End ReducePrimNotConstant.
+End NonVacuity.
