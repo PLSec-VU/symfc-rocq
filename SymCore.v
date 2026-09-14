@@ -591,6 +591,14 @@ Definition decompose_con_app (e : expr) : option (dcon * list expr) :=
   | _ => None
   end.
 
+(** The head of a spine is the expression itself when the expression is not an
+    application, so a spine whose head is not a branch is not a branch. *)
+Lemma is_if_false_of_spine_head : forall e,
+  is_if (fst (unspool_app e [])) = false -> is_if e = false.
+Proof.
+  intros e H. destruct e; simpl in H |- *; try reflexivity. discriminate H.
+Qed.
+
 (** Construct curried constructor application from constructor name and argument list *)
 Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
@@ -793,9 +801,20 @@ with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> ex
   | FoldAlts_Bot : forall f Φ Γ b alts,
       fold_alts f Φ Γ (EBot b) alts (EBot b)
 
-  (** Otherwise: undefined behavior *)
+  (**
+    Otherwise: undefined behaviour.
+
+    The first premise reads the head of the scrutinee's application spine and
+    demands that it is not a branch. Demanding only that the scrutinee itself
+    is not a branch would be too weak: it would let this rule answer
+    EApp (EIf ec et ef) a, a scrutinee that still has a branch to resolve, with
+    a bottom. Rule FoldAlts_If resolves branches, and it only sees a branch
+    that sits at the top. The premise as written implies is_if e = false
+    (is_if_false_of_spine_head), so nothing this rule used to reject is
+    accepted now.
+  *)
   | FoldAlts_Otherwise : forall f Φ Γ e alts,
-      is_if e = false ->
+      is_if (fst (unspool_app e [])) = false ->
       (match decompose_con_app e with
        | Some (d, _) => find_alt d alts = None
        | None => True
@@ -929,15 +948,38 @@ Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
   fold_alts Inf Φ Γ (merge e) alts r <-> fold_alts Inf Φ Γ e alts r.
 
 (**
-  Grisette state merging never buries a branch below a resolved head: a
-  scrutinee fold_alts is actually able to fold over either IS the branch
-  (§3.3 - the case a match still needs to choose between alternatives) or
-  its top-level application spine contains no further branch at all. This
-  rules out the ill-formed shape "EApp (EIf ..) a" appearing as a scrutinee.
+  No branch is ever buried below a resolved head: a scrutinee fold_alts can
+  fold over either IS the branch (§3.3 - the case a match still needs to
+  choose between alternatives) or its application spine has no branch at its
+  head at all. The ill-formed shape "EApp (EIf ..) a" therefore never appears
+  as a scrutinee.
+
+  This was an axiom about Grisette state merging until the rules were fixed.
+  As an axiom it was false, because Rule FoldAlts_Otherwise then accepted
+  exactly the shape the axiom denied; scratch/FoldAltsNoNestedIfIsFalse.v
+  derived False from it. Rule FoldAlts_Otherwise now reads the spine head
+  itself, so the statement is a consequence of the five rules and needs no
+  assumption about merge.
 *)
-Axiom fold_alts_no_nested_if : forall Φ Γ e alts er,
+Lemma fold_alts_no_nested_if : forall Φ Γ e alts er,
   fold_alts Inf Φ Γ e alts er ->
   forall head args, unspool_app e [] = (head, args) -> is_if head = true -> head = e.
+Proof.
+  intros Φ Γ e alts er Hfold head args Hunspool Hhead_if.
+  inversion Hfold as
+    [ f0 Φ0 Γ0 ec et ef alts0 et' ef' pc_c Hpc Hfold_t Hfold_f
+    | f0 Φ0 Γ0 ec et ef alts0 Hpc_none
+    | f0 Φ0 Γ0 e0 d ea xs ep alts0 er0 Hdec Halt Heval_ep
+    | f0 Φ0 Γ0 b alts0
+    | f0 Φ0 Γ0 e0 alts0 Hspine Hnoalt Hnotbot ]; subst.
+  - simpl in Hunspool; injection Hunspool as Hh Ha; subst; reflexivity.
+  - simpl in Hunspool; injection Hunspool as Hh Ha; subst; reflexivity.
+  - exfalso. unfold decompose_con_app in Hdec. rewrite Hunspool in Hdec.
+    destruct head; try discriminate Hdec; discriminate Hhead_if.
+  - simpl in Hunspool; injection Hunspool as Hh Ha; subst; discriminate Hhead_if.
+  - exfalso. rewrite Hunspool in Hspine. simpl in Hspine.
+    rewrite Hspine in Hhead_if. discriminate Hhead_if.
+Qed.
 
 (** ------------------------------------------------------------------------- *)
 (** 10.3 Normal Form / WHNF Guarantee (§3.2)                                   *)
@@ -1524,7 +1566,8 @@ Proof.
   - (* FoldAlts_Bot *)
     apply fold_alts_bot_same in H2. subst. reflexivity.
   - (* FoldAlts_Otherwise *)
-    apply (fold_alts_otherwise_same f Φ Γ e alts r2 H H0 H1) in H2.
+    apply (fold_alts_otherwise_same f Φ Γ e alts r2
+             (is_if_false_of_spine_head e H) H0 H1) in H2.
     subst. reflexivity.
 Qed.
 

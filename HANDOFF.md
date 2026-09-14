@@ -259,7 +259,7 @@ at any budget. Any lemma phrased "branch-free at the root" is false.
 
 ## 6. Assumptions
 
-Thirty-four. Group them this way in the paper; the grouping is the justification.
+Thirty-three. Group them this way in the paper; the grouping is the justification.
 
 **Abstract sorts and signatures (14)** — `lit`, `primop`, `tycon`, `op_and`,
 `op_not`, `primop_arity`, `sat`, `pc_true`, `models`, `reduce_prim`, `merge`,
@@ -274,10 +274,17 @@ solver and any Boolean semantics.
 are **conditional on their arguments being well-formed**; unconditional versions
 caused the collapse in §5.1.
 
-**Grisette and coercion behaviour (4)** — `merge_fold_alts_equiv`,
-`fold_alts_no_nested_if`, `eval_models_cond`, `eval_models_not_cond`. The last two
-assume precisely that `reduce_prim` preserves a condition's denotation and its
-truth; everything else about them is proved.
+**Grisette and coercion behaviour (3)** — `merge_fold_alts_equiv`,
+`eval_models_cond`, `eval_models_not_cond`. The last two assume precisely that
+`reduce_prim` preserves a condition's denotation and its truth; everything else
+about them is proved.
+
+`fold_alts_no_nested_if` used to sit in this group and is now a **lemma**. As an
+assumption it was false: Rule FoldAlts_Otherwise accepted the very scrutinee shape
+`EApp (EIf ..) a` that the assumption denied, so the two together proved `False`
+and both theorems were vacuous. Rule FoldAlts_Otherwise now demands that the head
+of the scrutinee's application spine is not a branch, which is what the
+assumption was reaching for, and the statement follows from the five rules.
 
 **Simulation (8)** — `merge_contains`, `cast_expr_contains`,
 `subst_coerc_contains_env`, `subst_type_contains_env`, `reduce_prim_contains`,
@@ -296,7 +303,7 @@ so no model can be built inside the development. Every non-vacuity result about
 branches is therefore conditional on a model existing. What *is* unconditional:
 σ genuinely instantiates symbolic variables, `contains` is not syntactic identity,
 and the `reduce_prim` collapse is gone. Closing this means instantiating the
-theory concretely (say `lit := bool`) and checking all 34 assumptions hold.
+theory concretely (say `lit := bool`) and checking all 33 assumptions hold.
 
 **`reduce_prim` is still a term-builder, not a computing reducer**, outside the
 `Cont_Denote` fragment. This is the largest remaining semantic gap.
@@ -394,10 +401,11 @@ sitting at `eval (dec Inf) ...`. Write `eval _ Φ Γ e v` in tactic patterns.
 
 ### 8.5 The regression suite
 
-`scratch/` holds twenty-three files. Nineteen must compile; four
-(`Audit.v`, `prim.v`, `prim2.v`, `ReducePrimCannotCompute.v`) must **fail** —
-they are pre-repair results that must stay unprovable. If one of those four starts
-compiling, a defect has come back. Check all of them after any change:
+`scratch/` holds twenty-five files. Twenty must compile; five
+(`Audit.v`, `prim.v`, `prim2.v`, `ReducePrimCannotCompute.v`,
+`FoldAltsNoNestedIfIsFalse.v`) must **fail** — they are pre-repair results that
+must stay unprovable. If one of those five starts compiling, a defect has come
+back. Check all of them after any change:
 
 ```bash
 for f in scratch/*.v; do coqtop -q -Q . SymCoreTheory -batch -l "$f" >/dev/null 2>&1 \
