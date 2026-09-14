@@ -364,6 +364,11 @@ Axiom cast_expr_concore : forall e γ,
   concore_expr e ->
   concore_expr (cast_expr e γ).
 
+Axiom cast_expr_eval_app : forall Φ Γ eb eb' γ ea v,
+  eval Φ Γ eb eb' ->
+  eval Φ Γ (EApp (cast_expr eb' γ) ea) v ->
+  eval Φ Γ (EApp (ECast eb γ) ea) v.
+
 (** ------------------------------------------------------------------------- *)
 (** 8.2 Mutual Induction Scheme for Big-Step Semantics                        *)
 (** ------------------------------------------------------------------------- *)
@@ -989,6 +994,167 @@ Proof.
   exists vc_s. split; assumption.
 Qed.
 
+Lemma eval_lit_con : forall Γ l v,
+  eval pc_true Γ (ELit l) v -> v = ELit l.
+Proof.
+  intros Γ l v Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_con_con : forall Γ d v,
+  eval pc_true Γ (ECon d) v -> v = ECon d.
+Proof.
+  intros Γ d v Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_bot_con : forall Γ b v,
+  eval pc_true Γ (EBot b) v -> v = EBot b.
+Proof.
+  intros Γ b v Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_clos_false : forall Γ env x body v,
+  eval pc_true Γ (EClos env x body) v -> False.
+Proof.
+  intros Γ env x body v Heval.
+  inversion Heval; subst.
+  rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_evar_whnf_false : forall Γ x v,
+  eval pc_true Γ (EVar x) v -> Whnf Γ (EVar x) -> False.
+Proof.
+  intros Γ x v Heval Hwhnf.
+  inversion Hwhnf as [e Hsolv | | | | | | | ]; subst.
+  inversion Hsolv; subst.
+  inversion Heval; subst.
+  - rewrite H0 in H1. discriminate.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_primop_false : forall Γ p v,
+  eval pc_true Γ (EPrimOp p) v -> False.
+Proof.
+  intros Γ p v Heval.
+  inversion Heval; subst.
+  rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_coercion_con : forall Γ γ v,
+  eval pc_true Γ (ECoercion γ) v -> v = ECoercion (subst_coerc Γ γ).
+Proof.
+  intros Γ γ v Heval.
+  inversion Heval; subst.
+  - reflexivity.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_type_con : forall Γ τ v,
+  eval pc_true Γ (EType τ) v -> v = EType (subst_type Γ τ).
+Proof.
+  intros Γ τ v Heval.
+  inversion Heval; subst.
+  - rewrite sat_pc_true in H. discriminate.
+  - reflexivity.
+Qed.
+
+Lemma eval_app_coercion_false : forall Γ γ a v,
+  eval pc_true Γ (EApp (ECoercion γ) a) v -> False.
+Proof.
+  intros Γ γ a v Heval.
+  inversion Heval; subst.
+  - apply H1. apply Whnf_Coercion.
+  - simpl in H3. discriminate.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_app_type_false : forall Γ τ a v,
+  eval pc_true Γ (EApp (EType τ) a) v -> False.
+Proof.
+  intros Γ τ a v Heval.
+  inversion Heval; subst.
+  - apply H1. apply Whnf_Type.
+  - simpl in H3. discriminate.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_app_lit_false : forall Γ l a v,
+  eval pc_true Γ (EApp (ELit l) a) v -> False.
+Proof.
+  intros Γ l a v Heval.
+  inversion Heval; subst.
+  - apply H1. apply Whnf_Solvable. apply Solvable_Lit.
+  - simpl in H3. discriminate.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma eval_app_con_false : forall Γ d a v,
+  eval pc_true Γ (EApp (ECon d) a) v -> False.
+Proof.
+  intros Γ d a v Heval.
+  inversion Heval; subst.
+  - apply H1. apply Whnf_Con.
+  - simpl in H3. discriminate.
+  - rewrite sat_pc_true in H. discriminate.
+Qed.
+
+Lemma not_whnf_case : forall Γ es alts,
+  ~ Whnf Γ (ECase es alts).
+Proof.
+  intros Γ es alts Hw.
+  inversion Hw; subst.
+  inversion H.
+Qed.
+
+Lemma not_op_app_not_whnf : forall Γ f a,
+  is_op_app (EApp f a) = false ->
+  ~ Whnf Γ (EApp f a).
+Proof.
+  intros Γ f a Hnop Hw.
+  inversion Hw as [e Hsolv | | | | | | | ]; subst.
+  inversion Hsolv as [| | | f' a' Hop Hsf Hsa]; subst.
+  rewrite Hop in Hnop. discriminate.
+Qed.
+
+Lemma eval_con_app_whnf : forall Γc fc ac v_f v_con,
+  concore_expr fc ->
+  Whnf Γc fc ->
+  is_op_app fc = false ->
+  pc_true ; Γc ⊢ fc ⇓ v_f ->
+  pc_true ; Γc ⊢ EApp v_f ac ⇓ v_con ->
+  pc_true ; Γc ⊢ EApp fc ac ⇓ v_con.
+Proof.
+  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Heval_f Heval_app.
+  destruct fc.
+  - exfalso. eapply eval_evar_whnf_false; eassumption.
+  - apply eval_lit_con in Heval_f; subst.
+    exfalso. apply (eval_app_lit_false _ _ _ _ Heval_app).
+  - exfalso. eapply eval_primop_false; eassumption.
+  - apply eval_con_con in Heval_f; subst.
+    exfalso. apply (eval_app_con_false _ _ _ _ Heval_app).
+  - exfalso. apply (not_op_app_not_whnf Γc fc1 fc2 Hnop Hwhnf).
+  - apply not_whnf_lam in Hwhnf. contradiction.
+  - exfalso. eapply eval_clos_false; eassumption.
+  - apply not_whnf_case in Hwhnf. contradiction.
+  - inversion Heval_f; subst.
+    + eapply cast_expr_eval_app; eassumption.
+    + rewrite sat_pc_true in H. discriminate.
+  - apply eval_coercion_con in Heval_f; subst.
+    exfalso. apply (eval_app_coercion_false _ _ _ _ Heval_app).
+  - apply eval_type_con in Heval_f; subst.
+    exfalso. apply (eval_app_type_false _ _ _ _ Heval_app).
+  - inversion Hcon.
+  - apply eval_bot_con in Heval_f; subst. exact Heval_app.
+Qed.
+
 Lemma eval_app_spine_sound : forall Φ Γs Γc σ ef ea ef' er e_con,
   models σ Φ ->
   contains_env σ Γs Γc ->
@@ -1025,6 +1191,13 @@ Proof.
   destruct (IH2 Γc σ (EApp v_f ac) Hmod Henv Hcont_app2 Hcon_app2) as [v_con [Heval_app2 Hcont_er]].
   exists v_con. split; [| exact Hcont_er].
   unfold eval_con in *.
+  destruct (whnf_dec Γc fc) as [Hwhnf_c | Hnot_whnf_c].
+  - destruct (is_op_app fc) eqn:Hop.
+    + destruct fc; try discriminate.
+      * simpl in Hop. exfalso. eapply eval_primop_false; eassumption.
+      * admit.
+    + eapply eval_con_app_whnf; eassumption.
+  - eapply Eval_AppSpine; [exact Hnot_whnf_c | exact Heval_f | exact Heval_app2].
 Admitted.
 
 (** ========================================================================= *)
