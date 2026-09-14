@@ -297,6 +297,54 @@ Inductive Whnf (Γ : environment) : expr -> Prop :=
       Whnf Γ ef ->
       Whnf Γ (EIf ec et ef).
 
+(** ------------------------------------------------------------------------- *)
+(** 7.1 expr_to_pc Reads a Formula Off the Syntax Alone                       *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  An environment can only make expr_to_pc FAIL, by capturing a variable that
+  would otherwise be symbolic. It can never change which formula comes out.
+  So a Some-result is a property of the expression alone, and the empty
+  environment is the most permissive environment.
+*)
+Lemma expr_to_pc_functional : forall e Γ1 Γ2 pc1 pc2,
+  expr_to_pc Γ1 e = Some pc1 -> expr_to_pc Γ2 e = Some pc2 -> pc1 = pc2.
+Proof.
+  induction e; intros Γ1 Γ2 pc1 pc2 H1 H2; simpl in *;
+    try discriminate; try (injection H1 as ?; injection H2 as ?; congruence).
+  - destruct (lookup_env Γ1 v); [discriminate|].
+    destruct (lookup_env Γ2 v); [discriminate|].
+    injection H1 as ?; injection H2 as ?; congruence.
+  - destruct (expr_to_pc Γ1 e1) as [q1|] eqn:E1; [|discriminate].
+    destruct (expr_to_pc Γ2 e1) as [q1'|] eqn:E1'; [|discriminate].
+    destruct (expr_to_pc Γ1 e2) as [q2|] eqn:E2; [|destruct q1; discriminate].
+    destruct (expr_to_pc Γ2 e2) as [q2'|] eqn:E2'; [|destruct q1'; discriminate].
+    assert (q1 = q1') by eauto. assert (q2 = q2') by eauto. subst.
+    destruct q1'; try discriminate.
+    injection H1 as ?; injection H2 as ?; congruence.
+Qed.
+
+Lemma expr_to_pc_empty : forall e Γ pc,
+  expr_to_pc Γ e = Some pc -> expr_to_pc · e = Some pc.
+Proof.
+  induction e; intros Γ pc H; simpl in *; try discriminate; try assumption.
+  - destruct (lookup_env Γ v); [discriminate | assumption].
+  - destruct (expr_to_pc Γ e1) as [q1|] eqn:E1; [|discriminate].
+    destruct (expr_to_pc Γ e2) as [q2|] eqn:E2; [|destruct q1; discriminate].
+    rewrite (IHe1 Γ q1 E1). rewrite (IHe2 Γ q2 E2). exact H.
+Qed.
+
+Lemma expr_to_pc_op_app : forall e Γ pc,
+  is_op_app e = true -> expr_to_pc Γ e = Some pc ->
+  exists p args, pc = PCPrim p args.
+Proof.
+  induction e; intros Γ pc Hop Hpc; simpl in *; try discriminate.
+  - injection Hpc as ?; subst. eauto.
+  - destruct (expr_to_pc Γ e1) as [q1|] eqn:E1; [|discriminate].
+    destruct (expr_to_pc Γ e2) as [q2|] eqn:E2; [|destruct q1; discriminate].
+    destruct q1; try discriminate. injection Hpc as ?; subst. eauto.
+Qed.
+
 (** ========================================================================= *)
 (** 8. Decision Functions (Fixpoints) for Solvable and WHNF                    *)
 (** ========================================================================= *)
@@ -423,6 +471,22 @@ Proof.
     + apply (IHe1 (PCPrim op args) eq_refl).
     + apply (IHe2 p eq_refl).
 Qed.
+
+(** Solvable is exactly expr_to_pc's domain: expr_to_pc_solvable above is one
+    direction, and since only capture can make expr_to_pc fail, anything
+    solvable in any environment has a formula in the empty environment. *)
+Lemma solvable_expr_to_pc : forall Γ e,
+  Solvable Γ e -> exists pc, expr_to_pc · e = Some pc.
+Proof.
+  intros Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; simpl.
+  - eauto.
+  - eauto.
+  - eauto.
+  - destruct IHf as [pcf Ef]. destruct IHa as [pca Ea]. simpl in Hop.
+    destruct (expr_to_pc_op_app f · pcf Hop Ef) as [p [args Hpcf]]. subst.
+    rewrite Ef, Ea. eauto.
+Qed.
+
 
 (** ========================================================================= *)
 (** 8. Pattern Matching and Branch Folding: fold-alts (§3.2, lines 570-590)   *)

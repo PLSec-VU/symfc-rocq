@@ -701,6 +701,9 @@ Definition symvars : Type := var -> bool.
 Definition sym_free_env (S : symvars) (Γ : environment) : Prop :=
   forall x, S x = true -> lookup_env Γ x = None.
 
+Lemma sym_free_env_empty : forall S, sym_free_env S ·.
+Proof. intros S x _. reflexivity. Qed.
+
 Parameter models : valuation -> path_condition -> Prop.
 
 Notation "σ '⊨' Φ" := (models σ Φ) (at level 70, no associativity).
@@ -725,25 +728,85 @@ Axiom models_and_iff : forall σ Φ1 Φ2,
   for ANY e mentioning a variable - which is to say, for exactly the
   conditions symbolic execution exists to reason about.
 *)
-Parameter models_cond : valuation -> symvars -> expr -> Prop.
-Parameter models_not_cond : valuation -> symvars -> expr -> Prop.
+(**
+  e denotes the formula pc: read in any environment that binds no symbolic
+  variable, e converts to pc. Quantifying over those environments rather than
+  fixing one is what makes the judgement scope independent, and it is the
+  reason S appears. Dropping S and reading e in the empty environment alone
+  would admit a condition whose variables the ambient environment captures,
+  and eval_models_cond then forces models to be empty on variable atoms; see
+  the note on eval_models_cond below.
+*)
+Definition denotes (S : symvars) (e : expr) (pc : path_condition) : Prop :=
+  forall Γ, sym_free_env S Γ -> expr_to_pc Γ e = Some pc.
 
-Axiom models_cond_pc : forall σ S Γ e pc,
-  expr_to_pc Γ e = Some pc ->
-  (models_cond σ S e <-> σ ⊨ pc).
+(** The SMT solver judges a condition true (resp. false) exactly when the
+    condition denotes a formula and the model satisfies it (resp. its
+    negation). *)
+Definition models_cond (σ : valuation) (S : symvars) (e : expr) : Prop :=
+  exists pc, denotes S e pc /\ σ ⊨ pc.
 
-Axiom models_not_cond_pc : forall σ S Γ e pc,
-  expr_to_pc Γ e = Some pc ->
-  (models_not_cond σ S e <-> σ ⊨ (¬ pc)).
+Definition models_not_cond (σ : valuation) (S : symvars) (e : expr) : Prop :=
+  exists pc, denotes S e pc /\ σ ⊨ (¬ pc).
+
+(** A judged condition agrees with whatever formula any environment reads off
+    it, because expr_to_pc's Some-result does not depend on the environment. *)
+Lemma models_cond_pc : forall σ S Γ e pc,
+  expr_to_pc Γ e = Some pc -> models_cond σ S e -> σ ⊨ pc.
+Proof.
+  intros σ S Γ e pc He [pc' [Hden Hmod]].
+  rewrite (expr_to_pc_functional e Γ · pc pc' He (Hden · (sym_free_env_empty S))).
+  exact Hmod.
+Qed.
+
+Lemma models_not_cond_pc : forall σ S Γ e pc,
+  expr_to_pc Γ e = Some pc -> models_not_cond σ S e -> σ ⊨ (¬ pc).
+Proof.
+  intros σ S Γ e pc He [pc' [Hden Hmod]].
+  rewrite (expr_to_pc_functional e Γ · pc pc' He (Hden · (sym_free_env_empty S))).
+  exact Hmod.
+Qed.
+
+(** Conversely, a denoted condition is judged exactly as its formula is. *)
+Lemma models_cond_denotes : forall σ S e pc,
+  denotes S e pc -> (models_cond σ S e <-> σ ⊨ pc).
+Proof.
+  intros σ S e pc Hden. split.
+  - intros H. exact (models_cond_pc σ S · e pc (Hden · (sym_free_env_empty S)) H).
+  - intros H. exists pc. split; assumption.
+Qed.
+
+Lemma models_not_cond_denotes : forall σ S e pc,
+  denotes S e pc -> (models_not_cond σ S e <-> σ ⊨ (¬ pc)).
+Proof.
+  intros σ S e pc Hden. split.
+  - intros H. exact (models_not_cond_pc σ S · e pc (Hden · (sym_free_env_empty S)) H).
+  - intros H. exists pc. split; assumption.
+Qed.
 
 (** Whenever the SMT solver can judge a condition's truth value at all, that
     condition is expressible as a path-condition formula in every environment
     that binds none of the symbolic variables: expr_to_pc never fails on a
     judgeable condition read in a scope that does not capture it. *)
-Axiom models_cond_total : forall σ S Γ e,
+Lemma models_cond_total : forall σ S Γ e,
   sym_free_env S Γ ->
   models_cond σ S e \/ models_not_cond σ S e ->
   exists pc, expr_to_pc Γ e = Some pc.
+Proof.
+  intros σ S Γ e Hfree [[pc [Hden _]] | [pc [Hden _]]];
+    exists pc; apply Hden; exact Hfree.
+Qed.
+
+(** A condition the solver can judge, read in a scope that does not capture
+    it, is solvable there. This is what rules out every evaluation rule
+    except App-Prim in eval_models_cond below. *)
+Lemma models_cond_solvable : forall σ S Γ e,
+  sym_free_env S Γ -> models_cond σ S e \/ models_not_cond σ S e -> Solvable Γ e.
+Proof.
+  intros σ S Γ e Hfree Hj.
+  destruct (models_cond_total σ S Γ e Hfree Hj) as [pc Hpc].
+  eapply expr_to_pc_solvable. exact Hpc.
+Qed.
 
 (**
   Concretion: contains σ S e_sym e_con says that, under the SMT model σ and
@@ -893,14 +956,55 @@ Axiom cast_expr_contains : forall σ S es ec γ,
   becomes unjudgeable as soon as ONE unsatisfiable path condition exists -
   which in turn made every symbolic branch unconcretisable. With σ ⊨ Φ,
   models_sat gives sat Φ = true and Rule Prune cannot fire.
+
+  The hypothesis sym_free_env S Γ is load bearing for the same reason, and
+  only became so when models_cond stopped being abstract. Without it, take Γ
+  binding x and evaluate the condition x by Rule Var to EBot BUndefined,
+  which denotes no formula: the axiom would then prove that no model
+  satisfies the atom x, that is, it would empty out models on variables and
+  make the whole non-vacuity suite of §11 hollow. See
+  eval_models_cond_residue below for what is left once the hypothesis is
+  present: exactly one rule, App-Prim. So what these two now assume, beyond
+  what is proved, is that reduce_prim preserves both the denotation of a
+  condition and its truth under the model - an SMT solver property, which is
+  what reduce_prim is.
 *)
 Axiom eval_models_cond : forall Φ Γ S ec ec' σ,
-  σ ⊨ Φ ->
+  σ ⊨ Φ -> sym_free_env S Γ ->
   Φ ; Γ ⊢ ec ⇓ ec' -> models_cond σ S ec -> models_cond σ S ec'.
 
 Axiom eval_models_not_cond : forall Φ Γ S ec ec' σ,
-  σ ⊨ Φ ->
+  σ ⊨ Φ -> sym_free_env S Γ ->
   Φ ; Γ ⊢ ec ⇓ ec' -> models_not_cond σ S ec -> models_not_cond σ S ec'.
+
+(** The residue of the two axioms above: under their own hypotheses, an
+    evaluation step out of a judgeable condition either changes nothing or is
+    a single application of Rule App-Prim. Every other rule is excluded, by
+    solvability or by Rule Prune being unreachable under a model. *)
+Lemma eval_models_cond_residue : forall Φ Γ S ec ec' σ,
+  σ ⊨ Φ -> sym_free_env S Γ -> Φ ; Γ ⊢ ec ⇓ ec' ->
+  models_cond σ S ec \/ models_not_cond σ S ec ->
+  ec' = ec
+  \/ (exists p args args',
+        unspool_app ec [] = (EPrimOp p, args)
+        /\ length args = primop_arity p
+        /\ Forall2 (eval Φ Γ) args args'
+        /\ ec' = reduce_prim p args').
+Proof.
+  intros Φ Γ S ec ec' σ Hmod Hfree Heval Hj.
+  assert (Hsolv : Solvable Γ ec) by (eapply models_cond_solvable; eassumption).
+  destruct Heval; try (exfalso; inversion Hsolv; fail).
+  - exfalso. inversion Hsolv as [| y Hnone | |]; subst. congruence.
+  - left; reflexivity.
+  - left; reflexivity.
+  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
+  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst.
+    apply H. apply Whnf_Solvable. exact Hf.
+  - right. exists p, args, args'. repeat split; assumption.
+  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
+  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
+  - exfalso. apply models_sat in Hmod. congruence.
+Qed.
 
 
 (** Substitution on coercions and types preserves concretion under matched environments *)
@@ -1711,6 +1815,8 @@ Proof.
                 (ex_intro _ vc_s (conj Heval_esc Hcont_merge)) Hcont_alts) as [v_con [Heval_case Hcont_er]].
     exists v_con. split; assumption.
   - (* Eval_If *)
+    assert (Hfree : sym_free_env S Γ)
+      by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
     inversion Hcont; subst.
     + assert (Hcond' : models_cond σ S ec')
         by (apply eval_models_cond with (Φ:=Φ)(Γ:=Γ)(ec:=ec); assumption).
@@ -1973,15 +2079,24 @@ Proof.
   intros p x l Γ Hnone. unfold symcond. simpl. rewrite Hnone. reflexivity.
 Qed.
 
+(** The condition of a symbolic branch denotes its formula precisely when the
+    variable it tests is one of the symbolic variables. *)
+Lemma symcond_denotes : forall S p x l,
+  S x = true -> denotes S (symcond p x l) (PCPrim p (PCVar x :: PCLit l :: nil)).
+Proof.
+  intros S p x l Hx Γ Hfree. apply symcond_is_formula. apply Hfree. exact Hx.
+Qed.
+
 Corollary symbolic_branch_has_concretion : forall σ S p x l lt lf,
+  S x = true ->
   σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
   contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
 Proof.
-  intros σ S p x l lt lf Hmod.
+  intros σ S p x l lt lf Hx Hmod.
   apply Cont_If_True; [| apply Cont_Lit].
-  apply (models_cond_pc σ S · (symcond p x l) (PCPrim p (PCVar x :: PCLit l :: nil))).
-  - apply symcond_is_formula. reflexivity.
-  - exact Hmod.
+  apply (proj2 (models_cond_denotes σ S (symcond p x l)
+                  (PCPrim p (PCVar x :: PCLit l :: nil)) (symcond_denotes S p x l Hx))).
+  exact Hmod.
 Qed.
 
 (** The exact negation of scratch/Audit.v's soundness_vacuous_on_symbolic_branch,
@@ -1994,14 +2109,14 @@ Corollary soundness_not_vacuous_on_symbolic_branch :
 Proof.
   intros [σ [p [x [l Hmod]]]] Hvac.
   apply (Hvac σ (only x) p x l (ELit l) (ELit l) (ELit l)).
-  apply symbolic_branch_has_concretion. exact Hmod.
+  apply symbolic_branch_has_concretion; [apply only_self | exact Hmod].
 Qed.
 
 Corollary symbolic_branch_condition_is_judgeable : forall σ S p x l,
-  models_cond σ S (symcond p x l) <-> σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)).
+  S x = true ->
+  (models_cond σ S (symcond p x l) <-> σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil))).
 Proof.
-  intros. apply (models_cond_pc σ S ·).
-  apply symcond_is_formula. reflexivity.
+  intros σ S p x l Hx. apply models_cond_denotes. apply symcond_denotes. exact Hx.
 Qed.
 
 (* ==================== (c) the Prune attack is dead ====================== *)
@@ -2015,10 +2130,12 @@ Qed.
 Corollary prune_does_not_kill_branches :
   (exists Φ, sat Φ = false) ->
   forall σ S p x l lt lf,
+    S x = true ->
     σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
     contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
 Proof.
-  intros _ σ S p x l lt lf Hmod. apply symbolic_branch_has_concretion. exact Hmod.
+  intros _ σ S p x l lt lf Hx Hmod.
+  apply symbolic_branch_has_concretion; assumption.
 Qed.
 
 (* ============ (d) reduce_prim is not forced to be constant ============== *)
@@ -2090,6 +2207,22 @@ Section ReducePrimNotConstant.
   Proof.
     intros σ S c Hc. apply reduce_prim_contains. constructor; [| constructor].
     apply Cont_If_True; [exact Hc | apply Cont_Lit].
+  Qed.
+
+  (** The branch premise is no longer an abstract judgement nobody can
+      discharge. models_cond is a definition now, so a caller supplies it
+      from a model of the condition's own formula and nothing else. *)
+  Corollary distinct_images_survive_symbolic_conditions :
+    forall σ q x l,
+      σ ⊨ (PCPrim q (PCVar x :: PCLit l :: nil)) ->
+      contains σ (only x)
+        (reduce_prim p [EIf (symcond q x l) (ELit l1) (ELit l2)])
+        (reduce_prim p [ELit l1]).
+  Proof.
+    intros σ q x l Hmod.
+    apply distinct_images_survive_resolvable_conditions.
+    apply (proj2 (symbolic_branch_condition_is_judgeable σ (only x) q x l (only_self x))).
+    exact Hmod.
   Qed.
 
   Corollary old_axiom_refutes_distinct_images :
