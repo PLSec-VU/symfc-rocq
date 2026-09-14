@@ -537,157 +537,122 @@ Definition make_con_app (d : dcon) (args : list expr) : expr :=
   - Big-Step Reduction Judgement: Φ; Γ ⊢ e ⇓ e' (Figure 3)
   - Pattern Matching and Branch Folding: fold-alts(Φ, Γ, e, a⃗) (§3.2, lines 570-590)
 *)
-Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
+(** Fuel index (spike): Inf reproduces the unbounded relation exactly. *)
+Inductive fuel := Inf | Fin (n : nat).
+Definition dec (f : fuel) : fuel :=
+  match f with Inf => Inf | Fin 0 => Fin 0 | Fin (S n) => Fin n end.
+
+Lemma dec_Inf : dec Inf = Inf. Proof. reflexivity. Qed.
+
+Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :=
   (** Rule Var: Variable lookup in Γ and recursive evaluation *)
-  | Eval_Var : forall Φ Γ x Γ' e e',
+  | Eval_Var : forall f Φ Γ x Γ' e e',
       lookup_env Γ x = Some (Γ', e) ->
-      eval Φ Γ' e e' ->
-      eval Φ Γ (EVar x) e'
+      eval (dec f) Φ Γ' e e' ->
+      eval f Φ Γ (EVar x) e'
 
-  (** Rule Sym-Var: a variable that Γ does not bind is a symbolic value.
-      Solvable_Var already classifies it as a value, and every other value
-      form (literal, constructor, bottom, coercion, type, closure) has a
-      reflexivity rule; without this one no expression that mentions a
-      symbolic variable can reduce at all. *)
-  | Eval_SymVar : forall Φ Γ x,
+  | Eval_SymVar : forall f Φ Γ x,
       lookup_env Γ x = None ->
-      eval Φ Γ (EVar x) (EVar x)
+      eval f Φ Γ (EVar x) (EVar x)
 
-  (** Rule Lit: Literal reflexivity *)
-  | Eval_Lit : forall Φ Γ l,
-      eval Φ Γ (ELit l) (ELit l)
+  | Eval_Lit : forall f Φ Γ l,
+      eval f Φ Γ (ELit l) (ELit l)
 
-  (** Rule Con: Data constructor reflexivity *)
-  | Eval_Con : forall Φ Γ d,
-      eval Φ Γ (ECon d) (ECon d)
+  | Eval_Con : forall f Φ Γ d,
+      eval f Φ Γ (ECon d) (ECon d)
 
-  (** Rule Cast: Evaluate expression and simplify cast *)
-  | Eval_Cast : forall Φ Γ e γ e',
-      eval Φ Γ e e' ->
-      eval Φ Γ (ECast e γ) (cast_expr e' γ)
+  | Eval_Cast : forall f Φ Γ e γ e',
+      eval (dec f) Φ Γ e e' ->
+      eval f Φ Γ (ECast e γ) (cast_expr e' γ)
 
-  (** Rule App-Abs: Beta-reduction with closure environment extension *)
-  | Eval_AppAbs : forall Φ Γ Γ' x eb ea eb',
-      eval Φ (extend_env Γ' x Γ ea) eb eb' ->
-      eval Φ Γ (EApp (EClos Γ' x eb) ea) eb'
+  | Eval_AppAbs : forall f Φ Γ Γ' x eb ea eb',
+      eval (dec f) Φ (extend_env Γ' x Γ ea) eb eb' ->
+      eval f Φ Γ (EApp (EClos Γ' x eb) ea) eb'
 
-  (** Rule App-Spine: Reduce function head when not in WHNF, unless that head
-      is a cast. A cast operator belongs to Rule App-Cast, which pushes the
-      coercion into the argument; stripping the cast here would drop it. *)
-  | Eval_AppSpine : forall Φ Γ ef ea ef' er,
+  | Eval_AppSpine : forall f Φ Γ ef ea ef' er,
       ~ Whnf Γ ef ->
       is_cast ef = false ->
-      eval Φ Γ ef ef' ->
-      eval Φ Γ (EApp ef' ea) er ->
-      eval Φ Γ (EApp ef ea) er
+      eval (dec f) Φ Γ ef ef' ->
+      eval (dec f) Φ Γ (EApp ef' ea) er ->
+      eval f Φ Γ (EApp ef ea) er
 
-  (** Rule Bot: Bottom value reflexivity *)
-  | Eval_Bot : forall Φ Γ b,
-      eval Φ Γ (EBot b) (EBot b)
+  | Eval_Bot : forall f Φ Γ b,
+      eval f Φ Γ (EBot b) (EBot b)
 
-  (** Rule App-Prim: Evaluate primitive operation arguments and reduce *)
-  | Eval_AppPrim : forall Φ Γ ef ea p args args',
+  | Eval_AppPrim : forall f Φ Γ ef ea p args args',
       unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
       length args = primop_arity p ->
-      Forall2 (eval Φ Γ) args args' ->
-      eval Φ Γ (EApp ef ea) (reduce_prim p args')
+      Forall2 (eval (dec f) Φ Γ) args args' ->
+      eval f Φ Γ (EApp ef ea) (reduce_prim p args')
 
-  (** Rule Lam: Function abstraction evaluates to runtime closure *)
-  | Eval_Lam : forall Φ Γ x e,
-      eval Φ Γ (ELam x e) (EClos Γ x e)
+  | Eval_Lam : forall f Φ Γ x e,
+      eval f Φ Γ (ELam x e) (EClos Γ x e)
 
-  (** Rule App-Cast: Higher-order coercion pushing *)
-  | Eval_AppCast : forall Φ Γ ef γ ea γ_a γ_r er,
+  | Eval_AppCast : forall f Φ Γ ef γ ea γ_a γ_r er,
       decomp_coerc_arrow γ = Some (γ_a, γ_r) ->
-      eval Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
-      eval Φ Γ (EApp (ECast ef γ) ea) er
+      eval (dec f) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
+      eval f Φ Γ (EApp (ECast ef γ) ea) er
 
-  (**
-    No rule for: applying a VALUE that carries a coercion which is not an
-    arrow.
+  | Eval_AppBot : forall f Φ Γ b ea,
+      eval f Φ Γ (EApp (EBot b) ea) (EBot b)
 
-    Figure 3 has no rule for this shape and neither does this judgement.
-    Rule App-Cast wants a coercion that splits into an argument coercion and
-    a result coercion, and this one does not split. Rule App-Spine refuses
-    every cast operator. So the term is stuck, deliberately: applying
-    something whose coercion is not an arrow is applying a non-function,
-    which System FC rejects at type-check time. A judgement with no typing
-    rules gets stuck there instead of inventing an answer.
+  | Eval_Case : forall f Φ Γ es alts es' er,
+      eval (dec f) Φ Γ es es' ->
+      fold_alts (dec f) Φ Γ (merge es') alts er ->
+      eval f Φ Γ (ECase es alts) er
 
-    ConCore.v, Section 12.5 records the history: this shape once had a rule,
-    Rule App-Cast-Opaque, because Rule App-Spine then accepted a non-arrow
-    cast operator and the concrete side could reach the shape while the
-    symbolic side walked on. The guard above closes that gap on both sides
-    at once.
-  *)
-
-  (** Rule App-Bot: Propagation of bottom in function position *)
-  | Eval_AppBot : forall Φ Γ b ea,
-      eval Φ Γ (EApp (EBot b) ea) (EBot b)
-
-  (** Rule Case: Evaluate scrutinee, merge common prefixes, and fold alternatives *)
-  | Eval_Case : forall Φ Γ es alts es' er,
-      eval Φ Γ es es' ->
-      fold_alts Φ Γ (merge es') alts er ->
-      eval Φ Γ (ECase es alts) er
-
-  (** Rule If: Evaluate condition, convert to path condition, and branch *)
-  | Eval_If : forall Φ Γ ec et ef ec' et' ef' pc_c,
-      eval Φ Γ ec ec' ->
+  | Eval_If : forall f Φ Γ ec et ef ec' et' ef' pc_c,
+      eval (dec f) Φ Γ ec ec' ->
       expr_to_pc Γ ec' = Some pc_c ->
-      eval (Φ ∧ pc_c) Γ et et' ->
-      eval (Φ ∧ ¬ pc_c) Γ ef ef' ->
-      eval Φ Γ (EIf ec et ef) (EIf ec' et' ef')
+      eval (dec f) (Φ ∧ pc_c) Γ et et' ->
+      eval (dec f) (Φ ∧ ¬ pc_c) Γ ef ef' ->
+      eval f Φ Γ (EIf ec et ef) (EIf ec' et' ef')
 
-  (** Rule Coercion: Evaluate coercion under substitution *)
-  | Eval_Coercion : forall Φ Γ γ,
-      eval Φ Γ (ECoercion γ) (ECoercion (subst_coerc Γ γ))
+  | Eval_Coercion : forall f Φ Γ γ,
+      eval f Φ Γ (ECoercion γ) (ECoercion (subst_coerc Γ γ))
 
-  (** Rule Prune: Infeasible path conditions reduce to unreachable *)
-  | Eval_Prune : forall Φ Γ e,
+  | Eval_Prune : forall f Φ Γ e,
       sat Φ = false ->
-      eval Φ Γ e (EBot BUnreachable)
+      eval f Φ Γ e (EBot BUnreachable)
 
-  (** Rule Type: Evaluate type under substitution *)
-  | Eval_Type : forall Φ Γ τ,
-      eval Φ Γ (EType τ) (EType (subst_type Γ τ))
+  | Eval_Type : forall f Φ Γ τ,
+      eval f Φ Γ (EType τ) (EType (subst_type Γ τ))
 
-with fold_alts : path_condition -> environment -> expr -> list alt -> expr -> Prop :=
-  (** Branch traversal: condition is converted to path condition *)
-  | FoldAlts_If : forall Φ Γ ec et ef alts et' ef' pc_c,
+  (** Spike: out-of-fuel, with Fin 0 in the CONCLUSION index. *)
+  | Eval_OutOfFuel : forall Φ Γ e,
+      eval (Fin 0) Φ Γ e (EBot BUndefined)
+
+with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> expr -> Prop :=
+  | FoldAlts_If : forall f Φ Γ ec et ef alts et' ef' pc_c,
       expr_to_pc Γ ec = Some pc_c ->
-      fold_alts (Φ ∧ pc_c) Γ et alts et' ->
-      fold_alts (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
-      fold_alts Φ Γ (EIf ec et ef) alts (EIf ec et' ef')
+      fold_alts (dec f) (Φ ∧ pc_c) Γ et alts et' ->
+      fold_alts (dec f) (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
+      fold_alts f Φ Γ (EIf ec et ef) alts (EIf ec et' ef')
 
-  (** Fallback for ill-formed condition in branching *)
-  | FoldAlts_IfFail : forall Φ Γ ec et ef alts,
+  | FoldAlts_IfFail : forall f Φ Γ ec et ef alts,
       expr_to_pc Γ ec = None ->
-      fold_alts Φ Γ (EIf ec et ef) alts (EBot BUndefined)
+      fold_alts f Φ Γ (EIf ec et ef) alts (EBot BUndefined)
 
-  (** Constructor match: find alternative and reduce body *)
-  | FoldAlts_Con : forall Φ Γ e d ea xs ep alts er,
+  | FoldAlts_Con : forall f Φ Γ e d ea xs ep alts er,
       decompose_con_app e = Some (d, ea) ->
       find_alt d alts = Some (xs, ep) ->
-      eval Φ (extend_env_multi Γ xs ea Γ) ep er ->
-      fold_alts Φ Γ e alts er
+      eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep er ->
+      fold_alts f Φ Γ e alts er
 
-  (** Bottom propagation *)
-  | FoldAlts_Bot : forall Φ Γ b alts,
-      fold_alts Φ Γ (EBot b) alts (EBot b)
+  | FoldAlts_Bot : forall f Φ Γ b alts,
+      fold_alts f Φ Γ (EBot b) alts (EBot b)
 
-  (** Otherwise: undefined behavior *)
-  | FoldAlts_Otherwise : forall Φ Γ e alts,
+  | FoldAlts_Otherwise : forall f Φ Γ e alts,
       is_if e = false ->
       (match decompose_con_app e with
        | Some (d, _) => find_alt d alts = None
        | None => True
        end) ->
       is_bot e = false ->
-      fold_alts Φ Γ e alts (EBot BUndefined).
+      fold_alts f Φ Γ e alts (EBot BUndefined).
 
 (** Notation for big-step reduction: Φ; Γ ⊢ e ⇓ e' *)
-Notation "Φ ';' Γ '⊢' e '⇓' e'" := (eval Φ Γ e e') (at level 70, no associativity).
+Notation "Φ ';' Γ '⊢' e '⇓' e'" := (eval Inf Φ Γ e e') (at level 70, no associativity).
 
 (** ========================================================================= *)
 (** 10. Metatheory of SymCore (§3.2, §3.3)                                     *)
@@ -809,7 +774,7 @@ Qed.
 
 (** Leaf merging preserves alternative folding in case expressions *)
 Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
-  fold_alts Φ Γ (merge e) alts r <-> fold_alts Φ Γ e alts r.
+  fold_alts Inf Φ Γ (merge e) alts r <-> fold_alts Inf Φ Γ e alts r.
 
 (**
   Grisette state merging never buries a branch below a resolved head: a
@@ -819,7 +784,7 @@ Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
   rules out the ill-formed shape "EApp (EIf ..) a" appearing as a scrutinee.
 *)
 Axiom fold_alts_no_nested_if : forall Φ Γ e alts er,
-  fold_alts Φ Γ e alts er ->
+  fold_alts Inf Φ Γ e alts er ->
   forall head args, unspool_app e [] = (head, args) -> is_if head = true -> head = e.
 
 (** ------------------------------------------------------------------------- *)
@@ -909,7 +874,7 @@ Lemma solvable_app_eval_false : forall Φ Γ e a v,
   sat Φ = true ->
   Solvable Γ e ->
   is_op_app e = false ->
-  eval Φ Γ (EApp e a) v ->
+  eval Inf Φ Γ (EApp e a) v ->
   False.
 Proof.
   intros Φ Γ e a v Hsat Hsolv Hnotop Heval.
@@ -965,32 +930,33 @@ Qed.
 
   Written as a Fixpoint on the derivation rather than by `induction` because
   Rule App-Prim needs the statement for every argument of its
-  Forall2 (eval Φ Γ) args args', which Coq's auto-derived induction principle
+  Forall2 (eval Inf Φ Γ) args args', which Coq's auto-derived induction principle
   does not supply.
 *)
-Fixpoint solvable_eval_solvable (Φ : path_condition) (Γ : environment) (e v : expr)
-  (Heval : eval Φ Γ e v) {struct Heval} :
-  sat Φ = true -> Solvable Γ e -> Solvable Γ v.
+Fixpoint solvable_eval_solvable (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
+  (Heval : eval k0 Φ Γ e v) {struct Heval} :
+  k0 = Inf -> sat Φ = true -> Solvable Γ e -> Solvable Γ v.
 Proof.
   destruct Heval as
-    [ Φ Γ x Γ' e e' Hlookup Heval_x
-    | Φ Γ x Hnone
-    | Φ Γ l
-    | Φ Γ d
-    | Φ Γ e γ e' Heval_e
-    | Φ Γ Γ' x eb ea eb' Heval_b
-    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
-    | Φ Γ b
-    | Φ Γ ef ea p args args' Hunspool Harity Hargs
-    | Φ Γ x e
-    | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ b ea
-    | Φ Γ es alts es' er Heval_es Hfold
-    | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
-    | Φ Γ γ
-    | Φ Γ e Hunsat
-    | Φ Γ τ
-    ]; intros Hsat Hsolv.
+    [ k Φ Γ x Γ' e e' Hlookup Heval_x
+    | k Φ Γ x Hnone
+    | k Φ Γ l
+    | k Φ Γ d
+    | k Φ Γ e γ e' Heval_e
+    | k Φ Γ Γ' x eb ea eb' Heval_b
+    | k Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | k Φ Γ b
+    | k Φ Γ ef ea p args args' Hunspool Harity Hargs
+    | k Φ Γ x e
+    | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | k Φ Γ b ea
+    | k Φ Γ es alts es' er Heval_es Hfold
+    | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
+    | k Φ Γ γ
+    | k Φ Γ e Hunsat
+    | k Φ Γ τ
+    | Φ Γ e
+    ]; intros Hk0 Hsat Hsolv; try (subst k).
   - (* Eval_Var: a bound variable is not solvable *)
     inversion Hsolv; subst. rewrite Hlookup in H0. discriminate.
   - (* Eval_SymVar *) exact Hsolv.
@@ -1012,7 +978,7 @@ Proof.
     + constructor.
     + inversion Hsargs as [| a0 tl0 Hsa Hstl]; subst.
       constructor.
-      * exact (solvable_eval_solvable Φ Γ a a' Ha Hsat Hsa).
+      * exact (solvable_eval_solvable Inf Φ Γ a a' Ha eq_refl Hsat Hsa).
       * exact (IH Hstl).
   - (* Eval_Lam *) inversion Hsolv.
   - (* Eval_AppCast: a cast is not solvable *)
@@ -1024,11 +990,12 @@ Proof.
   - (* Eval_Coercion *) inversion Hsolv.
   - (* Eval_Prune *) rewrite Hsat in Hunsat. discriminate.
   - (* Eval_Type *) inversion Hsolv.
+  - (* Eval_OutOfFuel *) discriminate Hk0.
 Qed.
 
 Lemma reduce_prim_app_false : forall Γ p args ac v,
   Forall (Solvable Γ) args ->
-  eval pc_true Γ (EApp (reduce_prim p args) ac) v -> False.
+  eval Inf pc_true Γ (EApp (reduce_prim p args) ac) v -> False.
 Proof.
   intros Γ p args ac v Hsargs Heval.
   remember (reduce_prim p args) as v_f eqn:Heqvf.
@@ -1049,13 +1016,13 @@ Proof.
       simpl in Hunspool.
       rewrite Hunspool in H1.
       inversion H1; subst.
-      rewrite length_app in H4.
-      simpl in H4.
+      rewrite length_app in H5.
+      simpl in H5.
       lia.
     + (* Eval_AppCast: v_f cannot be a cast *)
       rewrite <- H in Hsolv. inversion Hsolv.
     + (* Eval_AppBot: v_f cannot be a bottom *)
-      rewrite <- H2 in Hsolv. inversion Hsolv.
+      rewrite <- H3 in Hsolv. inversion Hsolv.
     + (* Eval_Prune: pc_true is always satisfiable *)
       rewrite sat_pc_true in H. discriminate.
   - eapply solvable_app_eval_false;
@@ -1067,11 +1034,11 @@ Qed.
 (** ------------------------------------------------------------------------- *)
 
 (** Branch folding on bottom always preserves the bottom value *)
-Lemma fold_alts_bot_same : forall Φ Γ b alts r,
-  fold_alts Φ Γ (EBot b) alts r ->
+Lemma fold_alts_bot_same : forall f Φ Γ b alts r,
+  fold_alts f Φ Γ (EBot b) alts r ->
   r = EBot b.
 Proof.
-  intros Φ Γ b alts r Hfold.
+  intros f Φ Γ b alts r Hfold.
   inversion Hfold; subst.
   - simpl in H. discriminate.
   - reflexivity.
@@ -1079,12 +1046,12 @@ Proof.
 Qed.
 
 (** Branch folding on bottom is deterministic *)
-Lemma fold_alts_bot_deterministic : forall Φ Γ b alts r1 r2,
-  fold_alts Φ Γ (EBot b) alts r1 ->
-  fold_alts Φ Γ (EBot b) alts r2 ->
+Lemma fold_alts_bot_deterministic : forall f Φ Γ b alts r1 r2,
+  fold_alts f Φ Γ (EBot b) alts r1 ->
+  fold_alts f Φ Γ (EBot b) alts r2 ->
   r1 = r2.
 Proof.
-  intros Φ Γ b alts r1 r2 H1 H2.
+  intros f Φ Γ b alts r1 r2 H1 H2.
   apply fold_alts_bot_same in H1.
   apply fold_alts_bot_same in H2.
   subst. reflexivity.
@@ -1211,7 +1178,7 @@ Lemma eval_case_inv : forall Φ Γ es alts v,
   Φ ; Γ ⊢ ECase es alts ⇓ v ->
   exists es',
     Φ ; Γ ⊢ es ⇓ es' /\
-    fold_alts Φ Γ (merge es') alts v.
+    fold_alts Inf Φ Γ (merge es') alts v.
 Proof.
   intros Φ Γ es alts v Hsat Heval.
   inversion Heval; subst.
@@ -1239,15 +1206,15 @@ Proof.
 Qed.
 
 (** Inversion for fold_alts on if-expressions with valid path condition *)
-Lemma fold_alts_if_some_inv : forall Φ Γ ec et ef alts r pc_c,
+Lemma fold_alts_if_some_inv : forall f Φ Γ ec et ef alts r pc_c,
   expr_to_pc Γ ec = Some pc_c ->
-  fold_alts Φ Γ (EIf ec et ef) alts r ->
+  fold_alts f Φ Γ (EIf ec et ef) alts r ->
   exists et' ef',
     r = EIf ec et' ef' /\
-    fold_alts (Φ ∧ pc_c) Γ et alts et' /\
-    fold_alts (Φ ∧ ¬ pc_c) Γ ef alts ef'.
+    fold_alts (dec f) (Φ ∧ pc_c) Γ et alts et' /\
+    fold_alts (dec f) (Φ ∧ ¬ pc_c) Γ ef alts ef'.
 Proof.
-  intros Φ Γ ec et ef alts r pc_c Hpc Hfold.
+  intros f Φ Γ ec et ef alts r pc_c Hpc Hfold.
   remember (EIf ec et ef) as e eqn:Heq.
   revert ec et ef Heq Hpc.
   induction Hfold; intros ec0 et0 ef0 Heq Hpc; inversion Heq; subst.
@@ -1259,12 +1226,12 @@ Proof.
 Qed.
 
 (** Inversion for fold_alts on if-expressions with invalid path condition *)
-Lemma fold_alts_if_none_inv : forall Φ Γ ec et ef alts r,
+Lemma fold_alts_if_none_inv : forall f Φ Γ ec et ef alts r,
   expr_to_pc Γ ec = None ->
-  fold_alts Φ Γ (EIf ec et ef) alts r ->
+  fold_alts f Φ Γ (EIf ec et ef) alts r ->
   r = EBot BUndefined.
 Proof.
-  intros Φ Γ ec et ef alts r Hpc Hfold.
+  intros f Φ Γ ec et ef alts r Hpc Hfold.
   remember (EIf ec et ef) as e eqn:Heq.
   revert ec et ef Heq Hpc.
   induction Hfold; intros ec0 et0 ef0 Heq Hpc; inversion Heq; subst.
@@ -1275,15 +1242,15 @@ Proof.
 Qed.
 
 (** Inversion for fold_alts on matching constructor patterns *)
-Lemma fold_alts_con_inv : forall Φ Γ e alts r d ea xs ep,
+Lemma fold_alts_con_inv : forall f Φ Γ e alts r d ea xs ep,
   decompose_con_app e = Some (d, ea) ->
   find_alt d alts = Some (xs, ep) ->
   is_if e = false ->
   is_bot e = false ->
-  fold_alts Φ Γ e alts r ->
-  Φ ; (extend_env_multi Γ xs ea Γ) ⊢ ep ⇓ r.
+  fold_alts f Φ Γ e alts r ->
+  eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep r.
 Proof.
-  intros Φ Γ e alts r d ea xs ep Hdec Halt Hnot_if Hnot_bot Hfold.
+  intros f Φ Γ e alts r d ea xs ep Hdec Halt Hnot_if Hnot_bot Hfold.
   inversion Hfold; subst.
   - simpl in Hnot_if; discriminate.
   - simpl in Hnot_if; discriminate.
@@ -1295,17 +1262,17 @@ Proof.
 Qed.
 
 (** Inversion for fold_alts on non-matching fallback expressions *)
-Lemma fold_alts_otherwise_same : forall Φ Γ e alts r,
+Lemma fold_alts_otherwise_same : forall f Φ Γ e alts r,
   is_if e = false ->
   (match decompose_con_app e with
    | Some (d, _) => find_alt d alts = None
    | None => True
    end) ->
   is_bot e = false ->
-  fold_alts Φ Γ e alts r ->
+  fold_alts f Φ Γ e alts r ->
   r = EBot BUndefined.
 Proof.
-  intros Φ Γ e alts r Hnot_if Hno_alt Hnot_bot Hfold.
+  intros f Φ Γ e alts r Hnot_if Hno_alt Hnot_bot Hfold.
   inversion Hfold; subst.
   - simpl in Hnot_if; discriminate.
   - simpl in Hnot_if; discriminate.
@@ -1316,36 +1283,36 @@ Qed.
 
 (** Alternative folding is completely deterministic given determinism of evaluation *)
 Lemma fold_alts_deterministic_given_eval :
-  (forall Φ Γ e v1 v2, Φ ; Γ ⊢ e ⇓ v1 -> Φ ; Γ ⊢ e ⇓ v2 -> v1 = v2) ->
-  forall Φ Γ e alts r1 r2,
-    fold_alts Φ Γ e alts r1 ->
-    fold_alts Φ Γ e alts r2 ->
+  (forall f Φ Γ e v1 v2, eval f Φ Γ e v1 -> eval f Φ Γ e v2 -> v1 = v2) ->
+  forall f Φ Γ e alts r1 r2,
+    fold_alts f Φ Γ e alts r1 ->
+    fold_alts f Φ Γ e alts r2 ->
     r1 = r2.
 Proof.
-  intros Heval_det Φ Γ e alts r1 r2 H1.
+  intros Heval_det f Φ Γ e alts r1 r2 H1.
   revert r2.
   induction H1; intros r2 H2.
   - (* FoldAlts_If *)
-    apply (fold_alts_if_some_inv Φ Γ ec et ef alts r2 pc_c) in H2; [| assumption].
+    apply (fold_alts_if_some_inv f Φ Γ ec et ef alts r2 pc_c) in H2; [| assumption].
     destruct H2 as [et'2 [ef'2 [Heq2 [Hfold_t2 Hfold_f2]]]].
     subst.
     f_equal.
     + apply IHfold_alts1. assumption.
     + apply IHfold_alts2. assumption.
   - (* FoldAlts_IfFail *)
-    apply (fold_alts_if_none_inv Φ Γ ec et ef alts r2) in H2; [| assumption].
+    apply (fold_alts_if_none_inv f Φ Γ ec et ef alts r2) in H2; [| assumption].
     subst. reflexivity.
   - (* FoldAlts_Con *)
     assert (Hnot_if : is_if e = false).
     { destruct e; simpl in H; try discriminate; reflexivity. }
     assert (Hnot_bot : is_bot e = false).
     { destruct e; simpl in H; try discriminate; reflexivity. }
-    apply (fold_alts_con_inv Φ Γ e alts r2 d ea xs ep H H0 Hnot_if Hnot_bot) in H2.
+    apply (fold_alts_con_inv f Φ Γ e alts r2 d ea xs ep H H0 Hnot_if Hnot_bot) in H2.
     eapply Heval_det; eassumption.
   - (* FoldAlts_Bot *)
     apply fold_alts_bot_same in H2. subst. reflexivity.
   - (* FoldAlts_Otherwise *)
-    apply (fold_alts_otherwise_same Φ Γ e alts r2 H H0 H1) in H2.
+    apply (fold_alts_otherwise_same f Φ Γ e alts r2 H H0 H1) in H2.
     subst. reflexivity.
 Qed.
 
