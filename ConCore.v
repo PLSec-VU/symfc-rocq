@@ -2905,3 +2905,241 @@ Section ComputingPrimitive.
 End ComputingPrimitive.
 
 End NonVacuity.
+
+(** ========================================================================= *)
+(** 12. Concrete Evaluation Is Not Deterministic                              *)
+(** ========================================================================= *)
+
+(**
+  Concrete evaluation runs at the satisfiable path condition pc_true, so
+  Rule Prune cannot fire at the root. That is not enough to make the result
+  of a program unique. Two rule overlaps survive, and each one alone makes
+  the same concrete expression evaluate to two different values.
+
+  Overlap 1 is Rule Prune inside Rule If. Rule If evaluates the branches
+  under Φ ∧ pc_c and Φ ∧ ¬pc_c, not under Φ. One of those is unsatisfiable
+  whenever the branch is dead, which is the only reason Rule Prune exists.
+
+  Overlap 2 is Rule App-Cast against Rule App-Spine. A cast whose body is
+  not in WHNF is itself not in WHNF, so both rules apply to the same
+  application, and they give the function different arguments.
+
+  Rule App-Spine against Rule App-Prim is NOT a third overlap. Section 12.2
+  proves the two can never apply to the same expression.
+*)
+
+Definition ConEvalDeterministic : Prop :=
+  forall Γ e v1 v2, Γ ⊢ᶜ e ⇓ᶜ v1 -> Γ ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
+
+(** ------------------------------------------------------------------------- *)
+(** 12.1 Overlap 1: a dead branch has two values                              *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  Take a guard that is already a value and whose formula is pc. If the guard
+  cannot hold, the then-branch is evaluated under an unsatisfiable path
+  condition. There Rule Prune gives ∅ and Rule Bot gives ?, so the whole
+  conditional has two values.
+*)
+Lemma infeasible_branch_breaks_con_determinism : forall Γ ec pc,
+  pc_true ; Γ ⊢ ec ⇓ ec ->
+  expr_to_pc Γ ec = Some pc ->
+  sat (pc_true ∧ pc) = false ->
+  ~ ConEvalDeterministic.
+Proof.
+  intros Γ ec pc Hec Hpc Hunsat Hdet.
+  assert (H1 : Γ ⊢ᶜ EIf ec (EBot BUndefined) (EBot BUndefined)
+                 ⇓ᶜ EIf ec (EBot BUndefined) (EBot BUndefined))
+    by (unfold eval_con;
+        eapply Eval_If; [exact Hec | exact Hpc | apply Eval_Bot | apply Eval_Bot]).
+  assert (H2 : Γ ⊢ᶜ EIf ec (EBot BUndefined) (EBot BUndefined)
+                 ⇓ᶜ EIf ec (EBot BUnreachable) (EBot BUndefined))
+    by (unfold eval_con;
+        eapply Eval_If;
+        [exact Hec | exact Hpc | apply Eval_Prune; exact Hunsat | apply Eval_Bot]).
+  specialize (Hdet _ _ _ _ H1 H2). discriminate.
+Qed.
+
+(** A symbolic variable is the smallest guard that meets those conditions. *)
+Corollary unsatisfiable_guard_breaks_con_determinism : forall x,
+  sat (pc_true ∧ PCVar x) = false ->
+  ~ ConEvalDeterministic.
+Proof.
+  intros x Hunsat.
+  eapply infeasible_branch_breaks_con_determinism with (Γ := ·) (ec := EVar x).
+  - apply Eval_SymVar. reflexivity.
+  - reflexivity.
+  - exact Hunsat.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 12.2 Rule App-Spine and Rule App-Prim never overlap                       *)
+(** ------------------------------------------------------------------------- *)
+
+(** unspool_app only appends to its accumulator. *)
+Lemma unspool_app_acc : forall e acc,
+  unspool_app e acc = (fst (unspool_app e []), snd (unspool_app e []) ++ acc).
+Proof.
+  induction e; intro acc; simpl; try reflexivity.
+  rewrite (IHe1 (e2 :: acc)). rewrite (IHe1 [e2]). simpl.
+  rewrite <- app_assoc. reflexivity.
+Qed.
+
+Lemma unspool_app_split : forall e acc h args,
+  unspool_app e acc = (h, args) ->
+  exists args0, unspool_app e [] = (h, args0) /\ args = args0 ++ acc.
+Proof.
+  intros e acc h args H. rewrite unspool_app_acc in H.
+  exists (snd (unspool_app e [])).
+  injection H as Hh Hargs. split.
+  - rewrite <- Hh. apply surjective_pairing.
+  - symmetry. assumption.
+Qed.
+
+(**
+  An operator spine that evaluates carries at least as many arguments as the
+  primitive needs. An under-applied primitive spine therefore has no value at
+  all: the only rule that could give it one is Rule App-Prim, and that rule
+  demands a saturated spine.
+*)
+Lemma eval_prim_spine_saturated : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  sat Φ = true ->
+  forall p args, unspool_app e [] = (EPrimOp p, args) ->
+  primop_arity p <= length args.
+Proof.
+  induction 1; intros Hsat p0 args0 Hun; simpl in Hun; try discriminate.
+  - destruct (unspool_app_split ef [ea] (EPrimOp p0) args0 Hun) as [a1 [Hu1 Heq]].
+    specialize (IHeval1 Hsat p0 a1 Hu1). subst args0.
+    rewrite length_app. simpl. lia.
+  - simpl in H. rewrite H in Hun. injection Hun as Hh Hl; subst. lia.
+  - rewrite Hsat in H. discriminate.
+Qed.
+
+(**
+  In a saturated primitive application the operator is one argument short, so
+  by the previous lemma the operator has no value. Rule App-Spine needs a
+  value for the operator, so it cannot fire here.
+*)
+Lemma prim_operator_has_no_value : forall Φ Γ ef ea p args ef',
+  sat Φ = true ->
+  unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+  length args = primop_arity p ->
+  ~ (Φ ; Γ ⊢ ef ⇓ ef').
+Proof.
+  intros Φ Γ ef ea p args ef' Hsat Hun Hlen Heval.
+  simpl in Hun.
+  destruct (unspool_app_split ef [ea] (EPrimOp p) args Hun) as [a1 [Hu1 Heq]].
+  pose proof (eval_prim_spine_saturated Φ Γ ef ef' Heval Hsat p a1 Hu1) as Hge.
+  subst args. rewrite length_app in Hlen. simpl in Hlen. lia.
+Qed.
+
+(** Wherever Rule App-Prim applies, the premises of Rule App-Spine cannot all
+    hold. The two rules are disjoint, so they are not a source of ambiguity. *)
+Lemma app_spine_never_overlaps_app_prim : forall Φ Γ ef ea p args,
+  sat Φ = true ->
+  unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+  length args = primop_arity p ->
+  ~ (exists ef' er,
+       ~ Whnf Γ ef /\ Φ ; Γ ⊢ ef ⇓ ef' /\ Φ ; Γ ⊢ EApp ef' ea ⇓ er).
+Proof.
+  intros Φ Γ ef ea p args Hsat Hun Hlen [ef' [er [_ [Heval _]]]].
+  exact (prim_operator_has_no_value Φ Γ ef ea p args ef' Hsat Hun Hlen Heval).
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 12.3 Overlap 2: Rule App-Cast against Rule App-Spine                      *)
+(** ------------------------------------------------------------------------- *)
+
+Lemma not_whnf_cast_lam : forall Γ x body γ,
+  ~ Whnf Γ (ECast (ELam x body) γ).
+Proof.
+  intros Γ x body γ H. inversion H; subst.
+  - inversion H0.
+  - apply (not_whnf_lam Γ x body). assumption.
+Qed.
+
+Definition arrow_coercion : coercion :=
+  MkCoercion (TyArrow (TyVar "a") (TyVar "b"))
+             (TyArrow (TyVar "c") (TyVar "d"))
+             RoleRepresentational.
+
+Definition arrow_dom : coercion :=
+  MkCoercion (TyVar "a") (TyVar "c") RoleRepresentational.
+
+Definition arrow_cod : coercion :=
+  MkCoercion (TyVar "b") (TyVar "d") RoleRepresentational.
+
+Lemma decomp_arrow_coercion :
+  decomp_coerc_arrow arrow_coercion = Some (arrow_dom, arrow_cod).
+Proof. reflexivity. Qed.
+
+(** The body stores its argument in a closure, so the value records which
+    argument the caller passed. *)
+Definition capture_body : expr := ELam "z" (EVar "x").
+Definition coerced_operator : expr := ECast (ELam "x" capture_body) arrow_coercion.
+Definition plain_operand : expr := ECon "D".
+Definition coerced_operand : expr := ECast plain_operand (sym_coerc arrow_dom).
+
+Section CastedApplication.
+
+(**
+  The one thing assumed here: a cast on a closure is erased. That is what a
+  representational coercion means at run time, and total erasure,
+  cast_expr e γ = e, satisfies it. The corollary after this section draws
+  that consequence.
+*)
+Variable closure_cast_erased :
+  forall Γ0 x body γ, cast_expr (EClos Γ0 x body) γ = EClos Γ0 x body.
+
+(** Rule App-Spine strips the cast first, so the function gets the plain
+    argument. *)
+Lemma casted_application_by_app_spine :
+  · ⊢ᶜ EApp coerced_operator plain_operand
+     ⇓ᶜ EClos (extend_env · "x" · plain_operand) "z" (EVar "x").
+Proof.
+  unfold eval_con.
+  eapply Eval_AppSpine with (ef' := EClos · "x" capture_body).
+  - apply not_whnf_cast_lam.
+  - rewrite <- (closure_cast_erased · "x" capture_body arrow_coercion).
+    apply Eval_Cast. apply Eval_Lam.
+  - apply Eval_AppAbs. apply Eval_Lam.
+Qed.
+
+(** Rule App-Cast pushes the coercion into the argument first, so the same
+    function gets a cast argument. *)
+Lemma casted_application_by_app_cast :
+  · ⊢ᶜ EApp coerced_operator plain_operand
+     ⇓ᶜ EClos (extend_env · "x" · coerced_operand) "z" (EVar "x").
+Proof.
+  unfold eval_con.
+  eapply Eval_AppCast with (γ_a := arrow_dom) (γ_r := arrow_cod).
+  - apply decomp_arrow_coercion.
+  - rewrite <- (closure_cast_erased (extend_env · "x" · coerced_operand)
+                                    "z" (EVar "x") arrow_cod).
+    apply Eval_Cast.
+    eapply Eval_AppSpine with (ef' := EClos · "x" capture_body).
+    + apply not_whnf_lam.
+    + apply Eval_Lam.
+    + apply Eval_AppAbs. apply Eval_Lam.
+Qed.
+
+(** The two values differ, and no path condition was pruned to get them. *)
+Lemma cast_overlap_breaks_con_determinism : ~ ConEvalDeterministic.
+Proof.
+  intros Hdet.
+  specialize (Hdet _ _ _ _ casted_application_by_app_spine
+                           casted_application_by_app_cast).
+  discriminate.
+Qed.
+
+End CastedApplication.
+
+(** Erasing coercions at run time, which is what GHC does, is enough. *)
+Corollary erased_coercions_break_con_determinism :
+  (forall e γ, cast_expr e γ = e) ->
+  ~ ConEvalDeterministic.
+Proof.
+  intros Herase. apply cast_overlap_breaks_con_determinism.
+  intros Γ0 x body γ. apply Herase.
+Qed.
