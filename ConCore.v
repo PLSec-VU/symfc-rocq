@@ -389,9 +389,10 @@ Axiom cast_expr_concore : forall e γ,
   the value that Rule App-Cast denies it, which is one of the two reasons
   concrete evaluation was not deterministic.
 
-  It is now Rule App-Cast-Opaque in SymCore.v, arrow coercions excluded. The
-  content that soundness needs is kept, it is in the rules where a reader
-  can see it, and it no longer duplicates Rule App-Cast.
+  It is gone, and nothing replaced it. Rule App-Spine now refuses every cast
+  operator, which leaves the shape stuck on the symbolic and the concrete
+  side at once, so soundness never needs the step. Section 12.5 tells the
+  whole story.
 *)
 
 (** ------------------------------------------------------------------------- *)
@@ -520,7 +521,6 @@ Proof.
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ ecb ecb2 γ ea vop Hdecnone Hwhnfb Heval_cb Heval_capp
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -571,15 +571,6 @@ Proof.
     apply (concore_eval_closed_fix Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed Hsat Henv).
     apply Con_Cast. apply Con_App; [assumption | apply Con_Cast; assumption].
-  - (* Eval_AppCastOpaque *)
-    pose proof (concore_expr_app_l _ _ Hcon) as Hf.
-    pose proof (concore_expr_app_r _ _ Hcon) as Ha.
-    pose proof (concore_expr_cast _ _ Hf) as Hb.
-    apply (concore_eval_closed_fix Φ Γ (EApp (cast_expr ecb2 γ) ea) vop
-             Heval_capp Hsat Henv).
-    apply Con_App; [| exact Ha].
-    apply cast_expr_concore.
-    exact (concore_eval_closed_fix Φ Γ ecb ecb2 Heval_cb Hsat Henv Hb).
   - (* Eval_AppBot *)
     inversion Hcon; subst. assumption.
   - (* Eval_Case *)
@@ -1206,7 +1197,6 @@ Proof.
   - right. exists p, args, args'. repeat split; assumption.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
-  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. apply models_sat in Hmod. congruence.
 Qed.
 
@@ -1457,78 +1447,6 @@ Proof.
   eapply Eval_AppCast; eassumption.
 Qed.
 
-(**
-  Soundness for Rule App-Cast-Opaque. The concrete run reaches the same
-  place by whichever of the two rules fits it: Rule App-Cast-Opaque if its
-  own operator body is already a value, Rule App-Spine if it is not. Both
-  end at the application of the cast of the body's value, and the coercion
-  is not an arrow, so nothing else competes for the term.
-
-  The case split is needed because being a value is not preserved by
-  concretion: the symbolic body can be a branch, and the concrete body is
-  then whatever the live arm gives.
-*)
-Lemma eval_app_cast_opaque_sound : forall Φ Γs Γc σ S eb eb' γ ea v e_con,
-  σ ⊨ Φ ->
-  contains_env σ S Γs Γc ->
-  contains σ S (EApp (ECast eb γ) ea) e_con ->
-  concore_expr e_con ->
-  decomp_coerc_arrow γ = None ->
-  Φ ; Γs ⊢ eb ⇓ eb' ->
-  Φ ; Γs ⊢ EApp (cast_expr eb' γ) ea ⇓ v ->
-  (forall (Γc : environment) (σ : valuation) (e_con : expr),
-    σ ⊨ Φ ->
-    contains_env σ S Γs Γc ->
-    contains σ S eb e_con ->
-    concore_expr e_con ->
-    exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S eb' v_con) ->
-  (forall (Γc : environment) (σ : valuation) (e_con : expr),
-    σ ⊨ Φ ->
-    contains_env σ S Γs Γc ->
-    contains σ S (EApp (cast_expr eb' γ) ea) e_con ->
-    concore_expr e_con ->
-    exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S v v_con) ->
-  exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S v v_con.
-Proof.
-  intros Φ Γs Γc σ S eb eb' γ ea v e_con Hmod Henv Hcont Hcon Hdec
-         Heval_b Heval_app IH1 IH2.
-  assert (Hfree : sym_free_env S Γs)
-    by (destruct (contains_env_sym_free σ S Γs Γc Henv) as [Hf _]; exact Hf).
-  destruct (contains_app_inv σ S Γs (ECast eb γ) ea e_con Hfree Hcont) as
-    [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
-    [subst e_con | exfalso; exact (solvable_not_cast Γs eb γ Hsolv)].
-  apply contains_cast_inv in Hcont_f as [ebc [Heq_fc Hcont_b]]; subst fc.
-  inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-  pose proof (concore_expr_cast _ _ Hf) as Hcon_b.
-  destruct (IH1 Γc σ ebc Hmod Henv Hcont_b Hcon_b) as [v_b [Heval_bc Hcont_vb]].
-  assert (Henv_c : concrete_env Γc) by (eapply contains_env_concrete; eassumption).
-  assert (Hcon_vb : concore_expr v_b)
-    by (eapply concore_eval_closed; [exact Henv_c | exact Hcon_b | exact Heval_bc]).
-  assert (Hcont_app : contains σ S (EApp (cast_expr eb' γ) ea)
-                               (EApp (cast_expr v_b γ) ac))
-    by (constructor; [apply cast_expr_contains; exact Hcont_vb | exact Hcont_a]).
-  assert (Hcon_app : concore_expr (EApp (cast_expr v_b γ) ac))
-    by (apply Con_App; [apply cast_expr_concore; exact Hcon_vb | exact Ha]).
-  destruct (IH2 Γc σ (EApp (cast_expr v_b γ) ac) Hmod Henv Hcont_app Hcon_app)
-    as [v_con [Heval_appc Hcont_v]].
-  exists v_con. split; [| exact Hcont_v].
-  unfold eval_con in *.
-  destruct (whnf_dec Γc ebc) as [Hw | Hnw].
-  - eapply Eval_AppCastOpaque;
-      [exact Hdec | exact Hw | exact Heval_bc | exact Heval_appc].
-  - eapply Eval_AppSpine.
-    + intro Hcw.
-      apply Hnw.
-      inversion Hcw as [e0 Hsolv | | | | | | eb0 γ0 Hwb | ]; subst;
-        [inversion Hsolv | assumption].
-    + simpl. rewrite Hdec. reflexivity.
-    + apply Eval_Cast. exact Heval_bc.
-    + exact Heval_appc.
-Qed.
-
 Lemma eval_lit_con : forall Γ l v,
   eval pc_true Γ (ELit l) v -> v = ELit l.
 Proof.
@@ -1711,22 +1629,21 @@ Proof.
     destruct ef; try discriminate;
       simpl in H; injection H as Hh _; discriminate.
   - (* Eval_AppCast *) injection Heq as Hf Ha. subst f0. discriminate.
-  - (* Eval_AppCastOpaque *) injection Heq as Hf Ha. subst f0. discriminate.
   - (* Eval_AppBot *) injection Heq as Hf Ha. subst f0. discriminate.
   - (* Eval_Prune *) rewrite Hsat in H. discriminate.
 Qed.
 
 (**
-  Concretion does not invent an arrow cast. Every rule of the relation keeps
-  the head constructor, and the two rules that do not - a symbolic variable
-  and an SMT term both go to a literal - cannot start from a cast. The one
-  rule that changes the shape is branch resolution, which is why the
-  operator must not be a branch.
+  Concretion does not invent a cast. Every rule of the relation keeps the
+  head constructor, and the two rules that do not - a symbolic variable and
+  an SMT term both go to a literal - cannot start from a cast. The one rule
+  that changes the shape is branch resolution, which is why the operator
+  must not be a branch.
 *)
-Lemma contains_cast_arrow_operator : forall σ S es ec,
+Lemma contains_is_cast : forall σ S es ec,
   contains σ S es ec ->
   is_if es = false ->
-  cast_arrow_operator ec = cast_arrow_operator es.
+  is_cast ec = is_cast es.
 Proof.
   intros σ S es ec Hcont Hif.
   inversion Hcont; subst; simpl in *; try reflexivity; try discriminate.
@@ -1738,12 +1655,12 @@ Lemma eval_con_app_whnf : forall Γc fc ac v_f v_con,
   concore_expr fc ->
   Whnf Γc fc ->
   is_op_app fc = false ->
-  cast_arrow_operator fc = false ->
+  is_cast fc = false ->
   pc_true ; Γc ⊢ fc ⇓ v_f ->
   pc_true ; Γc ⊢ EApp v_f ac ⇓ v_con ->
   pc_true ; Γc ⊢ EApp fc ac ⇓ v_con.
 Proof.
-  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Hnoarrow Heval_f Heval_app.
+  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Hnocast Heval_f Heval_app.
   destruct fc.
   - assert (Heqv : v_f = EVar v) by (eapply eval_evar_whnf_same; eassumption).
     subst v_f. exact Heval_app.
@@ -1756,16 +1673,8 @@ Proof.
   - apply not_whnf_lam in Hwhnf. contradiction.
   - exfalso. eapply eval_clos_false; eassumption.
   - apply not_whnf_case in Hwhnf. contradiction.
-  - inversion Heval_f; subst.
-    + eapply Eval_AppCastOpaque; [| | eassumption | eassumption].
-      * simpl in Hnoarrow.
-        match goal with
-        | [ |- decomp_coerc_arrow ?g = None ] =>
-            destruct (decomp_coerc_arrow g); [discriminate | reflexivity]
-        end.
-      * inversion Hwhnf as [e0 Hsolv | | | | | | eb0 γ0 Hwb | ]; subst;
-          [inversion Hsolv | assumption].
-    + rewrite sat_pc_true in H. discriminate.
+  - (* a cast operator: the concretion of a non-cast is never a cast *)
+    discriminate Hnocast.
   - apply eval_coercion_con in Heval_f; subst.
     exfalso. apply (eval_app_coercion_false _ _ _ _ Heval_app).
   - apply eval_type_con in Heval_f; subst.
@@ -1819,7 +1728,6 @@ Proof.
     end.
   - simpl in Hop. discriminate.
   - simpl in Hop. discriminate.
-  - simpl in Hop. discriminate.
   - rewrite Hsat in H. discriminate.
 Qed.
 
@@ -1829,7 +1737,7 @@ Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
   contains σ S (EApp ef ea) e_con ->
   concore_expr e_con ->
   ~ Whnf Γs ef ->
-  cast_arrow_operator ef = false ->
+  is_cast ef = false ->
   Φ ; Γs ⊢ ef ⇓ ef' ->
   Φ ; Γs ⊢ EApp ef' ea ⇓ er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
@@ -1849,7 +1757,7 @@ Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
   exists v_con,
     Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S er v_con.
 Proof.
-  intros Φ Γs Γc σ S ef ea ef' er e_con Hmod Henv Hcont Hcon Hnotwhnf Hnoarrow Heval1 Heval2 IH1 IH2.
+  intros Φ Γs Γc σ S ef ea ef' er e_con Hmod Henv Hcont Hcon Hnotwhnf Hnocast Heval1 Heval2 IH1 IH2.
   assert (Hsat : sat Φ = true) by (eapply models_sat; eassumption).
   assert (Hnotif : is_if ef = false).
   { destruct (is_if ef) eqn:Hif; [| reflexivity].
@@ -1868,8 +1776,8 @@ Proof.
   assert (Hcon_app2 : concore_expr (EApp v_f ac)) by (apply Con_App; assumption).
   destruct (IH2 Γc σ (EApp v_f ac) Hmod Henv Hcont_app2 Hcon_app2) as [v_con [Heval_app2 Hcont_er]].
   exists v_con. split; [| exact Hcont_er].
-  assert (Hnoarrow_c : cast_arrow_operator fc = false)
-    by (rewrite (contains_cast_arrow_operator σ S ef fc Hcont_f Hnotif); exact Hnoarrow).
+  assert (Hnocast_c : is_cast fc = false)
+    by (rewrite (contains_is_cast σ S ef fc Hcont_f Hnotif); exact Hnocast).
   unfold eval_con in *.
   destruct (whnf_dec Γc fc) as [Hwhnf_c | Hnot_whnf_c].
   - destruct (is_op_app fc) eqn:Hop.
@@ -1881,7 +1789,7 @@ Proof.
         eapply reduce_prim_app_false; [exact Hsargs | exact Heval_app2].
     + eapply eval_con_app_whnf; eassumption.
   - eapply Eval_AppSpine;
-      [exact Hnot_whnf_c | exact Hnoarrow_c | exact Heval_f | exact Heval_app2].
+      [exact Hnot_whnf_c | exact Hnocast_c | exact Heval_f | exact Heval_app2].
 Qed.
 
 (** ------------------------------------------------------------------------- *)
@@ -1981,7 +1889,6 @@ Proof.
     | Φ Γ ef ea p eargs eargs' Hunspool Harity Hargs
     | Φ Γ x eb
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ ecb ecb2 γ ea vop Hdecnone Hwhnfb Heval_cb Heval_capp
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -2262,7 +2169,6 @@ Proof.
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ ecb ecb2 γ ea vop Hdecnone Hwhnfb Heval_cb Heval_capp
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -2412,12 +2318,6 @@ Proof.
     eapply eval_app_cast_sound; try eassumption.
     intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
     exact (concore_soundness_fix Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er Heval_pushed Γc0 σ0 S e_con0 Hmod0 Henv0 Hcont0 Hcon0).
-  - (* Eval_AppCastOpaque *)
-    eapply eval_app_cast_opaque_sound; try eassumption.
-    + intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
-      exact (concore_soundness_fix Φ Γ ecb ecb2 Heval_cb Γc0 σ0 S e_con0 Hmod0 Henv0 Hcont0 Hcon0).
-    + intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
-      exact (concore_soundness_fix Φ Γ (EApp (cast_expr ecb2 γ) ea) vop Heval_capp Γc0 σ0 S e_con0 Hmod0 Henv0 Hcont0 Hcon0).
   - (* Eval_AppBot *)
     assert (Hfree : sym_free_env S Γ)
       by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
@@ -3106,9 +3006,8 @@ End NonVacuity.
   Overlap 2 was Rule App-Cast against Rule App-Spine. A cast whose body is
   not in WHNF is itself not in WHNF, so both rules applied to the same
   application, and they gave the function different arguments. Rule
-  App-Spine now refuses an operator whose coercion is an arrow, which is
-  exactly the shape Rule App-Cast claims, so the two no longer meet. Section
-  12.3 records what that costs and what it buys.
+  App-Spine now refuses EVERY cast operator, so the two no longer meet.
+  Section 12.3 records what that costs and what it buys.
 
   Rule App-Spine against Rule App-Prim is NOT a third overlap. Section 12.2
   proves the two can never apply to the same expression.
@@ -3286,16 +3185,16 @@ Variable closure_cast_erased :
 (**
   Rule App-Spine used to strip the cast first, which handed the function the
   plain argument and gave the term a second value. It cannot do that any
-  more: its new premise refuses an operator that Rule App-Cast owns, and
-  this operator is one.
+  more: its new premise refuses every cast operator, and this operator is a
+  cast.
 *)
 Lemma app_spine_refuses_the_coerced_operator :
-  cast_arrow_operator coerced_operator = true.
+  is_cast coerced_operator = true.
 Proof. reflexivity. Qed.
 
 Lemma no_app_spine_derivation_here : forall ef' er,
   ~ (~ Whnf · coerced_operator /\
-     cast_arrow_operator coerced_operator = false /\
+     is_cast coerced_operator = false /\
      pc_true ; · ⊢ coerced_operator ⇓ ef' /\
      pc_true ; · ⊢ EApp ef' plain_operand ⇓ er).
 Proof.
@@ -3343,7 +3242,7 @@ End CastedApplication.
 (** ------------------------------------------------------------------------- *)
 
 (**
-  What survives of determinism once Rule App-Spine refuses an arrow cast.
+  What survives of determinism once Rule App-Spine refuses a cast operator.
 
   The statement below is the one that matters for soundness: a ConCore
   expression, run in an environment that binds only ConCore expressions, has
@@ -3366,10 +3265,10 @@ End CastedApplication.
     App-Spine against App-Prim   : Section 12.2 settles it.
     App-Spine against App-Abs    : a closure is a value.
     App-Spine against App-Bot    : a bottom is a value.
-    App-Spine against App-Cast-Opaque : that rule wants a value under the
-                                        cast, and App-Spine wants no value.
-    App-Cast  against App-Cast-Opaque : one wants an arrow coercion, the
-                                        other wants none.
+
+  There is no longer a row for Rule App-Cast-Opaque, because there is no
+  longer such a rule. Where it used to fire, nothing fires:
+  eval_app_cast_opaque_stuck below says so.
 *)
 
 Ltac prune_absurd :=
@@ -3512,8 +3411,7 @@ Proof.
   intros Φ Γ eb γ γ_a γ_r ea v Hsat Hdec Heval.
   inversion Heval; subst; try prune_absurd.
   - exfalso. match goal with
-    | [ H : cast_arrow_operator (ECast eb γ) = false |- _ ] =>
-        simpl in H; rewrite Hdec in H; discriminate
+    | [ H : is_cast (ECast eb γ) = false |- _ ] => discriminate H
     end.
   - match goal with
     | [ H : unspool_app (EApp (ECast eb γ) ea) [] = _ |- _ ] =>
@@ -3524,37 +3422,34 @@ Proof.
         assert (Heq : Some (A, R) = Some (γ_a, γ_r)) by (rewrite <- H; exact Hdec)
     end.
     injection Heq as Ha Hr. subst. assumption.
-  - exfalso. match goal with
-    | [ H : decomp_coerc_arrow γ = None |- _ ] => rewrite Hdec in H; discriminate
-    end.
 Qed.
 
 (**
-  Applying a value under a coercion that is not an arrow: Rule
-  App-Cast-Opaque is the only rule that reaches this shape. This is also the
-  proof that the rule is not redundant. Take it away and Figure 3 leaves the
-  term with no value at all - see Section 12.5.
+  Applying a cast whose coercion is not an arrow: NO rule reaches this
+  shape, so the term has no value at all. Rule App-Cast needs the coercion
+  to split, Rule App-Spine refuses every cast operator, and the other three
+  application rules each want a different operator. The shape is stuck, and
+  it is stuck whether or not the body under the cast is a value - see
+  Section 12.5.
 *)
-Lemma eval_app_cast_opaque_inv : forall Φ Γ eb γ ea v,
+Lemma eval_app_cast_opaque_stuck : forall Φ Γ eb γ ea v,
   sat Φ = true ->
   decomp_coerc_arrow γ = None ->
-  Whnf Γ eb ->
   Φ ; Γ ⊢ EApp (ECast eb γ) ea ⇓ v ->
-  exists eb', Φ ; Γ ⊢ eb ⇓ eb' /\ Φ ; Γ ⊢ EApp (cast_expr eb' γ) ea ⇓ v.
+  False.
 Proof.
-  intros Φ Γ eb γ ea v Hsat Hdec Hwhnf Heval.
+  intros Φ Γ eb γ ea v Hsat Hdec Heval.
   inversion Heval; subst; try prune_absurd.
-  - exfalso. match goal with
-    | [ H : ~ Whnf Γ (ECast eb γ) |- _ ] => apply H; apply Whnf_Cast; exact Hwhnf
+  - match goal with
+    | [ H : is_cast (ECast eb γ) = false |- _ ] => discriminate H
     end.
   - match goal with
     | [ H : unspool_app (EApp (ECast eb γ) ea) [] = _ |- _ ] =>
         simpl in H; injection H as Hh _; discriminate
     end.
-  - exfalso. match goal with
+  - match goal with
     | [ H : decomp_coerc_arrow γ = Some _ |- _ ] => rewrite Hdec in H; discriminate
     end.
-  - eexists. split; eassumption.
 Qed.
 
 (** Rule App-Spine keeps its own premises: no other rule can fire where it
@@ -3562,7 +3457,7 @@ Qed.
 Lemma eval_app_spine_inv : forall Φ Γ ef ea ef0 v,
   sat Φ = true ->
   ~ Whnf Γ ef ->
-  cast_arrow_operator ef = false ->
+  is_cast ef = false ->
   Φ ; Γ ⊢ ef ⇓ ef0 ->
   Φ ; Γ ⊢ EApp ef ea ⇓ v ->
   exists ef', Φ ; Γ ⊢ ef ⇓ ef' /\ Φ ; Γ ⊢ EApp ef' ea ⇓ v.
@@ -3576,13 +3471,7 @@ Proof.
         Hl : Datatypes.length ?args = primop_arity ?p |- _ ] =>
         exact (prim_operator_has_no_value Φ Γ ef ea p args ef0 Hsat Hu Hl Heval0)
     end.
-  - exfalso. simpl in Hguard.
-    match goal with
-    | [ H : decomp_coerc_arrow ?g = Some _ |- _ ] => rewrite H in Hguard; discriminate
-    end.
-  - exfalso. apply Hnw. match goal with
-    | [ H : Whnf Γ ?b |- _ ] => apply Whnf_Cast; exact H
-    end.
+  - exfalso. discriminate Hguard.
   - exfalso. apply Hnw. apply Whnf_Bot.
 Qed.
 
@@ -3606,7 +3495,6 @@ Proof.
     end.
     injection Heq as Hp Hargs. subst.
     eexists. split; [eassumption | reflexivity].
-  - simpl in Hun. injection Hun as Hh _. discriminate.
   - simpl in Hun. injection Hun as Hh _. discriminate.
   - simpl in Hun. injection Hun as Hh _. discriminate.
 Qed.
@@ -3694,7 +3582,6 @@ Proof.
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e0
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ ecb ecb2 γ ea vop Hdecnone Hwhnfb Heval_cb Heval_capp
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_ff
@@ -3758,19 +3645,6 @@ Proof.
              (Con_Cast _ γ_r (Con_App _ _ (concore_expr_cast _ _ Hcast)
                                           (Con_Cast _ _ Hea)))
              (eval_app_cast_arrow_inv Φ Γ ef γ γ_a γ_r ea v2 Hsat Hdecomp H2)).
-  - (* Rule App-Cast-Opaque *)
-    pose proof (concore_expr_app_l _ _ Hcon) as Hcast.
-    pose proof (concore_expr_app_r _ _ Hcon) as Hea.
-    pose proof (concore_expr_cast _ _ Hcast) as Hcb.
-    destruct (eval_app_cast_opaque_inv Φ Γ ecb γ ea v2 Hsat Hdecnone Hwhnfb H2)
-      as [eb2 [Heb2 Happ2]].
-    assert (Heqb : ecb2 = eb2)
-      by exact (eval_det_fix Φ Γ ecb ecb2 Heval_cb eb2 Hsat Henv Hcb Heb2).
-    subst eb2.
-    exact (eval_det_fix Φ Γ (EApp (cast_expr ecb2 γ) ea) vop Heval_capp v2 Hsat Henv
-             (Con_App _ _ (cast_expr_concore _ γ
-                (concore_eval_closed_fix Φ Γ ecb ecb2 Heval_cb Hsat Henv Hcb)) Hea)
-             Happ2).
   - (* Rule App-Bot *) symmetry. exact (eval_app_bot_inv Φ Γ b ea v2 Hsat H2).
   - (* Rule Case *)
     destruct (eval_case_inv Φ Γ es alts v2 Hsat H2) as [es2 [Hes2 Hfold2]].
@@ -3898,37 +3772,94 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 12.5 Why Rule App-Cast-Opaque has to be a rule                            *)
+(** 12.5 What replaced Rule App-Cast-Opaque                                   *)
 (** ------------------------------------------------------------------------- *)
 
 (**
-  ConCore.v used to assume that rule instead of stating it, as
+  This section used to argue that Rule App-Cast-Opaque had to be a rule.
+  That argument is superseded. Here is the history, the hole the old
+  argument found, and the guard that closes it instead.
+
+  ConCore.v first ASSUMED the rule rather than stating it:
 
     Axiom cast_expr_eval_app : forall Φ Γ eb eb' γ ea v,
       Φ; Γ ⊢ eb ⇓ eb' ->
       Φ; Γ ⊢ EApp (cast_expr eb' γ) ea ⇓ v ->
       Φ; Γ ⊢ EApp (ECast eb γ) ea ⇓ v.
 
-  Deleting it outright is not possible, and here is why.
+  The assumption was then written out as Rule App-Cast-Opaque in SymCore.v.
+  The reason given was this. Soundness must replay every symbolic step on
+  the concrete side. Rule App-Spine at the time refused only an operator
+  whose coercion splits into an arrow, so it accepted a cast operator whose
+  coercion does not split, PROVIDED the operator was not yet a value. The
+  concrete operator is the same cast with the same coercion - concretion
+  does not turn a cast into anything else - but it need not still be a
+  non-value: being a value is not preserved by concretion, as
+  whnf_not_preserved_by_concretion below shows. So the concrete run could
+  arrive at "apply a VALUE carrying a coercion that does not split", where
+  Rule App-Cast wants a coercion that splits and Rule App-Spine wants an
+  operator that is not a value. The concrete run would be stuck while the
+  symbolic run walked on, and soundness would be false. Rule
+  App-Cast-Opaque was the patch for that gap.
 
-  Soundness must replay every symbolic step on the concrete side. When the
-  symbolic side takes Rule App-Spine on a cast operator, the concrete
-  operator is the same cast with the same coercion - concretion does not
-  change a cast into anything else - but it need NOT still be a non-value.
-  Being a value is not preserved by concretion: a branch is not a value, and
-  the arm it collapses to can be one. The lemma below exhibits exactly that.
+  The gap was real. The patch was not the only one, and not the right one.
+  The gap opened because Rule App-Spine's guard tested the COERCION, so the
+  two sides could disagree about whether the rule applied - the symbolic
+  side allowed the step, the concrete side did not. Rule App-Spine now
+  tests the OPERATOR instead: it refuses every cast, value or not. The two
+  sides can no longer disagree, because the test no longer mentions
+  anything that concretion can change.
 
-  So the concrete run can arrive at "apply a value that carries a coercion",
-  and if the coercion is not an arrow, Figure 3 has no rule for it: Rule
-  App-Cast needs the coercion to split, and Rule App-Spine needs the
-  operator not to be a value. The concrete run would be stuck while the
-  symbolic run walked on, and soundness would be false.
+  Three facts carry the replacement, and all three are proved above.
 
-  What the assumption really was, then, is that missing rule. It is now
-  written as one, Rule App-Cast-Opaque in SymCore.v, and
-  eval_app_cast_opaque_inv above says it is the only rule that reaches the
-  shape - so it is doing work, not repeating another rule.
+  1. eval_app_cast_opaque_stuck. On the shape "(e ⊲ γ) ea with γ not an
+     arrow", no rule fires at all. Symbolically at any satisfiable path
+     condition, and so concretely at pc_true as well. Both sides are stuck,
+     together. Soundness never has to replay the step, because there is no
+     step on either side.
+
+  2. contains_is_cast. If the symbolic operator is not a cast and not a
+     branch, the concrete operator is not a cast either. So a Rule
+     App-Spine step on the symbolic side always meets a non-cast operator
+     on the concrete side, and Rule App-Spine's own guard is satisfied
+     there too.
+
+  3. eval_app_if_false. An application whose operator is a branch has no
+     value. That is what excludes the one concretion rule that changes the
+     shape of a term, and it is why fact 2 may assume the operator is not a
+     branch. The corollary just below packages facts 2 and 3 into the exact
+     step eval_app_spine_sound takes.
+
+  What this costs is stated honestly: a program whose operator evaluates to
+  a cast with a non-arrow coercion now has no value. That is deliberate.
+  Such a term applies something whose coercion does not split, which is
+  applying a non-function, and System FC rejects it at type-check time.
+  This judgement has no typing rules, so it gets stuck there rather than
+  inventing an answer. scratch/OpaqueCastOperatorReachable.v holds the
+  witness program and records which of its claims flipped.
 *)
+
+(**
+  The load-bearing step of eval_app_spine_sound, on its own. When the
+  symbolic side takes Rule App-Spine, the concrete operator passes Rule
+  App-Spine's guard as well.
+*)
+Corollary app_spine_concrete_operator_is_not_a_cast :
+  forall Φ Γs σ S ef ea ef' er fc,
+  sat Φ = true ->
+  is_cast ef = false ->
+  contains σ S ef fc ->
+  Φ ; Γs ⊢ ef ⇓ ef' ->
+  Φ ; Γs ⊢ EApp ef' ea ⇓ er ->
+  is_cast fc = false.
+Proof.
+  intros Φ Γs σ S ef ea ef' er fc Hsat Hnocast Hcont Heval1 Heval2.
+  assert (Hnotif : is_if ef = false).
+  { destruct (is_if ef) eqn:Hif; [| reflexivity].
+    exfalso. apply (eval_app_if_false Φ Γs (EApp ef' ea) er Heval2 Hsat ef' ea eq_refl).
+    exact (eval_preserves_if Φ Γs ef ef' Heval1 Hsat Hif). }
+  rewrite (contains_is_cast σ S ef fc Hcont Hnotif). exact Hnocast.
+Qed.
 Lemma whnf_not_preserved_by_concretion : forall σ S Γs Γc p ec l,
   models_cond σ S ec ->
   contains σ S (EApp (EPrimOp p) (EIf ec (ELit l) (ELit l)))

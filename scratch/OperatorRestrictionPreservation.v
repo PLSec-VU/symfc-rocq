@@ -27,7 +27,14 @@ Import ListNotations.
    because the predicate they mention says more.
 
    What this file does NOT show: that Rule App-Cast-Opaque can be deleted.
-   See OpaqueCastOperatorReachable.v, which shows it cannot.
+   See OpaqueCastOperatorReachable.v, which shows this restriction does not
+   pay for the deletion. The rule has since been deleted anyway, by a
+   different payment: Rule App-Spine now refuses every cast operator, so the
+   shape the rule covered is stuck on the symbolic and the concrete side
+   alike. OpaqueCastOperatorStuck.v proves that. The result below is
+   unaffected - it never mentioned the rule - and the case for
+   App-Cast-Opaque that used to sit in its own branch of the fixpoint is
+   simply gone.
    ========================================================================== *)
 
 Definition opaque_cast_operator (e : expr) : bool :=
@@ -239,7 +246,6 @@ Proof.
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ ecb ecb2 γ ea vop Hdecnone Hwhnfb Heval_cb Heval_capp
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -295,14 +301,6 @@ Proof.
     apply (concore_eval_closed_fix Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed Hsat Henv).
     apply Rel_Cast. apply Rel_App; [exact He | apply Con_Cast; exact Ha].
-  - (* Eval_AppCastOpaque *)
-    destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
-    inversion Hf as [| | | | | | | | e0 γ0 He | | | | | ]; subst.
-    apply (concore_eval_closed_fix Φ Γ (EApp (cast_expr ecb2 γ) ea) vop
-             Heval_capp Hsat Henv).
-    apply Rel_App; [| exact Ha].
-    apply cast_expr_concore.
-    exact (concore_eval_closed_fix Φ Γ ecb ecb2 Heval_cb Hsat Henv (Rel_Exact ecb He)).
   - (* Eval_AppBot *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha]. exact Hf.
   - (* Eval_Case *)

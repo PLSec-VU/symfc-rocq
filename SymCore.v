@@ -506,6 +506,13 @@ Definition is_bot (e : expr) : bool :=
   | _ => false
   end.
 
+(** Helper predicate identifying casts *)
+Definition is_cast (e : expr) : bool :=
+  match e with
+  | ECast _ _ => true
+  | _ => false
+  end.
+
 (** Lookup a matching constructor alternative in a branch list: find(D, a⃗) *)
 Fixpoint find_alt (d : dcon) (alts : list alt) : option (list var * expr) :=
   match alts with
@@ -524,22 +531,6 @@ Definition decompose_con_app (e : expr) : option (dcon * list expr) :=
 (** Construct curried constructor application from constructor name and argument list *)
 Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
-
-(**
-  An operator that Rule App-Cast owns: a cast whose coercion decomposes into
-  an arrow. Rule App-Spine refuses such an operator, because stripping the
-  cast off it would drop the domain coercion that Rule App-Cast pushes into
-  the argument.
-*)
-Definition cast_arrow_operator (e : expr) : bool :=
-  match e with
-  | ECast _ γ =>
-      match decomp_coerc_arrow γ with
-      | Some _ => true
-      | None => false
-      end
-  | _ => false
-  end.
 
 (**
   Mutual inductive definitions of:
@@ -580,11 +571,12 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
       eval Φ (extend_env Γ' x Γ ea) eb eb' ->
       eval Φ Γ (EApp (EClos Γ' x eb) ea) eb'
 
-  (** Rule App-Spine: Reduce function head when not in WHNF, unless Rule
-      App-Cast owns that head *)
+  (** Rule App-Spine: Reduce function head when not in WHNF, unless that head
+      is a cast. A cast operator belongs to Rule App-Cast, which pushes the
+      coercion into the argument; stripping the cast here would drop it. *)
   | Eval_AppSpine : forall Φ Γ ef ea ef' er,
       ~ Whnf Γ ef ->
-      cast_arrow_operator ef = false ->
+      is_cast ef = false ->
       eval Φ Γ ef ef' ->
       eval Φ Γ (EApp ef' ea) er ->
       eval Φ Γ (EApp ef ea) er
@@ -611,29 +603,23 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
       eval Φ Γ (EApp (ECast ef γ) ea) er
 
   (**
-    Rule App-Cast-Opaque: applying a VALUE that carries a coercion which is
-    not an arrow.
+    No rule for: applying a VALUE that carries a coercion which is not an
+    arrow.
 
-    Figure 3 has no rule for this shape, and without one the judgement is
-    stuck there: Rule App-Cast wants a coercion that splits into an argument
-    coercion and a result coercion, and this one does not split; Rule
-    App-Spine wants an operator that is not yet a value, and a cast over a
-    value is a value. A coercion that is not an arrow says nothing about the
-    argument, so applying the cast applies what the solver makes of the
-    value under it.
+    Figure 3 has no rule for this shape and neither does this judgement.
+    Rule App-Cast wants a coercion that splits into an argument coercion and
+    a result coercion, and this one does not split. Rule App-Spine refuses
+    every cast operator. So the term is stuck, deliberately: applying
+    something whose coercion is not an arrow is applying a non-function,
+    which System FC rejects at type-check time. A judgement with no typing
+    rules gets stuck there instead of inventing an answer.
 
-    ConCore.v used to assume this rule instead of stating it (Axiom
-    cast_expr_eval_app), which hid it from Figure 3 and, because the
-    assumption did not exclude arrow coercions, also gave an arrow cast a
-    second value. Concrete evaluation needs the rule - see ConCore.v,
-    Section 12.5 - so it is written down here, arrows excluded.
+    ConCore.v, Section 12.5 records the history: this shape once had a rule,
+    Rule App-Cast-Opaque, because Rule App-Spine then accepted a non-arrow
+    cast operator and the concrete side could reach the shape while the
+    symbolic side walked on. The guard above closes that gap on both sides
+    at once.
   *)
-  | Eval_AppCastOpaque : forall Φ Γ eb eb' γ ea v,
-      decomp_coerc_arrow γ = None ->
-      Whnf Γ eb ->
-      eval Φ Γ eb eb' ->
-      eval Φ Γ (EApp (cast_expr eb' γ) ea) v ->
-      eval Φ Γ (EApp (ECast eb γ) ea) v
 
   (** Rule App-Bot: Propagation of bottom in function position *)
   | Eval_AppBot : forall Φ Γ b ea,
@@ -939,8 +925,6 @@ Proof.
     end.
   - (* Eval_AppCast *)
     inversion Hsolv; subst; try discriminate.
-  - (* Eval_AppCastOpaque *)
-    inversion Hsolv; subst; try discriminate.
   - (* Eval_AppBot *)
     inversion Hsolv; subst; try discriminate.
   - (* Eval_Prune *)
@@ -1000,7 +984,6 @@ Proof.
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ eb eb' γ ea v Hdecomp Hwhnf Heval_b Heval_pushed
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -1033,8 +1016,6 @@ Proof.
       * exact (IH Hstl).
   - (* Eval_Lam *) inversion Hsolv.
   - (* Eval_AppCast: a cast is not solvable *)
-    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
-  - (* Eval_AppCastOpaque: a cast is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
   - (* Eval_AppBot: a bottom is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
@@ -1073,10 +1054,6 @@ Proof.
       lia.
     + (* Eval_AppCast: v_f cannot be a cast *)
       rewrite <- H in Hsolv. inversion Hsolv.
-    + (* Eval_AppCastOpaque: v_f cannot be a cast *)
-      match goal with
-      | [ H : ECast ?b ?g = ?w |- _ ] => rewrite <- H in Hsolv; inversion Hsolv
-      end.
     + (* Eval_AppBot: v_f cannot be a bottom *)
       rewrite <- H2 in Hsolv. inversion Hsolv.
     + (* Eval_Prune: pc_true is always satisfiable *)
