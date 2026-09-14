@@ -906,33 +906,43 @@ Lemma ite_cast : forall Γ ec e1 γ1 e2 γ2,
 Proof. reflexivity. Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** Fuel: a step budget carried by the reduction judgement                     *)
+(** Fuel: a depth bound carried by the reduction judgement                      *)
 (** ------------------------------------------------------------------------- *)
 
 (**
-  A fuel value is the budget a derivation may spend. Inf is an unlimited
-  budget. Fin n is a budget of n steps.
+  A fuel value bounds how deep a derivation may nest. Inf is no bound. Fin n
+  is a bound of n rules.
 
-  Every rule below carries a fuel f and passes dec f to each of its recursive
-  premises, so a derivation that nests k rules deep spends k units. Because
-  dec Inf = Inf, a derivation at Inf never runs the budget down, and the rule
+  A fuel is Spent or Live. Every rule below except Rule Out-Of-Fuel concludes
+  at a Live fuel f and passes dec f to each of its recursive premises. So a
+  rule at Fin (S n) has its premises at Fin n, and at Fin 0, which is Spent,
+  Rule Out-Of-Fuel is the only rule. A derivation at Fin n therefore nests at
+  most n ordinary rules, and the last one it reaches answers undefined.
+
+  dec Unlimited is Inf, so a derivation at Inf never runs down, and the rule
   set at Inf is exactly the rule set this judgement had before fuel existed.
   The notation Φ; Γ ⊢ e ⇓ e' below therefore still means what it always meant.
 
-  The budget matters only at Fin n. There, dec eventually reaches Fin 0, and
-  Rule Out-Of-Fuel stops the derivation with an undefined value instead of
-  letting it run on.
+  fold_alts is the fold-alts function of Rule Case, not a rule of the
+  reduction. It spends nothing: it runs at the fuel Rule Case hands it and
+  passes that fuel on unchanged.
 *)
-Inductive fuel := Inf | Fin (n : nat).
+Inductive live_fuel := Unlimited | Remaining (n : nat).
 
-(** Spend one unit of budget. An unlimited budget stays unlimited, and an
-    exhausted budget stays exhausted. *)
-Definition dec (f : fuel) : fuel :=
-  match f with Inf => Inf | Fin 0 => Fin 0 | Fin (S n) => Fin n end.
+Inductive fuel := Spent | Live (f : live_fuel).
+
+Notation Inf := (Live Unlimited).
+
+Definition Fin (n : nat) : fuel :=
+  match n with O => Spent | S m => Live (Remaining m) end.
+
+(** Spend one level of the bound. *)
+Definition dec (f : live_fuel) : fuel :=
+  match f with Unlimited => Inf | Remaining n => Fin n end.
 
 (** The unlimited budget is a fixed point of dec. This is the equation that
     makes eval Inf the old, unindexed relation. *)
-Lemma dec_Inf : dec Inf = Inf. Proof. reflexivity. Qed.
+Lemma dec_Inf : dec Unlimited = Inf. Proof. reflexivity. Qed.
 
 (**
   Mutual inductive definitions of:
@@ -944,7 +954,7 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   | Eval_Var : forall f Φ Γ x Γ' e e',
       lookup_env Γ x = Some (Γ', e) ->
       eval (dec f) Φ Γ' e e' ->
-      eval f Φ Γ (EVar x) e'
+      eval (Live f) Φ Γ (EVar x) e'
 
   (** Rule Sym-Var: a variable that Γ does not bind is a symbolic value.
       Solvable_Var already classifies it as a value, and every other value
@@ -953,28 +963,28 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       symbolic variable can reduce at all. *)
   | Eval_SymVar : forall f Φ Γ x,
       lookup_env Γ x = None ->
-      eval f Φ Γ (EVar x) (EVar x)
+      eval (Live f) Φ Γ (EVar x) (EVar x)
 
   (** Rule Lit: Literal reflexivity *)
   | Eval_Lit : forall f Φ Γ l,
-      eval f Φ Γ (ELit l) (ELit l)
+      eval (Live f) Φ Γ (ELit l) (ELit l)
 
   (** Rule Con: a constructor spine is its own value. The arguments stay as
       they are written: fold-alts binds them into the environment as thunks,
       so evaluating them here would force them too early. *)
   | Eval_Con : forall f Φ Γ e d args,
       unspool_app e [] = (ECon d, args) ->
-      eval f Φ Γ e e
+      eval (Live f) Φ Γ e e
 
   (** Rule Cast: Evaluate expression and simplify cast *)
   | Eval_Cast : forall f Φ Γ e γ e',
       eval (dec f) Φ Γ e e' ->
-      eval f Φ Γ (ECast e γ) (cast_expr e' γ)
+      eval (Live f) Φ Γ (ECast e γ) (cast_expr e' γ)
 
   (** Rule App-Abs: Beta-reduction with closure environment extension *)
   | Eval_AppAbs : forall f Φ Γ Γ' x eb ea eb',
       eval (dec f) Φ (extend_env Γ' x Γ ea) eb eb' ->
-      eval f Φ Γ (EApp (EClos Γ' x eb) ea) eb'
+      eval (Live f) Φ Γ (EApp (EClos Γ' x eb) ea) eb'
 
   (** Rule App-Spine: Reduce function head when not in WHNF, unless that head
       is a cast. A cast operator belongs to Rule App-Cast, which pushes the
@@ -984,28 +994,28 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       is_cast ef = false ->
       eval (dec f) Φ Γ ef ef' ->
       eval (dec f) Φ Γ (EApp ef' ea) er ->
-      eval f Φ Γ (EApp ef ea) er
+      eval (Live f) Φ Γ (EApp ef ea) er
 
   (** Rule Bot: Bottom value reflexivity *)
   | Eval_Bot : forall f Φ Γ b,
-      eval f Φ Γ (EBot b) (EBot b)
+      eval (Live f) Φ Γ (EBot b) (EBot b)
 
   (** Rule App-Prim: Evaluate primitive operation arguments and reduce *)
   | Eval_AppPrim : forall f Φ Γ ef ea p args args',
       unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
       length args = primop_arity p ->
       Forall2 (eval (dec f) Φ Γ) args args' ->
-      eval f Φ Γ (EApp ef ea) (reduce_prim p args')
+      eval (Live f) Φ Γ (EApp ef ea) (reduce_prim p args')
 
   (** Rule Lam: Function abstraction evaluates to runtime closure *)
   | Eval_Lam : forall f Φ Γ x e,
-      eval f Φ Γ (ELam x e) (EClos Γ x e)
+      eval (Live f) Φ Γ (ELam x e) (EClos Γ x e)
 
   (** Rule App-Cast: Higher-order coercion pushing *)
   | Eval_AppCast : forall f Φ Γ ef γ ea γ_a γ_r er,
       decomp_coerc_arrow γ = Some (γ_a, γ_r) ->
       eval (dec f) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
-      eval f Φ Γ (EApp (ECast ef γ) ea) er
+      eval (Live f) Φ Γ (EApp (ECast ef γ) ea) er
 
   (**
     No rule for: applying a VALUE that carries a coercion which is not an
@@ -1028,13 +1038,13 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
 
   (** Rule App-Bot: Propagation of bottom in function position *)
   | Eval_AppBot : forall f Φ Γ b ea,
-      eval f Φ Γ (EApp (EBot b) ea) (EBot b)
+      eval (Live f) Φ Γ (EApp (EBot b) ea) (EBot b)
 
   (** Rule Case: Evaluate scrutinee, merge common prefixes, and fold alternatives *)
   | Eval_Case : forall f Φ Γ es alts es' er,
       eval (dec f) Φ Γ es es' ->
       fold_alts (dec f) Φ Γ (merge Γ es') alts er ->
-      eval f Φ Γ (ECase es alts) er
+      eval (Live f) Φ Γ (ECase es alts) er
 
   (** Rule If: Evaluate condition, convert to path condition, and branch *)
   | Eval_If : forall f Φ Γ ec et ef ec' et' ef' pc_c,
@@ -1042,49 +1052,45 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       expr_to_pc Γ ec' = Some pc_c ->
       eval (dec f) (Φ ∧ pc_c) Γ et et' ->
       eval (dec f) (Φ ∧ ¬ pc_c) Γ ef ef' ->
-      eval f Φ Γ (EIf ec et ef) (EIf ec' et' ef')
+      eval (Live f) Φ Γ (EIf ec et ef) (EIf ec' et' ef')
 
   (** Rule Coercion: Evaluate coercion under substitution *)
   | Eval_Coercion : forall f Φ Γ γ,
-      eval f Φ Γ (ECoercion γ) (ECoercion (subst_coerc Γ γ))
+      eval (Live f) Φ Γ (ECoercion γ) (ECoercion (subst_coerc Γ γ))
 
   (** Rule Prune: Infeasible path conditions reduce to unreachable *)
   | Eval_Prune : forall f Φ Γ e,
       sat Φ = false ->
-      eval f Φ Γ e (EBot BUnreachable)
+      eval (Live f) Φ Γ e (EBot BUnreachable)
 
   (** Rule Type: Evaluate type under substitution *)
   | Eval_Type : forall f Φ Γ τ,
-      eval f Φ Γ (EType τ) (EType (subst_type Γ τ))
+      eval (Live f) Φ Γ (EType τ) (EType (subst_type Γ τ))
 
   (**
-    Rule Out-Of-Fuel: an exhausted budget gives up and reports an undefined
-    value. This is the only rule that can answer an expression the other
-    rules cannot finish in the budget, and the only rule whose answer does
-    not depend on the expression.
+    Rule Out-Of-Fuel: a spent budget gives up and reports an undefined value.
+    It is the only rule at Spent, and no other rule concludes there, so an
+    expression at Fin 0 has exactly one value.
 
-    The rule writes Fin 0 directly in its CONCLUSION index, not as a premise
-    f = Fin 0 over a variable index. The difference is what `inversion` does
-    with it. A written Fin 0 cannot unify with Inf, so inversion of a
-    derivation at Inf drops this case outright and leaves no goal. A variable
-    index would unify with Inf, so every inversion at Inf would first have to
-    discharge an impossible equation. Writing the index keeps eval Inf a
-    drop-in replacement for the unindexed judgement, which is what lets every
-    existing statement stand unchanged.
+    The rule writes Spent directly in its CONCLUSION index, and every other
+    rule writes Live f. Two different constructors never unify, so inversion
+    of a derivation at Inf drops this case outright, and inversion of a
+    derivation at Spent drops every other case. That keeps eval Inf a drop-in
+    replacement for the unindexed judgement, which is what lets every existing
+    statement stand unchanged.
 
-    Note that this is a rule of eval only. fold_alts has no out-of-fuel rule:
-    it never recurses on itself without passing through eval first, so the
-    budget is already spent and reported there.
+    This is a rule of eval only. fold_alts has no out-of-fuel rule: it spends
+    no fuel, and every expression it evaluates goes through eval.
   *)
   | Eval_OutOfFuel : forall Φ Γ e,
-      eval (Fin 0) Φ Γ e (EBot BUndefined)
+      eval Spent Φ Γ e (EBot BUndefined)
 
 with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> expr -> Prop :=
   (** Branch traversal: condition is converted to path condition *)
   | FoldAlts_If : forall f Φ Γ ec et ef alts et' ef' pc_c,
       expr_to_pc Γ ec = Some pc_c ->
-      fold_alts (dec f) (Φ ∧ pc_c) Γ et alts et' ->
-      fold_alts (dec f) (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
+      fold_alts f (Φ ∧ pc_c) Γ et alts et' ->
+      fold_alts f (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
       fold_alts f Φ Γ (EIf ec et ef) alts (EIf ec et' ef')
 
   (** Fallback for ill-formed condition in branching *)
@@ -1096,7 +1102,7 @@ with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> ex
   | FoldAlts_Con : forall f Φ Γ e d ea xs ep alts er,
       decompose_con_app e = Some (d, ea) ->
       find_alt d alts = Some (xs, ep) ->
-      eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep er ->
+      eval f Φ (extend_env_multi Γ xs ea Γ) ep er ->
       fold_alts f Φ Γ e alts er
 
   (** Bottom propagation *)
@@ -1484,7 +1490,7 @@ Proof.
     | k Φ Γ e Hunsat
     | k Φ Γ τ
     | Φ Γ e
-    ]; intros Hk0 Hsat Hsolv; try (subst k).
+    ]; intros Hk0 Hsat Hsolv; try (injection Hk0 as Hk0; subst k).
   - (* Eval_Var: a bound variable is not solvable *)
     inversion Hsolv; subst. rewrite Hlookup in H0. discriminate.
   - (* Eval_SymVar *) exact Hsolv.
@@ -1541,24 +1547,24 @@ Proof.
           rewrite (solvable_not_con_app _ _ Hsolv) in Hu; discriminate
       end.
     + (* Eval_AppAbs: v_f cannot be a closure *)
-      rewrite <- H in Hsolv. inversion Hsolv.
+      rewrite <- H0 in Hsolv. inversion Hsolv.
     + (* Eval_AppSpine: v_f is already Whnf *)
       contradiction.
     + (* Eval_AppPrim: the combined spine's arity no longer matches *)
-      simpl in H1.
+      simpl in H2.
       apply (unspool_app_shift (reduce_prim p args) [] [ac] (EPrimOp p0) args0) in Hunspool.
       simpl in Hunspool.
-      rewrite Hunspool in H1.
-      inversion H1; subst.
+      rewrite Hunspool in H2.
+      inversion H2; subst.
       rewrite length_app in H5.
       simpl in H5.
       lia.
     + (* Eval_AppCast: v_f cannot be a cast *)
-      rewrite <- H in Hsolv. inversion Hsolv.
+      rewrite <- H0 in Hsolv. inversion Hsolv.
     + (* Eval_AppBot: v_f cannot be a bottom *)
-      rewrite <- H3 in Hsolv. inversion Hsolv.
+      rewrite <- H in Hsolv. inversion Hsolv.
     + (* Eval_Prune: pc_true is always satisfiable *)
-      rewrite sat_pc_true in H. discriminate.
+      rewrite sat_pc_true in H0. discriminate.
   - eapply solvable_app_eval_false;
       [apply sat_pc_true | exact Hsolv | exact Hop | exact Heval].
 Qed.
@@ -1601,7 +1607,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - reflexivity.
-  - rewrite Hsat in H. discriminate.
+  - rewrite Hsat in H0. discriminate.
 Qed.
 
 (** Evaluation of literals under a satisfiable path condition *)
@@ -1614,7 +1620,7 @@ Proof.
   inversion Heval; subst.
   - reflexivity.
   - no_con_head.
-  - rewrite Hsat in H. discriminate.
+  - rewrite Hsat in H0. discriminate.
 Qed.
 
 (** Evaluation of constructors under a satisfiable path condition *)
@@ -1626,7 +1632,7 @@ Proof.
   intros Φ Γ d v Hsat Heval.
   inversion Heval; subst.
   - reflexivity.
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** A constructor spine is its own value, and it is the only value it has:
@@ -1672,7 +1678,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - reflexivity.
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** Evaluation of coercions under a satisfiable path condition *)
@@ -1685,7 +1691,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - reflexivity.
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** Evaluation of types under a satisfiable path condition *)
@@ -1697,7 +1703,7 @@ Proof.
   intros Φ Γ τ v Hsat Heval.
   inversion Heval; subst.
   - no_con_head.
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
   - reflexivity.
 Qed.
 
@@ -1715,7 +1721,7 @@ Proof.
   - left. exists Γ', e. split; [assumption | assumption].
   - right. split; [assumption | reflexivity].
   - no_con_head.
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** A bound variable's evaluation still inverts to its closure alone *)
@@ -1743,7 +1749,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - exists e'. split; [assumption | reflexivity].
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** Inversion of case evaluation under a satisfiable path condition *)
@@ -1758,7 +1764,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - exists es'. split; [assumption | assumption].
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** Inversion of if-then-else evaluation under a satisfiable path condition *)
@@ -1778,7 +1784,7 @@ Proof.
   - exists ec', et', ef', pc_c. split; [assumption|].
     split; [assumption|]. split; [assumption|].
     split; [assumption|reflexivity].
-  - rewrite Hsat in H; discriminate.
+  - rewrite Hsat in H0; discriminate.
 Qed.
 
 (** Inversion for fold_alts on if-expressions with valid path condition *)
@@ -1787,8 +1793,8 @@ Lemma fold_alts_if_some_inv : forall f Φ Γ ec et ef alts r pc_c,
   fold_alts f Φ Γ (EIf ec et ef) alts r ->
   exists et' ef',
     r = EIf ec et' ef' /\
-    fold_alts (dec f) (Φ ∧ pc_c) Γ et alts et' /\
-    fold_alts (dec f) (Φ ∧ ¬ pc_c) Γ ef alts ef'.
+    fold_alts f (Φ ∧ pc_c) Γ et alts et' /\
+    fold_alts f (Φ ∧ ¬ pc_c) Γ ef alts ef'.
 Proof.
   intros f Φ Γ ec et ef alts r pc_c Hpc Hfold.
   remember (EIf ec et ef) as e eqn:Heq.
@@ -1824,7 +1830,7 @@ Lemma fold_alts_con_inv : forall f Φ Γ e alts r d ea xs ep,
   is_if e = false ->
   is_bot e = false ->
   fold_alts f Φ Γ e alts r ->
-  eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep r.
+  eval f Φ (extend_env_multi Γ xs ea Γ) ep r.
 Proof.
   intros f Φ Γ e alts r d ea xs ep Hdec Halt Hnot_if Hnot_bot Hfold.
   inversion Hfold; subst.
@@ -1952,17 +1958,17 @@ Proof.
     | k Φ Γ e Hunsat
     | k Φ Γ τ
     | Φ Γ e
-    ]; intros Hk0; try (subst k).
+    ]; intros Hk0; try (injection Hk0 as Hk0; subst k).
   - (* Eval_Var *)
     destruct (eval_fin_of_inf_fix Inf Φ Γ' e e' Heval_x eq_refl) as [h Hh].
     exists (S h). intros n Hn. destruct n as [| m]; [lia |].
     eapply Eval_Var; [exact Hlook |]. simpl. apply Hh. lia.
   - (* Eval_SymVar *)
-    exists 0%nat. intros n _. apply Eval_SymVar. exact Hnone.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_SymVar. exact Hnone.
   - (* Eval_Lit *)
-    exists 0%nat. intros n _. apply Eval_Lit.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_Lit.
   - (* Eval_Con *)
-    exists 0%nat. intros n _. eapply Eval_Con. exact Hunspool.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. eapply Eval_Con. exact Hunspool.
   - (* Eval_Cast *)
     destruct (eval_fin_of_inf_fix Inf Φ Γ e e' Heval_e eq_refl) as [h Hh].
     exists (S h). intros n Hn. destruct n as [| m]; [lia |].
@@ -1982,7 +1988,7 @@ Proof.
     + simpl. apply Hh1. lia.
     + simpl. apply Hh2. lia.
   - (* Eval_Bot *)
-    exists 0%nat. intros n _. apply Eval_Bot.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_Bot.
   - (* Eval_AppPrim *)
     assert (Hbound : exists h, forall n, (h <= n)%nat -> Forall2 (eval (Fin n) Φ Γ) args args').
     { clear Hunspool Harity.
@@ -1997,7 +2003,7 @@ Proof.
     exists (S h). intros n Hn. destruct n as [| m]; [lia |].
     eapply Eval_AppPrim; [exact Hunspool | exact Harity |]. simpl. apply Hh. lia.
   - (* Eval_Lam *)
-    exists 0%nat. intros n _. apply Eval_Lam.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_Lam.
   - (* Eval_AppCast *)
     destruct (eval_fin_of_inf_fix Inf Φ Γ
                 (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er Heval_pushed eq_refl)
@@ -2005,7 +2011,7 @@ Proof.
     exists (S h). intros n Hn. destruct n as [| m]; [lia |].
     eapply Eval_AppCast; [exact Hdecomp |]. simpl. apply Hh. lia.
   - (* Eval_AppBot *)
-    exists 0%nat. intros n _. apply Eval_AppBot.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_AppBot.
   - (* Eval_Case *)
     destruct (eval_fin_of_inf_fix Inf Φ Γ es es' Heval_es eq_refl) as [h1 Hh1].
     destruct (fold_alts_fin_of_inf_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl) as [h2 Hh2].
@@ -2024,11 +2030,11 @@ Proof.
     + simpl. apply Hh2. lia.
     + simpl. apply Hh3. lia.
   - (* Eval_Coercion *)
-    exists 0%nat. intros n _. apply Eval_Coercion.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_Coercion.
   - (* Eval_Prune *)
-    exists 0%nat. intros n _. apply Eval_Prune. exact Hunsat.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_Prune. exact Hunsat.
   - (* Eval_Type *)
-    exists 0%nat. intros n _. apply Eval_Type.
+    exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_Type.
   - (* Eval_OutOfFuel *)
     discriminate Hk0.
 }
@@ -2045,7 +2051,7 @@ Proof.
       as [h1 Hh1].
     destruct (fold_alts_fin_of_inf_fix Inf (Φ ∧ ¬ pc_c) Γ ef alts ef' Hfold_f eq_refl)
       as [h2 Hh2].
-    exists (S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    exists (Nat.max h1 h2). intros n Hn.
     eapply FoldAlts_If.
     + exact Hpc.
     + simpl. apply Hh1. lia.
@@ -2055,7 +2061,7 @@ Proof.
   - (* FoldAlts_Con *)
     destruct (eval_fin_of_inf_fix Inf Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep eq_refl)
       as [h Hh].
-    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    exists h. intros n Hn.
     eapply FoldAlts_Con; [exact Hdec | exact Halt |]. simpl. apply Hh. lia.
   - (* FoldAlts_Bot *)
     exists 0%nat. intros n _. apply FoldAlts_Bot.
@@ -2221,13 +2227,13 @@ Lemma eval_self_app_var : forall Φ Γ,
 Proof.
   intros Φ Γ HR Hsat. induction HR.
   - intros v Hev. inversion Hev; subst.
-    + rewrite H in H1. injection H1 as ? ?; subst.
+    + rewrite H in H2. injection H2 as ? ?; subst.
       eexists. eapply eval_self_app_fun; [exact Hsat | eassumption].
     + congruence.
     + no_con_head.
     + congruence.
   - intros v Hev. inversion Hev; subst.
-    + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. eassumption.
+    + rewrite H in H2. injection H2 as ? ?; subst. apply IHHR. eassumption.
     + congruence.
     + no_con_head.
     + congruence.
@@ -2254,7 +2260,7 @@ Lemma self_app_has_no_value : forall Φ Γ e v,
 Proof.
   intros Φ Γ e v H.
   remember Inf as kf eqn:Hkf in H.
-  induction H; try discriminate Hkf; subst;
+  induction H; try discriminate Hkf; try (injection Hkf as Hkf); subst;
     intros Hsat HL;
     try (inversion HL; unfold self_app, self_app_body, self_app_fun in *; discriminate).
   - (* Rule Con: no loop shape has a constructor at the head of its spine *)
@@ -2306,9 +2312,12 @@ Proof.
   intros Γ HR. induction HR as [Γa Γb Hl | Γa Γb Hl HR IH];
     intros k Ψ; destruct k as [| k].
   - exists (EBot BUndefined). split; [apply Eval_OutOfFuel | left; reflexivity].
-  - exists (EClos Γb self_app_var self_app_body). split.
-    + eapply Eval_Var; [exact Hl |]. simpl. unfold self_app_fun. apply Eval_Lam.
-    + right. exists Γb. reflexivity.
+  - destruct k as [| k].
+    + exists (EBot BUndefined).
+      split; [eapply Eval_Var; [exact Hl | apply Eval_OutOfFuel] | left; reflexivity].
+    + exists (EClos Γb self_app_var self_app_body). split.
+      * eapply Eval_Var; [exact Hl |]. simpl. unfold self_app_fun. apply Eval_Lam.
+      * right. exists Γb. reflexivity.
   - exists (EBot BUndefined). split; [apply Eval_OutOfFuel | left; reflexivity].
   - destruct (IH k Ψ) as [v [Hv Hshape]].
     exists v. split; [eapply Eval_Var; [exact Hl | exact Hv] | exact Hshape].
@@ -2323,14 +2332,19 @@ Proof.
   induction k as [| k IH]; intros Ψ Γ e HL.
   - exists (EBot BUndefined). apply Eval_OutOfFuel.
   - inversion HL; subst.
-    + destruct (IH Ψ Γ (EApp (EClos Γ self_app_var self_app_body) self_app_fun)
-                 (SA_ClosFun Γ Γ)) as [v Hv].
-      exists v. unfold self_app.
-      eapply Eval_AppSpine with (ef' := EClos Γ self_app_var self_app_body).
-      * apply self_app_fun_not_whnf.
-      * reflexivity.
-      * simpl. unfold self_app_fun. apply Eval_Lam.
-      * simpl. exact Hv.
+    + destruct k as [| k].
+      * exists (EBot BUndefined). unfold self_app.
+        eapply Eval_AppSpine with (ef' := EBot BUndefined);
+          [apply self_app_fun_not_whnf | reflexivity | apply Eval_OutOfFuel
+          | apply Eval_OutOfFuel].
+      * destruct (IH Ψ Γ (EApp (EClos Γ self_app_var self_app_body) self_app_fun)
+                   (SA_ClosFun Γ Γ)) as [v Hv].
+        exists v. unfold self_app.
+        eapply Eval_AppSpine with (ef' := EClos Γ self_app_var self_app_body).
+        -- apply self_app_fun_not_whnf.
+        -- reflexivity.
+        -- simpl. unfold self_app_fun. apply Eval_Lam.
+        -- simpl. exact Hv.
     + destruct (IH Ψ (extend_env Γ1 self_app_var Γ self_app_fun) self_app_body
                  (SA_Var _ (self_app_extend_fun Γ1 Γ))) as [v Hv].
       exists v. apply Eval_AppAbs. simpl. exact Hv.
@@ -2340,7 +2354,7 @@ Proof.
         -- apply self_app_var_not_whnf. exact H.
         -- reflexivity.
         -- simpl. exact Hvf.
-        -- simpl. apply Eval_AppBot.
+        -- destruct k as [| k]; [apply Eval_OutOfFuel | apply Eval_AppBot].
       * subst vf.
         destruct (IH Ψ Γ (EApp (EClos Γ0 self_app_var self_app_body) (EVar self_app_var))
                    (SA_ClosVar Γ Γ0 H)) as [v Hv].
