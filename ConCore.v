@@ -669,17 +669,65 @@ Definition sym_free_env (S : symvars) (Γ : environment) : Prop :=
 Lemma sym_free_env_empty : forall S, sym_free_env S ·.
 Proof. intros S x _. reflexivity. Qed.
 
-Parameter models : valuation -> path_condition -> Prop.
+(** ------------------------------------------------------------------------- *)
+(** 9.0 The SMT Value of a Formula                                            *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  The SMT theory's own reading of a primitive operation: the literal the
+  solver gives to that operation applied to literal arguments. It is external
+  to this development in exactly the way lit and primop already are.
+*)
+Parameter prim_value : primop -> list lit -> lit.
+
+(** The literal the SMT theory reads as truth. External in the same way. *)
+Parameter lit_true : lit.
+
+Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
+  match pc with
+  | PCVar x => σ x
+  | PCLit l => l
+  | PCPrim p args => prim_value p (map (pc_value σ) args)
+  end.
+
+(**
+  A model satisfies a formula exactly when the formula's SMT value under that
+  model is the true literal.
+
+  A path condition had two independent readings here while `models` was a
+  Parameter: the verdict (⊨) and the value (pc_value), with nothing tying
+  them together. Symbolic evaluation preserves the value - that is
+  eval_denote in Section 9.2 - so a verdict that did not follow the value
+  could not be transported across an evaluation step, and eval_models_cond
+  and eval_models_not_cond had to be assumed. Reading the verdict off the
+  value closes that gap: both are now lemmas (Section 9.2), and what is
+  assumed instead is prim_value_and below, one equation about how the solver
+  reads its own conjunction.
+*)
+Definition models (σ : valuation) (Φ : path_condition) : Prop :=
+  pc_value σ Φ = lit_true.
 
 Notation "σ '⊨' Φ" := (models σ Φ) (at level 70, no associativity).
 
-(** `sat` reports satisfiability, so a formula with a model is satisfiable. *)
+(** `sat` reports satisfiability, so a formula with a model is satisfiable.
+    This is the one fact left relating the model to the `sat` oracle, and it
+    stays assumed: `sat` is the solver and nothing here computes it. *)
 Axiom models_sat : forall σ Φ,
   σ ⊨ Φ -> sat Φ = true.
 
+(** The SMT theory reads op_and as conjunction against the true literal. *)
+Axiom prim_value_and : forall l1 l2,
+  prim_value op_and (l1 :: l2 :: nil) = lit_true <-> l1 = lit_true /\ l2 = lit_true.
+
 (** The SMT theory reads ∧ as conjunction. *)
-Axiom models_and_iff : forall σ Φ1 Φ2,
+Lemma models_and_iff : forall σ Φ1 Φ2,
   σ ⊨ (Φ1 ∧ Φ2) <-> σ ⊨ Φ1 /\ σ ⊨ Φ2.
+Proof. intros σ Φ1 Φ2. unfold models, pc_and. simpl. apply prim_value_and. Qed.
+
+(** The verdict depends only on the value, because it is read off the value. *)
+Lemma pc_value_sound : forall σ pc1 pc2,
+  pc_value σ pc1 = pc_value σ pc2 -> σ ⊨ pc1 -> σ ⊨ pc2.
+Proof. unfold models. congruence. Qed.
 
 (**
   e denotes the formula pc: read in any environment that binds no symbolic
@@ -692,7 +740,7 @@ Axiom models_and_iff : forall σ Φ1 Φ2,
   judgement scope independent. Fixing the empty environment would allow a
   condition whose variables the ambient environment captures, and
   eval_models_cond would then force models to be empty on variable atoms; see
-  the note on eval_models_cond below.
+  the note on eval_models_cond in Section 9.2.
 *)
 Definition denotes (S : symvars) (e : expr) (pc : path_condition) : Prop :=
   forall Γ, sym_free_env S Γ -> expr_to_pc Γ e = Some pc.
@@ -760,22 +808,8 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 9.0 The SMT Value of a Term                                               *)
+(** 9.0.1 The SMT Value of a Term                                             *)
 (** ------------------------------------------------------------------------- *)
-
-(**
-  The SMT theory's own reading of a primitive operation: the literal the
-  solver gives to that operation applied to literal arguments. It is external
-  to this development in exactly the way lit and primop already are.
-*)
-Parameter prim_value : primop -> list lit -> lit.
-
-Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
-  match pc with
-  | PCVar x => σ x
-  | PCLit l => l
-  | PCPrim p args => prim_value p (map (pc_value σ) args)
-  end.
 
 (**
   e has SMT value l under σ: e reads off a formula in every scope that does
@@ -1059,38 +1093,6 @@ Axiom merge_contains : forall σ S es ec,
 Axiom cast_expr_contains : forall σ S es ec γ,
   contains σ S es ec ->
   contains σ S (cast_expr es γ) (cast_expr ec γ).
-
-(**
-  SMT condition truth preservation across evaluation, FOR MODELS OF THE PATH
-  CONDITION THE EVALUATION RAN UNDER.
-
-  Both hypotheses keep the assumption from being a falsehood.
-
-  σ ⊨ Φ: Rule Prune lets any expression reduce to EBot BUnreachable whenever
-  sat Φ = false, and EBot denotes no path-condition formula. Untied from Φ,
-  the assumption would say that every condition becomes unjudgeable as soon as
-  ONE unsatisfiable path condition exists, and no symbolic branch could then
-  be concretised. Under σ ⊨ Φ, models_sat gives sat Φ = true and Rule Prune
-  cannot fire.
-
-  sym_free_env S Γ: without it, take Γ binding x and evaluate the condition x
-  by Rule Var to EBot BUndefined, which denotes no formula. The assumption
-  would then prove that no model satisfies the atom x, emptying out models on
-  variables and making the non-vacuity suite of §11 hollow.
-
-  eval_models_cond_residue below says what is left once both hypotheses are
-  present: exactly one rule, App-Prim. So these two assume, beyond what is
-  proved, that reduce_prim preserves both the denotation of a condition and
-  its truth under the model. That is an SMT solver property, and reduce_prim
-  is the SMT solver.
-*)
-Axiom eval_models_cond : forall Φ Γ S ec ec' σ,
-  σ ⊨ Φ -> sym_free_env S Γ ->
-  Φ ; Γ ⊢ ec ⇓ ec' -> models_cond σ S ec -> models_cond σ S ec'.
-
-Axiom eval_models_not_cond : forall Φ Γ S ec ec' σ,
-  σ ⊨ Φ -> sym_free_env S Γ ->
-  Φ ; Γ ⊢ ec ⇓ ec' -> models_not_cond σ S ec -> models_not_cond σ S ec'.
 
 (**
   Taking apart a derivation that is fixed at the unlimited budget.
@@ -1905,6 +1907,54 @@ Lemma eval_denote : forall Φ Γ σ S e e' l,
 Proof.
   intros Φ Γ σ S e e' l Hmod Hfree Heval Hden.
   exact (eval_denote_fix Inf Φ Γ e e' Heval eq_refl σ S l Hmod Hfree Hden).
+Qed.
+
+(**
+  SMT condition truth preservation across evaluation, FOR MODELS OF THE PATH
+  CONDITION THE EVALUATION RAN UNDER.
+
+  Both hypotheses are needed, and each one blocks a rule that would otherwise
+  make the statement false.
+
+  σ ⊨ Φ: Rule Prune lets any expression reduce to EBot BUnreachable whenever
+  sat Φ = false, and EBot denotes no path-condition formula. Untied from Φ,
+  the statement would say that every condition becomes unjudgeable as soon as
+  ONE unsatisfiable path condition exists, and no symbolic branch could then
+  be concretised. Under σ ⊨ Φ, models_sat gives sat Φ = true and Rule Prune
+  cannot fire.
+
+  sym_free_env S Γ: without it, take Γ binding x and evaluate the condition x
+  by Rule Var to EBot BUndefined, which denotes no formula. The statement
+  would then prove that no model satisfies the atom x, emptying out models on
+  variables and making the non-vacuity suite of §11 hollow. See
+  scratch/EvalModelsCondVerdict.v, which proves both collapses.
+
+  Both were assumed until the verdict was defined from the value. Now the
+  existence half is eval_denote above, and the verdict half is pc_value_sound
+  in Section 9.0, which holds because ⊨ is read off pc_value.
+*)
+Lemma eval_models_cond : forall Φ Γ S ec ec' σ,
+  σ ⊨ Φ -> sym_free_env S Γ ->
+  Φ ; Γ ⊢ ec ⇓ ec' -> models_cond σ S ec -> models_cond σ S ec'.
+Proof.
+  intros Φ Γ S ec ec' σ Hmod Hfree Heval [pc [Hden Hsat]].
+  destruct (eval_denote Φ Γ σ S ec ec' (pc_value σ pc) Hmod Hfree Heval
+              (ex_intro _ pc (conj Hden eq_refl))) as [pc' [Hden' Hval']].
+  exists pc'. split; [exact Hden' | exact (pc_value_sound σ pc pc' (eq_sym Hval') Hsat)].
+Qed.
+
+(** The negated form needs nothing about op_not: ¬ is the primitive
+    application op_not, so equal values give equal values under it. *)
+Lemma eval_models_not_cond : forall Φ Γ S ec ec' σ,
+  σ ⊨ Φ -> sym_free_env S Γ ->
+  Φ ; Γ ⊢ ec ⇓ ec' -> models_not_cond σ S ec -> models_not_cond σ S ec'.
+Proof.
+  intros Φ Γ S ec ec' σ Hmod Hfree Heval [pc [Hden Hsat]].
+  destruct (eval_denote Φ Γ σ S ec ec' (pc_value σ pc) Hmod Hfree Heval
+              (ex_intro _ pc (conj Hden eq_refl))) as [pc' [Hden' Hval']].
+  exists pc'. split; [exact Hden' |].
+  apply (pc_value_sound σ (¬ pc) (¬ pc')); [| exact Hsat].
+  unfold pc_not. simpl. rewrite Hval'. reflexivity.
 Qed.
 
 (** ========================================================================= *)
@@ -4515,9 +4565,9 @@ End BranchAtTheTopIsNotEnough.
     arms below are evaluated under Φ ∧ pc, and a formula that changed with
     the budget would change the path condition the recursion runs under.
   - the model reads the guard's value the same way it reads the guard. This
-    is what eval_models_cond assumes of the solver at the unlimited budget;
-    here it is asked for directly, because the guard is evaluated at a finite
-    budget and that axiom does not reach there.
+    is what eval_models_cond proves at the unlimited budget; here it is asked
+    for directly, because the guard is evaluated at a finite budget and that
+    lemma does not reach there.
   - the arm the model does NOT take is budget-total. This is the whole point
     of the budget, and the only place the predicate tolerates a loop.
 
@@ -4539,9 +4589,11 @@ End BranchAtTheTopIsNotEnough.
   WHY THE PREDICATE MENTIONS e_con. It has to know which arm the model takes,
   because only the other arm may loop. The verdict is models_cond σ S ec for
   one arm and models_not_cond σ S ec for the other, and this development
-  cannot prove those two are exclusive: models is a Parameter and the only
-  facts about it are models_sat and models_and_iff, neither of which forbids
-  a model from satisfying both a formula and its negation. So the branch the
+  cannot prove those two are exclusive. σ ⊨ pc is pc_value σ pc = lit_true
+  and σ ⊨ ¬ pc is prim_value op_not (pc_value σ pc :: nil) = lit_true, and
+  nothing here is assumed about prim_value op_not, so both can hold at once.
+  Ruling that out would need one more equation about the solver's negation,
+  which this development deliberately does not add. So the branch the
   predicate descends into cannot be read off the symbolic side alone, and the
   concretion is what picks it. progressive_contains below shows the cost is
   nothing: the predicate already implies the concretion it mentions.

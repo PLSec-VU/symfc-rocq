@@ -259,25 +259,25 @@ at any budget. Any lemma phrased "branch-free at the root" is false.
 
 ## 6. Assumptions
 
-Thirty-four. Group them this way in the paper; the grouping is the justification.
+Thirty-two. Group them this way in the paper; the grouping is the justification.
 
-**Abstract sorts and signatures (14)** — `lit`, `primop`, `tycon`, `op_and`,
-`op_not`, `primop_arity`, `sat`, `pc_true`, `models`, `reduce_prim`, `merge`,
+**Abstract sorts and signatures (14)** — `lit`, `lit_true`, `primop`, `tycon`,
+`op_and`, `op_not`, `primop_arity`, `sat`, `pc_true`, `reduce_prim`, `merge`,
 `cast_expr`, `subst_coerc`, `subst_type`. These assert nothing; they say the
 things exist.
 
-**Solver facts (3)** — `sat_pc_true`, `models_sat`, `models_and_iff`. True of any
-solver and any Boolean semantics.
+**Solver facts (3)** — `sat_pc_true`, `models_sat`, `prim_value_and`. True of any
+solver and any Boolean semantics. `prim_value_and` says the solver reads its own
+`op_and` as conjunction against the true literal:
+`prim_value op_and [l₁; l₂] = lit_true ↔ l₁ = lit_true ∧ l₂ = lit_true`.
 
 **Syntactic preservation (5)** — `reduce_prim_solvable`, `reduce_prim_saturated`,
 `reduce_prim_concore`, `merge_concore`, `cast_expr_concore`. The first and third
 are **conditional on their arguments being well-formed**; unconditional versions
 caused the collapse in §5.1.
 
-**Grisette and coercion behaviour (4)** — `merge_fold_alts_equiv`,
-`fold_alts_no_nested_if`, `eval_models_cond`, `eval_models_not_cond`. The last two
-assume precisely that `reduce_prim` preserves a condition's denotation and its
-truth; everything else about them is proved.
+**Grisette and coercion behaviour (2)** — `merge_fold_alts_equiv`,
+`fold_alts_no_nested_if`.
 
 **Simulation (8)** — `merge_contains`, `cast_expr_contains`,
 `subst_coerc_contains_env`, `subst_type_contains_env`, `reduce_prim_contains`,
@@ -287,16 +287,32 @@ truth; everything else about them is proved.
 `models_cond σ S e := ∃pc, denotes S e pc ∧ σ ⊨ pc`. Deriving them rather than
 assuming them removed five assumptions and is worth a sentence.
 
+`models` is a **definition** too: `σ ⊨ Φ := pc_value σ Φ = lit_true`. A model
+satisfies a formula exactly when the formula's SMT value is the true literal.
+That closes the gap between the two readings of a path condition — the verdict
+`⊨` and the value `pc_value` — which used to be unconnected. `eval_models_cond`
+and `eval_models_not_cond` are now **lemmas**: evaluation preserves the value
+(`eval_denote`, proved), and the verdict is read off the value, so the verdict
+travels too. `models_and_iff` is a lemma from `prim_value_and`. Nothing extra is
+needed for the negated form, because `¬` is the primitive application `op_not`
+and equal values stay equal under it. Net: `models`, `models_and_iff`,
+`eval_models_cond` and `eval_models_not_cond` left; `lit_true` and
+`prim_value_and` arrived.
+
 ---
 
 ## 7. Honest limits
 
-**No model of the axiom set has been exhibited.** `lit` and `models` are abstract,
-so no model can be built inside the development. Every non-vacuity result about
-branches is therefore conditional on a model existing. What *is* unconditional:
-σ genuinely instantiates symbolic variables, `contains` is not syntactic identity,
-and the `reduce_prim` collapse is gone. Closing this means instantiating the
-theory concretely (say `lit := bool`) and checking all 34 assumptions hold.
+**No model of the axiom set has been exhibited.** `lit`, `lit_true` and
+`prim_value` are abstract, so no model can be built inside the development.
+Every non-vacuity result about branches is therefore conditional on a model
+existing. What *is* unconditional: σ genuinely instantiates symbolic variables,
+`contains` is not syntactic identity, and the `reduce_prim` collapse is gone.
+Closing this means instantiating the theory concretely (say `lit := bool`,
+`lit_true := true`, `prim_value` the Boolean operations) and checking all 32
+assumptions hold. Defining `⊨` from `pc_value` makes that job smaller: `models`
+no longer has to be supplied and checked separately, and `prim_value_and`
+falls out of the Boolean `andb`.
 
 **`reduce_prim` is still a term-builder, not a computing reducer**, outside the
 `Cont_Denote` fragment. This is the largest remaining semantic gap.
@@ -394,7 +410,7 @@ sitting at `eval (dec Inf) ...`. Write `eval _ Φ Γ e v` in tactic patterns.
 
 ### 8.5 The regression suite
 
-`scratch/` holds twenty-three files. Nineteen must compile; four
+`scratch/` holds twenty-five files. Twenty-one must compile; four
 (`Audit.v`, `prim.v`, `prim2.v`, `ReducePrimCannotCompute.v`) must **fail** —
 they are pre-repair results that must stay unprovable. If one of those four starts
 compiling, a defect has come back. Check all of them after any change:
