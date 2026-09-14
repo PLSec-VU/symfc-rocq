@@ -733,9 +733,67 @@ Axiom merge_preserves_whnf : forall Γ e,
 Axiom cast_expr_whnf : forall Γ e γ,
   Whnf Γ e -> Whnf Γ (cast_expr e γ).
 
-(** Primitive reduction produces a WHNF (SMT / Grisette contract - Axiom 2) *)
-Axiom reduce_prim_whnf : forall Γ p args,
+(** Primitive reduction produces a first-order solvable expression (SMT / Grisette contract - Axiom 2) *)
+Axiom reduce_prim_solvable : forall Γ p args,
+  Solvable Γ (reduce_prim p args) /\ is_op_app (reduce_prim p args) = false.
+
+(** WHNF follows directly from being solvable *)
+Lemma reduce_prim_whnf : forall Γ p args,
   Whnf Γ (reduce_prim p args).
+Proof.
+  intros. apply Whnf_Solvable. apply (proj1 (reduce_prim_solvable Γ p args)).
+Qed.
+
+(** Unspooling an application spine preserves the operator head property *)
+Lemma unspool_is_op_app : forall e args p args0,
+  unspool_app e args = (EPrimOp p, args0) ->
+  is_op_app e = true.
+Proof.
+  induction e; intros args op args0 H; simpl in *; try discriminate.
+  - injection H as ? ?; subst. reflexivity.
+  - apply IHe1 in H. exact H.
+Qed.
+
+(** Solvable expressions that are not operators cannot be applied as functions *)
+Lemma solvable_app_eval_false : forall Φ Γ e a v,
+  sat Φ = true ->
+  Solvable Γ e ->
+  is_op_app e = false ->
+  eval Φ Γ (EApp e a) v ->
+  False.
+Proof.
+  intros Φ Γ e a v Hsat Hsolv Hnotop Heval.
+  inversion Heval; subst.
+  - (* Eval_AppAbs *)
+    inversion Hsolv; subst; try discriminate.
+  - (* Eval_AppSpine *)
+    exfalso. apply (Whnf_Solvable Γ e) in Hsolv. contradiction.
+  - (* Eval_AppPrim *)
+    match goal with
+    | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
+        simpl in H; apply unspool_is_op_app in H; rewrite H in Hnotop; discriminate
+    end.
+  - (* Eval_AppCast *)
+    inversion Hsolv; subst; try discriminate.
+  - (* Eval_AppBot *)
+    inversion Hsolv; subst; try discriminate.
+  - (* Eval_Prune *)
+    match goal with
+    | [ H : sat Φ = false |- _ ] =>
+        rewrite Hsat in H; discriminate
+    end.
+Qed.
+
+(** The result of primitive reduction cannot be applied as a function *)
+Lemma eval_app_reduce_prim_false : forall Φ Γ p args a v,
+  sat Φ = true ->
+  eval Φ Γ (EApp (reduce_prim p args) a) v ->
+  False.
+Proof.
+  intros Φ Γ p args a v Hsat Heval.
+  destruct (reduce_prim_solvable Γ p args) as [Hsolv Hnotop].
+  eapply solvable_app_eval_false; eassumption.
+Qed.
 
 (** ------------------------------------------------------------------------- *)
 (** 10.4 Determinism of Evaluation (§3.2)                                      *)

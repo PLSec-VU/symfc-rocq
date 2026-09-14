@@ -1155,6 +1155,27 @@ Proof.
   - apply eval_bot_con in Heval_f; subst. exact Heval_app.
 Qed.
 
+Lemma eval_app_primop_head : forall Φ Γ f a v,
+  sat Φ = true ->
+  Whnf Γ (EApp f a) ->
+  is_op_app (EApp f a) = true ->
+  eval Φ Γ (EApp f a) v ->
+  exists p args', v = reduce_prim p args'.
+Proof.
+  intros Φ Γ f a v Hsat Hwhnf Hop Heval.
+  inversion Heval; subst.
+  - simpl in Hop. discriminate.
+  - (* Eval_AppSpine *)
+    inversion Hwhnf; subst; try discriminate.
+    inversion H; subst; try discriminate.
+    apply Whnf_Solvable in H5.
+    contradiction.
+  - exists p, args'. reflexivity.
+  - simpl in Hop. discriminate.
+  - simpl in Hop. discriminate.
+  - rewrite Hsat in H. discriminate.
+Qed.
+
 Lemma eval_app_spine_sound : forall Φ Γs Γc σ ef ea ef' er e_con,
   models σ Φ ->
   contains_env σ Γs Γc ->
@@ -1195,10 +1216,13 @@ Proof.
   - destruct (is_op_app fc) eqn:Hop.
     + destruct fc; try discriminate.
       * simpl in Hop. exfalso. eapply eval_primop_false; eassumption.
-      * admit.
+      * exfalso.
+        eapply eval_app_primop_head in Heval_f as [p [args' Heq]]; [| exact sat_pc_true | exact Hwhnf_c | exact Hop].
+        subst v_f.
+        eapply eval_app_reduce_prim_false; [exact sat_pc_true | exact Heval_app2].
     + eapply eval_con_app_whnf; eassumption.
   - eapply Eval_AppSpine; [exact Hnot_whnf_c | exact Heval_f | exact Heval_app2].
-Admitted.
+Qed.
 
 (** ========================================================================= *)
 (** 10. Soundness and Completeness of Symbolic Execution                      *)
