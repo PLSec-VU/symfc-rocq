@@ -1408,4 +1408,485 @@ Proof.
     subst. reflexivity.
 Qed.
 
+(** ------------------------------------------------------------------------- *)
+(** 10.5 The Unlimited Budget against a Finite Budget (§3.2)                   *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  This file carries two judgements: eval Inf, the unlimited budget, and
+  eval (Fin n), a budget of n steps. This section says how the two relate.
+
+  The bridge, first. Every derivation at the unlimited budget is reproduced
+  at some finite budget. The budget that works is the height of the
+  derivation, because every rule spends one unit on each recursive premise
+  and nothing else spends anything.
+
+  The proof below carries more than the bridge asks for. It produces a
+  threshold h and shows that EVERY budget at or above h reproduces the
+  derivation. The weaker form, "some budget works", does not survive the
+  induction. Rule App-Spine has two recursive premises, and the budgets they
+  report back need not be equal. Only an upward-closed statement lets the
+  rule keep the larger of the two. Rule App-Prim asks for the same thing over
+  a whole list: its Forall2 must run all its arguments at one budget. The
+  inner induction on the Forall2 folds the argument thresholds together with
+  max as it walks the list, so no separate list-maximum lemma is needed.
+
+  The proof is a pair of mutually recursive fixpoints on the derivation, for
+  the same reason as concore_eval_closed_fix in ConCore.v: the derived mutual
+  induction scheme supplies no hypothesis under the Forall2 of Rule App-Prim.
+
+  The fuel comes in as f0 with an f0 = Inf premise instead of being left
+  free, because destruct on the index brings Rule Out-Of-Fuel back as a case.
+  The premise is what discharges it.
+*)
+Fixpoint eval_fin_of_inf_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
+  (Heval : eval f0 Φ Γ e v) {struct Heval} :
+  f0 = Inf -> exists h, forall n, (h <= n)%nat -> eval (Fin n) Φ Γ e v
+with fold_alts_fin_of_inf_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e : expr)
+  (alts : list alt) (er : expr)
+  (Hfold : fold_alts f0 Φ Γ e alts er) {struct Hfold} :
+  f0 = Inf -> exists h, forall n, (h <= n)%nat -> fold_alts (Fin n) Φ Γ e alts er.
+Proof.
+{
+  destruct Heval as
+    [ k Φ Γ x Γ' e e' Hlook Heval_x
+    | k Φ Γ x Hnone
+    | k Φ Γ l
+    | k Φ Γ d
+    | k Φ Γ e γ e' Heval_e
+    | k Φ Γ Γ' x eb ea eb' Heval_b
+    | k Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
+    | k Φ Γ b
+    | k Φ Γ ef ea p args args' Hunspool Harity Hargs
+    | k Φ Γ x e
+    | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | k Φ Γ b ea
+    | k Φ Γ es alts es' er Heval_es Hfold
+    | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
+    | k Φ Γ γ
+    | k Φ Γ e Hunsat
+    | k Φ Γ τ
+    | Φ Γ e
+    ]; intros Hk0; try (subst k).
+  - (* Eval_Var *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ' e e' Heval_x eq_refl) as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    eapply Eval_Var; [exact Hlook |]. simpl. apply Hh. lia.
+  - (* Eval_SymVar *)
+    exists 0%nat. intros n _. apply Eval_SymVar. exact Hnone.
+  - (* Eval_Lit *)
+    exists 0%nat. intros n _. apply Eval_Lit.
+  - (* Eval_Con *)
+    exists 0%nat. intros n _. apply Eval_Con.
+  - (* Eval_Cast *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ e e' Heval_e eq_refl) as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    apply Eval_Cast. simpl. apply Hh. lia.
+  - (* Eval_AppAbs *)
+    destruct (eval_fin_of_inf_fix Inf Φ (extend_env Γ' x Γ ea) eb eb' Heval_b eq_refl)
+      as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    apply Eval_AppAbs. simpl. apply Hh. lia.
+  - (* Eval_AppSpine *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ ef ef' Heval_f eq_refl) as [h1 Hh1].
+    destruct (eval_fin_of_inf_fix Inf Φ Γ (EApp ef' ea) er Heval_app2 eq_refl) as [h2 Hh2].
+    exists (S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    eapply Eval_AppSpine.
+    + exact Hnotwhnf.
+    + exact Hguard.
+    + simpl. apply Hh1. lia.
+    + simpl. apply Hh2. lia.
+  - (* Eval_Bot *)
+    exists 0%nat. intros n _. apply Eval_Bot.
+  - (* Eval_AppPrim *)
+    assert (Hbound : exists h, forall n, (h <= n)%nat -> Forall2 (eval (Fin n) Φ Γ) args args').
+    { clear Hunspool Harity.
+      induction Hargs as [| a a' tl tl' Ha Htl IH].
+      - exists 0%nat. intros n _. constructor.
+      - destruct IH as [h2 Hh2].
+        destruct (eval_fin_of_inf_fix Inf Φ Γ a a' Ha eq_refl) as [h1 Hh1].
+        exists (Nat.max h1 h2). intros n Hn. constructor.
+        + apply Hh1. lia.
+        + apply Hh2. lia. }
+    destruct Hbound as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    eapply Eval_AppPrim; [exact Hunspool | exact Harity |]. simpl. apply Hh. lia.
+  - (* Eval_Lam *)
+    exists 0%nat. intros n _. apply Eval_Lam.
+  - (* Eval_AppCast *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ
+                (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er Heval_pushed eq_refl)
+      as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    eapply Eval_AppCast; [exact Hdecomp |]. simpl. apply Hh. lia.
+  - (* Eval_AppBot *)
+    exists 0%nat. intros n _. apply Eval_AppBot.
+  - (* Eval_Case *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ es es' Heval_es eq_refl) as [h1 Hh1].
+    destruct (fold_alts_fin_of_inf_fix Inf Φ Γ (merge es') alts er Hfold eq_refl) as [h2 Hh2].
+    exists (S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    eapply Eval_Case.
+    + simpl. apply Hh1. lia.
+    + simpl. apply Hh2. lia.
+  - (* Eval_If *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ ec ec' Heval_c eq_refl) as [h1 Hh1].
+    destruct (eval_fin_of_inf_fix Inf (Φ ∧ pc_c) Γ et et' Heval_t eq_refl) as [h2 Hh2].
+    destruct (eval_fin_of_inf_fix Inf (Φ ∧ ¬ pc_c) Γ ef ef' Heval_f eq_refl) as [h3 Hh3].
+    exists (S (Nat.max h1 (Nat.max h2 h3))). intros n Hn. destruct n as [| m]; [lia |].
+    eapply Eval_If.
+    + simpl. apply Hh1. lia.
+    + exact Hpc.
+    + simpl. apply Hh2. lia.
+    + simpl. apply Hh3. lia.
+  - (* Eval_Coercion *)
+    exists 0%nat. intros n _. apply Eval_Coercion.
+  - (* Eval_Prune *)
+    exists 0%nat. intros n _. apply Eval_Prune. exact Hunsat.
+  - (* Eval_Type *)
+    exists 0%nat. intros n _. apply Eval_Type.
+  - (* Eval_OutOfFuel *)
+    discriminate Hk0.
+}
+{
+  destruct Hfold as
+    [ k Φ Γ ec et ef alts et' ef' pc_c Hpc Hfold_t Hfold_f
+    | k Φ Γ ec et ef alts Hpc_none
+    | k Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
+    | k Φ Γ b alts
+    | k Φ Γ e alts Hnotif Hnoalt Hnotbot
+    ]; intros Hk0; subst k.
+  - (* FoldAlts_If *)
+    destruct (fold_alts_fin_of_inf_fix Inf (Φ ∧ pc_c) Γ et alts et' Hfold_t eq_refl)
+      as [h1 Hh1].
+    destruct (fold_alts_fin_of_inf_fix Inf (Φ ∧ ¬ pc_c) Γ ef alts ef' Hfold_f eq_refl)
+      as [h2 Hh2].
+    exists (S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    eapply FoldAlts_If.
+    + exact Hpc.
+    + simpl. apply Hh1. lia.
+    + simpl. apply Hh2. lia.
+  - (* FoldAlts_IfFail *)
+    exists 0%nat. intros n _. apply FoldAlts_IfFail. exact Hpc_none.
+  - (* FoldAlts_Con *)
+    destruct (eval_fin_of_inf_fix Inf Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep eq_refl)
+      as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    eapply FoldAlts_Con; [exact Hdec | exact Halt |]. simpl. apply Hh. lia.
+  - (* FoldAlts_Bot *)
+    exists 0%nat. intros n _. apply FoldAlts_Bot.
+  - (* FoldAlts_Otherwise *)
+    exists 0%nat. intros n _. apply FoldAlts_Otherwise; assumption.
+}
+Qed.
+
+(** An unbounded derivation has a budget from which on every budget works. *)
+Lemma eval_inf_has_budget : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  exists h, forall n, (h <= n)%nat -> eval (Fin n) Φ Γ e v.
+Proof.
+  intros Φ Γ e v Heval. exact (eval_fin_of_inf_fix Inf Φ Γ e v Heval eq_refl).
+Qed.
+
+(** The same for branch folding. *)
+Lemma fold_alts_inf_has_budget : forall Φ Γ e alts er,
+  fold_alts Inf Φ Γ e alts er ->
+  exists h, forall n, (h <= n)%nat -> fold_alts (Fin n) Φ Γ e alts er.
+Proof.
+  intros Φ Γ e alts er Hfold.
+  exact (fold_alts_fin_of_inf_fix Inf Φ Γ e alts er Hfold eq_refl).
+Qed.
+
+(** The bridge: every unbounded derivation runs at some finite budget. *)
+Corollary eval_inf_to_fin : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  exists n, eval (Fin n) Φ Γ e v.
+Proof.
+  intros Φ Γ e v Heval.
+  destruct (eval_inf_has_budget Φ Γ e v Heval) as [h Hh].
+  exists h. apply Hh. lia.
+Qed.
+
+(**
+  Monotonicity in the budget. The plain claim, "if a budget of n gives the
+  value v then every larger budget gives v as well", is false, and the two
+  lemmas below say so with witnesses.
+
+  The reason is Rule Out-Of-Fuel. It is the only rule whose answer ignores
+  the expression, and it is available at Fin 0 only. So an answer that Rule
+  Out-Of-Fuel produced is usually gone one unit higher up, where the ordinary
+  rules take over and give the real value instead. A larger budget gives a
+  better answer, not the same answer.
+
+  Worse: a larger budget can leave a term with NO value. A stuck term at
+  Fin 0 still has the undefined answer of Rule Out-Of-Fuel; at Fin 1 it has
+  nothing.
+
+  What is true is eval_inf_has_budget above. Once a budget is large enough to
+  carry a derivation that the unlimited budget also has, every larger budget
+  carries the same derivation to the same value. So growing the budget is
+  safe exactly for a value that the unlimited judgement gives too, and unsafe
+  for a value that only Rule Out-Of-Fuel gave.
+*)
+Lemma bigger_budget_changes_the_value : forall Φ Γ d,
+  eval (Fin 0) Φ Γ (ECon d) (EBot BUndefined)
+  /\ ~ eval (Fin 1) Φ Γ (ECon d) (EBot BUndefined).
+Proof.
+  intros Φ Γ d. split.
+  - apply Eval_OutOfFuel.
+  - intro H. inversion H.
+Qed.
+
+Lemma eval_fuel_not_monotone :
+  ~ (forall n m Φ Γ e v,
+       (n <= m)%nat -> eval (Fin n) Φ Γ e v -> eval (Fin m) Φ Γ e v).
+Proof.
+  intros Hmono.
+  destruct (bigger_budget_changes_the_value pc_true · "C") as [H0 H1].
+  apply H1. apply (Hmono 0%nat 1%nat); [lia | exact H0].
+Qed.
+
+Lemma bigger_budget_loses_the_value : forall Φ Γ d,
+  sat Φ = true ->
+  eval (Fin 0) Φ Γ (EApp (ECon d) (ECon d)) (EBot BUndefined)
+  /\ (forall v, ~ eval (Fin 1) Φ Γ (EApp (ECon d) (ECon d)) v).
+Proof.
+  intros Φ Γ d Hsat. split.
+  - apply Eval_OutOfFuel.
+  - intros v H. inversion H; subst.
+    + match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end. apply Whnf_Con.
+    + match goal with [ Hu : unspool_app _ _ = _ |- _ ] => simpl in Hu; discriminate Hu end.
+    + congruence.
+Qed.
+
+(**
+  The bridge does not run backwards. A finite budget answers terms that the
+  unlimited budget never answers, so the two judgements are not the same
+  relation and no later proof may treat them as one.
+
+  The witness is the self-application below, the same term as in
+  scratch/DivergenceNeedsFuel.v. It is not stuck: the rules do apply to it,
+  and each turn of the loop lands in the same shape one environment deeper.
+  The unlimited budget therefore runs forever and delivers nothing, while
+  every finite budget stops the loop and delivers a value.
+
+  The environment is what makes the argument work. Each turn binds f again,
+  and the new binding is not the lambda but the name f read back in the
+  previous environment. So after n turns the name resolves through a chain of
+  n indirections. ResolvesToSelfApp is that chain, and SelfAppState lists the
+  four shapes the loop passes through.
+*)
+Definition self_app_var : var := "f".
+Definition self_app_body : expr := EApp (EVar self_app_var) (EVar self_app_var).
+Definition self_app_fun : expr := ELam self_app_var self_app_body.
+Definition self_app : expr := EApp self_app_fun self_app_fun.
+
+Lemma self_app_fun_not_whnf : forall Γ, ~ Whnf Γ self_app_fun.
+Proof.
+  intros Γ H. inversion H; subst. inversion H0.
+Qed.
+
+Lemma eval_self_app_fun : forall Φ Γ v,
+  sat Φ = true -> Φ ; Γ ⊢ self_app_fun ⇓ v -> v = EClos Γ self_app_var self_app_body.
+Proof.
+  intros Φ Γ v Hsat H. inversion H; subst; [reflexivity | congruence].
+Qed.
+
+(** The chain of indirections that still ends at the loop lambda. *)
+Inductive ResolvesToSelfApp : environment -> Prop :=
+  | RSA_Lam : forall Γ Γ0,
+      lookup_env Γ self_app_var = Some (Γ0, self_app_fun) ->
+      ResolvesToSelfApp Γ
+  | RSA_Indirect : forall Γ Γ0,
+      lookup_env Γ self_app_var = Some (Γ0, EVar self_app_var) ->
+      ResolvesToSelfApp Γ0 ->
+      ResolvesToSelfApp Γ.
+
+Lemma self_app_extend_fun : forall Γ0 Γ,
+  ResolvesToSelfApp (extend_env Γ0 self_app_var Γ self_app_fun).
+Proof.
+  intros Γ0 Γ. eapply RSA_Lam. unfold extend_env. simpl.
+  destruct (string_dec self_app_var self_app_var); [reflexivity | contradiction].
+Qed.
+
+Lemma self_app_extend_var : forall Γ0 Γ,
+  ResolvesToSelfApp Γ ->
+  ResolvesToSelfApp (extend_env Γ0 self_app_var Γ (EVar self_app_var)).
+Proof.
+  intros Γ0 Γ H. eapply RSA_Indirect; [| exact H]. unfold extend_env. simpl.
+  destruct (string_dec self_app_var self_app_var); [reflexivity | contradiction].
+Qed.
+
+Lemma self_app_var_not_whnf : forall Γ,
+  ResolvesToSelfApp Γ -> ~ Whnf Γ (EVar self_app_var).
+Proof.
+  intros Γ HR H. inversion H; subst. inversion H0; subst.
+  destruct HR; congruence.
+Qed.
+
+Lemma eval_self_app_var : forall Φ Γ,
+  ResolvesToSelfApp Γ ->
+  sat Φ = true ->
+  forall v, Φ ; Γ ⊢ EVar self_app_var ⇓ v ->
+  exists Γ0, v = EClos Γ0 self_app_var self_app_body.
+Proof.
+  intros Φ Γ HR Hsat. induction HR.
+  - intros v Hev. inversion Hev; subst.
+    + rewrite H in H1. injection H1 as ? ?; subst.
+      eexists. eapply eval_self_app_fun; [exact Hsat | eassumption].
+    + congruence.
+    + congruence.
+  - intros v Hev. inversion Hev; subst.
+    + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. eassumption.
+    + congruence.
+    + congruence.
+Qed.
+
+(** The four shapes the loop passes through. *)
+Inductive SelfAppState : environment -> expr -> Prop :=
+  | SA_Self : forall Γ,
+      SelfAppState Γ self_app
+  | SA_ClosFun : forall Γ Γ0,
+      SelfAppState Γ (EApp (EClos Γ0 self_app_var self_app_body) self_app_fun)
+  | SA_Var : forall Γ,
+      ResolvesToSelfApp Γ ->
+      SelfAppState Γ self_app_body
+  | SA_ClosVar : forall Γ Γ0,
+      ResolvesToSelfApp Γ ->
+      SelfAppState Γ (EApp (EClos Γ0 self_app_var self_app_body) (EVar self_app_var)).
+
+(** Every step out of a loop shape lands in a loop shape, so an unbounded
+    derivation can never bottom out. The induction is on the derivation, not
+    on the term. It keeps the index, so that Rule Out-Of-Fuel stays out. *)
+Lemma self_app_has_no_value : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v -> sat Φ = true -> SelfAppState Γ e -> False.
+Proof.
+  intros Φ Γ e v H.
+  remember Inf as kf eqn:Hkf in H.
+  induction H; try discriminate Hkf; subst;
+    intros Hsat HL;
+    try (inversion HL; unfold self_app, self_app_body, self_app_fun in *; discriminate).
+  - (* Rule App-Abs *)
+    inversion HL; subst.
+    + apply IHeval; [reflexivity | exact Hsat | apply SA_Var; apply self_app_extend_fun].
+    + apply IHeval; [reflexivity | exact Hsat |].
+      apply SA_Var. apply self_app_extend_var. assumption.
+  - (* Rule App-Spine *)
+    inversion HL; subst.
+    + assert (Hef : ef' = EClos Γ self_app_var self_app_body)
+        by (apply (eval_self_app_fun Φ Γ ef' Hsat); assumption).
+      subst ef'. apply IHeval2; [reflexivity | exact Hsat | apply SA_ClosFun].
+    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
+      apply Whnf_Clos.
+    + match goal with
+      | [ HR : ResolvesToSelfApp Γ, He : eval _ Φ Γ (EVar self_app_var) ef' |- _ ] =>
+          destruct (eval_self_app_var Φ Γ HR Hsat ef' He) as [Γ0 Hef]; subst ef';
+          apply IHeval2; [reflexivity | exact Hsat | apply SA_ClosVar; exact HR]
+      end.
+    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
+      apply Whnf_Clos.
+  - (* Rule App-Prim *)
+    inversion HL; subst; unfold self_app, self_app_body, self_app_fun in H; simpl in H;
+      injection H as ? ?; discriminate.
+  - (* Rule Prune *)
+    congruence.
+Qed.
+
+Lemma self_app_diverges : forall Φ Γ v,
+  sat Φ = true -> ~ (Φ ; Γ ⊢ self_app ⇓ v).
+Proof.
+  intros Φ Γ v Hsat H.
+  eapply self_app_has_no_value; [exact H | exact Hsat | apply SA_Self].
+Qed.
+
+(** Reading f at a finite budget either runs out of budget or delivers the
+    loop closure, whatever the length of the chain. *)
+Lemma self_app_var_value_bounded : forall Γ,
+  ResolvesToSelfApp Γ ->
+  forall k Ψ, exists v,
+    eval (Fin k) Ψ Γ (EVar self_app_var) v
+    /\ (v = EBot BUndefined \/ exists Γ0, v = EClos Γ0 self_app_var self_app_body).
+Proof.
+  intros Γ HR. induction HR as [Γa Γb Hl | Γa Γb Hl HR IH];
+    intros k Ψ; destruct k as [| k].
+  - exists (EBot BUndefined). split; [apply Eval_OutOfFuel | left; reflexivity].
+  - exists (EClos Γb self_app_var self_app_body). split.
+    + eapply Eval_Var; [exact Hl |]. simpl. unfold self_app_fun. apply Eval_Lam.
+    + right. exists Γb. reflexivity.
+  - exists (EBot BUndefined). split; [apply Eval_OutOfFuel | left; reflexivity].
+  - destruct (IH k Ψ) as [v [Hv Hshape]].
+    exists v. split; [eapply Eval_Var; [exact Hl | exact Hv] | exact Hshape].
+Qed.
+
+(** Every loop shape has a value at every finite budget. The loop never
+    blocks, it only stops, so a budget always delivers a derivation where the
+    unlimited judgement delivers none. *)
+Lemma self_app_state_has_value_at_every_budget : forall k Ψ Γ e,
+  SelfAppState Γ e -> exists v, eval (Fin k) Ψ Γ e v.
+Proof.
+  induction k as [| k IH]; intros Ψ Γ e HL.
+  - exists (EBot BUndefined). apply Eval_OutOfFuel.
+  - inversion HL; subst.
+    + destruct (IH Ψ Γ (EApp (EClos Γ self_app_var self_app_body) self_app_fun)
+                 (SA_ClosFun Γ Γ)) as [v Hv].
+      exists v. unfold self_app.
+      eapply Eval_AppSpine with (ef' := EClos Γ self_app_var self_app_body).
+      * apply self_app_fun_not_whnf.
+      * reflexivity.
+      * simpl. unfold self_app_fun. apply Eval_Lam.
+      * simpl. exact Hv.
+    + destruct (IH Ψ (extend_env Γ1 self_app_var Γ self_app_fun) self_app_body
+                 (SA_Var _ (self_app_extend_fun Γ1 Γ))) as [v Hv].
+      exists v. apply Eval_AppAbs. simpl. exact Hv.
+    + destruct (self_app_var_value_bounded Γ H k Ψ) as [vf [Hvf [Hbot | [Γ0 Hclos]]]].
+      * subst vf. exists (EBot BUndefined). unfold self_app_body.
+        eapply Eval_AppSpine with (ef' := EBot BUndefined).
+        -- apply self_app_var_not_whnf. exact H.
+        -- reflexivity.
+        -- simpl. exact Hvf.
+        -- simpl. apply Eval_AppBot.
+      * subst vf.
+        destruct (IH Ψ Γ (EApp (EClos Γ0 self_app_var self_app_body) (EVar self_app_var))
+                   (SA_ClosVar Γ Γ0 H)) as [v Hv].
+        exists v. unfold self_app_body.
+        eapply Eval_AppSpine with (ef' := EClos Γ0 self_app_var self_app_body).
+        -- apply self_app_var_not_whnf. exact H.
+        -- reflexivity.
+        -- simpl. exact Hvf.
+        -- simpl. exact Hv.
+    + destruct (IH Ψ (extend_env Γ1 self_app_var Γ (EVar self_app_var)) self_app_body
+                 (SA_Var _ (self_app_extend_var Γ1 Γ H))) as [v Hv].
+      exists v. apply Eval_AppAbs. simpl. exact Hv.
+Qed.
+
+Corollary self_app_has_value_at_every_budget : forall k Ψ Γ,
+  exists v, eval (Fin k) Ψ Γ self_app v.
+Proof.
+  intros k Ψ Γ.
+  apply (self_app_state_has_value_at_every_budget k Ψ Γ self_app (SA_Self Γ)).
+Qed.
+
+(** The converse of the bridge is false: the loop has a value at every finite
+    budget and no value at all at the unlimited budget. *)
+Lemma bounded_evaluation_is_not_unbounded : forall Φ Γ,
+  sat Φ = true ->
+  eval (Fin 0) Φ Γ self_app (EBot BUndefined)
+  /\ (forall n, exists v, eval (Fin n) Φ Γ self_app v)
+  /\ (forall v, ~ (Φ ; Γ ⊢ self_app ⇓ v)).
+Proof.
+  intros Φ Γ Hsat. split; [| split].
+  - apply Eval_OutOfFuel.
+  - intros n. apply self_app_has_value_at_every_budget.
+  - intros v. apply self_app_diverges. exact Hsat.
+Qed.
+
+(** So the two judgements are different relations. Nobody may assume they
+    coincide. *)
+Lemma eval_fin_does_not_imply_eval_inf :
+  ~ (forall n Φ Γ e v, eval (Fin n) Φ Γ e v -> eval Inf Φ Γ e v).
+Proof.
+  intros Hconv.
+  destruct (bounded_evaluation_is_not_unbounded pc_true · sat_pc_true) as [Hfin [_ Hinf]].
+  apply (Hinf (EBot BUndefined)). apply (Hconv 0%nat). exact Hfin.
+Qed.
+
 
