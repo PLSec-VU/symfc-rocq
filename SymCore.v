@@ -733,15 +733,15 @@ Axiom merge_preserves_whnf : forall Γ e,
 Axiom cast_expr_whnf : forall Γ e γ,
   Whnf Γ e -> Whnf Γ (cast_expr e γ).
 
-(** Primitive reduction produces a first-order solvable expression (SMT / Grisette contract - Axiom 2) *)
+(** Primitive reduction produces a solvable expression (§3.2, SMT contract - Axiom 2) *)
 Axiom reduce_prim_solvable : forall Γ p args,
-  Solvable Γ (reduce_prim p args) /\ is_op_app (reduce_prim p args) = false.
+  Solvable Γ (reduce_prim p args).
 
 (** WHNF follows directly from being solvable *)
 Lemma reduce_prim_whnf : forall Γ p args,
   Whnf Γ (reduce_prim p args).
 Proof.
-  intros. apply Whnf_Solvable. apply (proj1 (reduce_prim_solvable Γ p args)).
+  intros. apply Whnf_Solvable. apply reduce_prim_solvable.
 Qed.
 
 (** Unspooling an application spine preserves the operator head property *)
@@ -782,17 +782,6 @@ Proof.
     | [ H : sat Φ = false |- _ ] =>
         rewrite Hsat in H; discriminate
     end.
-Qed.
-
-(** The result of primitive reduction cannot be applied as a function *)
-Lemma eval_app_reduce_prim_false : forall Φ Γ p args a v,
-  sat Φ = true ->
-  eval Φ Γ (EApp (reduce_prim p args) a) v ->
-  False.
-Proof.
-  intros Φ Γ p args a v Hsat Heval.
-  destruct (reduce_prim_solvable Γ p args) as [Hsolv Hnotop].
-  eapply solvable_app_eval_false; eassumption.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
