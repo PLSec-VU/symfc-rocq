@@ -3982,6 +3982,14 @@ Qed.
   instead. scratch/CompletenessNeedsFuel.v proves this. So completeness is
   stated for programs with no stuck subterm, and the predicate no_stuck below
   is what says that.
+
+  WHAT THE HYPOTHESIS DOES NOT HAVE TO SAY. A leaf that calls no solver - no
+  branch, no case, no cast, no primitive operation - is not stuck whenever
+  its concretion has a value, and the theorem already asks for that value.
+  Section 13.2 proves it, and the leaf clause of no_stuck asks for nothing
+  else in that case. Only a leaf that does call the solver still has to be
+  handed a value, because no property of a term survives merge, cast_expr or
+  reduce_prim; Section 13.2 says where each of the three blocks the proof.
 *)
 
 (** ------------------------------------------------------------------------- *)
@@ -4020,7 +4028,547 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 13.2 The No-Stuck-Subterm Hypothesis                                      *)
+(** 13.2 Solver-Free Leaves Prove Their Own Progress                          *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  A leaf of the branch tree needs no hypothesis at all when it makes no call
+  to the solver. This section proves that, and Section 13.3 uses it to weaken
+  the leaf clause of the no-stuck hypothesis.
+
+  A term is SOLVER-FREE when it holds none of the four shapes whose value
+  comes from an axiom instead of from a rule: EIf, the symbolic branch;
+  ECase, which folds through merge; ECast, which reduces through cast_expr;
+  and EPrimOp, which reduces through reduce_prim. What is left is the
+  applicative core - variables, literals, constructors, lambdas, closures,
+  applications, coercions, types and bottoms - which is straight-line code.
+
+  On that core completeness DELIVERS convergence instead of assuming it. If
+  the concrete run of the concretion has a value, then the symbolic run has
+  one too, and the two match. So a solver-free leaf that got stuck would drag
+  its concretion down with it, and the concrete run in the theorem's
+  hypothesis would have no value to offer.
+
+  HOW IT IS PROVED. By structural recursion on the CONCRETE derivation. Every
+  rule the concrete run uses is answered by the same rule on the symbolic
+  side. The shape of the concrete term fixes the shape of the symbolic one,
+  because the only rules of concretion that change a term's shape are the two
+  branch rules, which need an EIf, and the SMT rule Cont_Denote, which needs
+  a primitive operation at the head of the spine. A solver-free term has
+  neither.
+
+  WHY THE OTHER THREE SHAPES ARE LEFT OUT. Each of them hands the term to an
+  opaque function - merge, cast_expr or reduce_prim - and no axiom says the
+  answer is solver-free again, so the recursion has nothing left to stand on
+  past that point. ECase is worse still. Rule Case folds the alternatives
+  over merge es', and concretion relates merge es' to the concrete scrutinee
+  value, NOT to merge of that value. The axiom merge_fold_alts_equiv trades a
+  fold over merge e for a fold over e, but what it returns is a fresh
+  derivation: it is not a subterm of the derivation the recursion is taking
+  apart, and it carries no height, so recursion on the height of a derivation
+  is blocked in the same place as structural recursion. Only a fact saying
+  that concretion survives merge ON THE CONCRETE SIDE would close that gap,
+  and this development has no such fact and does not assume one.
+*)
+
+Inductive solver_free : expr -> Prop :=
+  | SF_Var : forall x, solver_free (EVar x)
+  | SF_Lit : forall l, solver_free (ELit l)
+  | SF_Con : forall d, solver_free (ECon d)
+  | SF_App : forall f a, solver_free f -> solver_free a -> solver_free (EApp f a)
+  | SF_Lam : forall x body, solver_free body -> solver_free (ELam x body)
+  | SF_Clos : forall Γ x body,
+      solver_free_env Γ -> solver_free body -> solver_free (EClos Γ x body)
+  | SF_Coercion : forall γ, solver_free (ECoercion γ)
+  | SF_Type : forall τ, solver_free (EType τ)
+  | SF_Bot_Undefined : solver_free (EBot BUndefined)
+  | SF_Bot_Unreachable : solver_free (EBot BUnreachable)
+  | SF_Bot_Raise : forall e, solver_free e -> solver_free (EBot (BRaise e))
+
+with solver_free_env : environment -> Prop :=
+  | SFEnv_Empty : solver_free_env ·
+  | SFEnv_Extend : forall x Γ' e rest,
+      solver_free e ->
+      solver_free_env Γ' ->
+      solver_free_env rest ->
+      solver_free_env (ExtendEnv x (MkClosure Γ' e) rest).
+
+Scheme solver_free_mut := Induction for solver_free Sort Prop
+with solver_free_env_mut := Induction for solver_free_env Sort Prop.
+
+Scheme contains_mut := Induction for contains Sort Prop
+with contains_alt_mut := Induction for contains_alt Sort Prop
+with contains_env_mut := Induction for contains_env Sort Prop.
+
+(** A solver-free term is a ConCore term: it has no EIf anywhere, and every
+    environment it carries is concrete. *)
+Lemma solver_free_concore_mut :
+  (forall e (H : solver_free e), concore_expr e)
+  /\ (forall Γ (H : solver_free_env Γ), concrete_env Γ).
+Proof.
+  split.
+  - apply (solver_free_mut (fun e _ => concore_expr e) (fun Γ _ => concrete_env Γ));
+      intros; constructor; assumption.
+  - apply (solver_free_env_mut (fun e _ => concore_expr e) (fun Γ _ => concrete_env Γ));
+      intros; constructor; assumption.
+Qed.
+
+Lemma solver_free_concore : forall e, solver_free e -> concore_expr e.
+Proof. apply solver_free_concore_mut. Qed.
+
+Ltac sf_apply :=
+  repeat match goal with
+  | [ H : solver_free ?e -> solver_free ?f |- solver_free ?f ] => apply H
+  | [ H : solver_free_env ?e -> solver_free_env ?f |- solver_free_env ?f ] => apply H
+  end; assumption.
+
+Ltac sf_case :=
+  intros;
+  try match goal with
+      | [ H : solver_free _ |- _ ] => inversion H; subst
+      | [ H : solver_free_env _ |- _ ] => inversion H; subst
+      end;
+  try assumption; try (constructor; sf_apply).
+
+(** Concretion keeps a term inside the solver-free fragment. A symbolic
+    variable goes to a literal and a residual SMT term goes to a literal;
+    everything else keeps its shape. *)
+Lemma contains_preserves_solver_free_mut :
+  (forall σ S es ec, contains σ S es ec -> solver_free es -> solver_free ec)
+  /\ (forall σ S Γs Γc, contains_env σ S Γs Γc -> solver_free_env Γs -> solver_free_env Γc).
+Proof.
+  split; intros σ S.
+  - apply (contains_mut σ S
+             (fun es ec _ => solver_free es -> solver_free ec)
+             (fun a ac _ => True)
+             (fun Γs Γc _ => solver_free_env Γs -> solver_free_env Γc));
+      try sf_case.
+  - apply (contains_env_mut σ S
+             (fun es ec _ => solver_free es -> solver_free ec)
+             (fun a ac _ => True)
+             (fun Γs Γc _ => solver_free_env Γs -> solver_free_env Γc));
+      try sf_case.
+Qed.
+
+Lemma contains_solver_free : forall σ S es ec,
+  contains σ S es ec -> solver_free es -> solver_free ec.
+Proof. apply contains_preserves_solver_free_mut. Qed.
+
+(** A solver-free term has no primitive operation at the head of its spine,
+    so Rule App-Prim and the SMT rule of concretion cannot fire on it. *)
+Lemma solver_free_is_op_app : forall e, solver_free e -> is_op_app e = false.
+Proof.
+  intros e H. induction H; simpl; try reflexivity. assumption.
+Qed.
+
+Lemma solver_free_no_primop_head : forall e p args,
+  solver_free e -> unspool_app e [] = (EPrimOp p, args) -> False.
+Proof.
+  intros e p args Hsf Hun.
+  apply unspool_is_op_app in Hun.
+  rewrite (solver_free_is_op_app e Hsf) in Hun. discriminate.
+Qed.
+
+Lemma solver_free_is_cast : forall e, solver_free e -> is_cast e = false.
+Proof. intros e H. destruct H; reflexivity. Qed.
+
+(** Concretion matches environment domains exactly. The direction proved in
+    Section 9 reads the symbolic side; this one reads the concrete side. *)
+Lemma contains_env_lookup_none_rev : forall σ S Γs Γc x,
+  contains_env σ S Γs Γc ->
+  lookup_env Γc x = None ->
+  lookup_env Γs x = None.
+Proof.
+  intros σ S Γs Γc x H.
+  induction H as [| y Γs' Γc' es ec rest_s rest_c Hy Henv IHenv Hcont Hcon Hrest IHrest];
+    intros Hnone.
+  - reflexivity.
+  - simpl in *. destruct (string_dec x y); [discriminate | apply IHrest; exact Hnone].
+Qed.
+
+Lemma contains_env_lookup_rev : forall σ S Γs Γc x Γ'c ec,
+  contains_env σ S Γs Γc ->
+  lookup_env Γc x = Some (Γ'c, ec) ->
+  exists Γ's es,
+    lookup_env Γs x = Some (Γ's, es)
+    /\ contains_env σ S Γ's Γ'c
+    /\ contains σ S es ec.
+Proof.
+  intros σ S Γs Γc x Γ'c ec H.
+  induction H as [| y Γs0 Γc0 es0 ec0 rest_s rest_c Hy Henv IHenv Hcont Hcon Hrest IHrest];
+    intros Hlook.
+  - simpl in Hlook. discriminate.
+  - simpl in *. destruct (string_dec x y) as [Heq | Hne].
+    + injection Hlook as Hg He. subst.
+      exists Γs0, es0. split; [reflexivity | split; assumption].
+    + destruct (IHrest Hlook) as [Γ's [es [Hl [He Hc]]]].
+      exists Γ's, es. split; [exact Hl | split; assumption].
+Qed.
+
+Lemma solver_free_env_lookup : forall Γ x Γ' e,
+  solver_free_env Γ ->
+  lookup_env Γ x = Some (Γ', e) ->
+  solver_free_env Γ' /\ solver_free e.
+Proof.
+  intros Γ x Γ' e H.
+  induction H as [| y Γ0 e0 rest He0 HΓ0 IHΓ0 Hrest IHrest]; intros Hlook.
+  - simpl in Hlook. discriminate.
+  - simpl in Hlook. destruct (string_dec x y) as [Heq | Hne].
+    + injection Hlook as Hg He. subst. split; assumption.
+    + apply IHrest. exact Hlook.
+Qed.
+
+(** A solver-free term that is already a value on the symbolic side has a
+    value for its concretion too. Rule App-Spine needs this: the rule fires
+    only on an operator that is NOT a value, and it is the concrete run that
+    reports that. *)
+Lemma whnf_contains_solver_free : forall σ S Γs Γc es ec,
+  contains_env σ S Γs Γc ->
+  contains σ S es ec ->
+  solver_free es ->
+  Whnf Γs es ->
+  Whnf Γc ec.
+Proof.
+  intros σ S Γs Γc es ec Henv Hcont Hsf Hwhnf.
+  destruct Hwhnf as [e Hsolv | d | b | Γd x body | γ | τ | eb γ Hwb | ec0 et ef Hsc Hwt Hwf].
+  - destruct Hsolv as [l | x Hnone | p | f a Hop Hf Ha].
+    + apply contains_lit_inv in Hcont. subst. apply Whnf_Solvable. apply Solvable_Lit.
+    + inversion Hcont; subst.
+      * apply Whnf_Solvable. apply Solvable_Var.
+        eapply contains_env_lookup_none; eassumption.
+      * apply Whnf_Solvable. apply Solvable_Lit.
+      * kill_denote.
+    + inversion Hsf.
+    + exfalso. inversion Hsf as [| | | f0 a0 Hsf_f Hsf_a | | | | | | |]; subst.
+      simpl in Hop. rewrite (solver_free_is_op_app f Hsf_f) in Hop. discriminate.
+  - apply contains_con_inv in Hcont. subst. apply Whnf_Con.
+  - inversion Hcont; subst; [apply Whnf_Bot | kill_denote].
+  - apply contains_clos_inv in Hcont as [Γc0 [bodyc [Heq [Hsx [Henv0 Hcb]]]]]. subst.
+    apply Whnf_Clos.
+  - inversion Hcont; subst; [apply Whnf_Coercion | kill_denote].
+  - inversion Hcont; subst; [apply Whnf_Type | kill_denote].
+  - inversion Hsf.
+  - inversion Hsf.
+Qed.
+
+(** Kill a case in which the symbolic term would have to be a branch, a case,
+    a cast or a primitive operation. *)
+Ltac not_solver_free :=
+  exfalso;
+  match goal with
+  | [ H : solver_free (EIf _ _ _) |- _ ] => inversion H
+  | [ H : solver_free (ECase _ _) |- _ ] => inversion H
+  | [ H : solver_free (ECast _ _) |- _ ] => inversion H
+  | [ H : solver_free (EPrimOp _) |- _ ] => inversion H
+  end.
+
+(** Inversion of concretion read from the CONCRETE side. Section 9 inverts it
+    from the symbolic side; the recursion below walks the concrete derivation
+    and so needs the other direction. *)
+Lemma contains_clos_rev : forall σ S fs Γc x bc,
+  contains σ S fs (EClos Γc x bc) ->
+  solver_free fs ->
+  exists Γs bs,
+    fs = EClos Γs x bs /\ S x = false
+    /\ contains_env σ S Γs Γc /\ contains σ S bs bc.
+Proof.
+  intros σ S fs Γc x bc Hcont Hsf.
+  inversion Hcont; subst; try not_solver_free.
+  eexists; eexists. split; [reflexivity | split; [assumption | split; assumption]].
+Qed.
+
+(**
+  Completeness on the solver-free fragment, by structural recursion on the
+  concrete derivation.
+
+  The budget plays no part here. The symbolic run answers at the unlimited
+  budget, because a solver-free term holds no branch, and a branch is the
+  only reason the symbolic run ever has to visit a piece of the program the
+  concrete run skipped.
+
+  The recursion also reports that the symbolic value is solver-free again.
+  Rule App-Spine is what needs that: it evaluates the operator and then
+  applies the result, so the value it computed is the next term the recursion
+  is handed.
+*)
+Fixpoint solver_free_completeness_fix (k0 : fuel) (Ψ : path_condition) (Γc : environment)
+  (e_con v_con : expr) (Heval : eval k0 Ψ Γc e_con v_con) {struct Heval} :
+  k0 = Inf -> sat Ψ = true ->
+  forall Φ Γs σ S e_sym,
+    σ ⊨ Φ ->
+    contains_env σ S Γs Γc ->
+    contains σ S e_sym e_con ->
+    solver_free e_sym ->
+    solver_free_env Γs ->
+    exists v_sym,
+      eval Inf Φ Γs e_sym v_sym /\ contains σ S v_sym v_con /\ solver_free v_sym.
+Proof.
+  destruct Heval as
+    [ kv Ψ0 Γ0 x Γ' e0 e' Hlookup Hev_x
+    | kv Ψ0 Γ0 x Hnone
+    | kv Ψ0 Γ0 l
+    | kv Ψ0 Γ0 d
+    | kv Ψ0 Γ0 e0 γ e' Hev_e
+    | kv Ψ0 Γ0 Γ' x eb ea eb' Hev_b
+    | kv Ψ0 Γ0 ef ea ef' er Hnotwhnf Hnocast Hev_f Hev_app2
+    | kv Ψ0 Γ0 b
+    | kv Ψ0 Γ0 ef ea p args args' Hunspool Harity Hargs
+    | kv Ψ0 Γ0 x e0
+    | kv Ψ0 Γ0 ef γ ea γ_a γ_r er Hdecomp Hev_pushed
+    | kv Ψ0 Γ0 b ea
+    | kv Ψ0 Γ0 es alts es' er Hev_es Hfold
+    | kv Ψ0 Γ0 ec et ef ec' et' ef' pc_c Hev_c Hpc Hev_t Hev_f
+    | kv Ψ0 Γ0 γ
+    | kv Ψ0 Γ0 e0 Hunsat
+    | kv Ψ0 Γ0 τ
+    | Ψ0 Γ0 e0
+    ]; intros Hk0 Hsat; try discriminate Hk0; subst kv;
+    intros Φ Γs σ S e_sym Hmod Henv Hcont Hsf Hsfenv.
+  - (* Rule Var *)
+    inversion Hcont; subst; try not_solver_free.
+    destruct (contains_env_lookup_rev σ S Γs Γ0 x Γ' e0 Henv Hlookup)
+      as [Γ's [es [Hlooks [Henv' Hcont']]]].
+    destruct (solver_free_env_lookup Γs x Γ's es Hsfenv Hlooks) as [Hsfenv' Hsfes].
+    destruct (solver_free_completeness_fix Inf Ψ0 Γ' e0 e' Hev_x eq_refl Hsat
+                Φ Γ's σ S es Hmod Henv' Hcont' Hsfes Hsfenv')
+      as [v_sym [Hev [Hcv Hsfv]]].
+    exists v_sym. split; [| split; assumption].
+    eapply Eval_Var; [exact Hlooks | exact Hev].
+  - (* Rule Sym-Var *)
+    inversion Hcont; subst; try not_solver_free.
+    exists (EVar x). split; [| split].
+    + apply Eval_SymVar. eapply contains_env_lookup_none_rev; eassumption.
+    + apply Cont_Var_Bound. assumption.
+    + apply SF_Var.
+  - (* Rule Lit: the symbolic side is the literal itself, a symbolic variable
+       the model sends to it, or a residual SMT term - and the last one has a
+       primitive operation at its head, so it is not solver-free *)
+    inversion Hcont as
+      [ | y Hsy Heqs Heqc | l0 Heqs Heqc | | | | | | | | | | | | | es p args l0 Hun Har Hg Hden ];
+      subst; try not_solver_free.
+    + exists (EVar y). split; [| split].
+      * apply Eval_SymVar.
+        destruct (contains_env_sym_free σ S Γs Γ0 Henv) as [Hfree _].
+        apply Hfree. assumption.
+      * apply Cont_Var_Sym. assumption.
+      * apply SF_Var.
+    + exists (ELit l). split; [apply Eval_Lit | split; [apply Cont_Lit | apply SF_Lit]].
+    + exfalso. eapply solver_free_no_primop_head; eassumption.
+  - (* Rule Con *)
+    inversion Hcont; subst; try not_solver_free.
+    exists (ECon d). split; [apply Eval_Con | split; [apply Cont_Con | apply SF_Con]].
+  - (* Rule Cast: a cast is not solver-free *)
+    inversion Hcont; subst; try not_solver_free.
+  - (* Rule App-Abs *)
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+      subst; try not_solver_free.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    destruct (contains_clos_rev σ S fs Γ' x eb Hcont_f Hsf_f)
+      as [Γ's [ebs [Heqf [Hsx [Henv_clos Hcont_b]]]]]. subst fs.
+    inversion Hsf_f as [ | | | | | Γ's0 x0 b0 Hsf_env' Hsf_ebs | | | | | ]; subst.
+    assert (Henv_ext : contains_env σ S (extend_env Γ's x Γs as_) (extend_env Γ' x Γ0 ea)).
+    { apply Cont_Env_Extend; try assumption.
+      apply solver_free_concore. eapply contains_solver_free; eassumption. }
+    assert (Hsfenv_ext : solver_free_env (extend_env Γ's x Γs as_))
+      by (apply SFEnv_Extend; assumption).
+    destruct (solver_free_completeness_fix Inf Ψ0 (extend_env Γ' x Γ0 ea) eb eb'
+                Hev_b eq_refl Hsat Φ (extend_env Γ's x Γs as_) σ S ebs
+                Hmod Henv_ext Hcont_b Hsf_ebs Hsfenv_ext)
+      as [v_sym [Hev [Hcv Hsfv]]].
+    exists v_sym. split; [| split; assumption].
+    apply Eval_AppAbs. exact Hev.
+  - (* Rule App-Spine *)
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+      subst; try not_solver_free.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    destruct (solver_free_completeness_fix Inf Ψ0 Γ0 ef ef' Hev_f eq_refl Hsat
+                Φ Γs σ S fs Hmod Henv Hcont_f Hsf_f Hsfenv)
+      as [fs' [Hev_fs [Hcv_f Hsf_fs']]].
+    assert (Hcont2 : contains σ S (EApp fs' as_) (EApp ef' ea))
+      by (apply Cont_App; assumption).
+    assert (Hsf2 : solver_free (EApp fs' as_)) by (apply SF_App; assumption).
+    destruct (solver_free_completeness_fix Inf Ψ0 Γ0 (EApp ef' ea) er Hev_app2
+                eq_refl Hsat Φ Γs σ S (EApp fs' as_) Hmod Henv Hcont2 Hsf2 Hsfenv)
+      as [v_sym [Hev2 [Hcv Hsfv]]].
+    exists v_sym. split; [| split; assumption].
+    eapply Eval_AppSpine.
+    + intros Hw. apply Hnotwhnf.
+      eapply whnf_contains_solver_free; eassumption.
+    + apply solver_free_is_cast. assumption.
+    + exact Hev_fs.
+    + exact Hev2.
+  - (* Rule Bot *)
+    inversion Hcont; subst; try not_solver_free.
+    exists (EBot b). split; [apply Eval_Bot | split; [apply Cont_Bot | assumption]].
+  - (* Rule App-Prim: the spine has a primitive operation at its head *)
+    exfalso.
+    eapply solver_free_no_primop_head;
+      [ eapply contains_solver_free; eassumption | exact Hunspool ].
+  - (* Rule Lam *)
+    inversion Hcont; subst; try not_solver_free.
+    inversion Hsf; subst.
+    eexists. split; [apply Eval_Lam | split].
+    + apply Cont_Clos; assumption.
+    + apply SF_Clos; assumption.
+  - (* Rule App-Cast: a cast operator is not solver-free *)
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+      subst; try not_solver_free.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    inversion Hcont_f; subst; try not_solver_free.
+  - (* Rule App-Bot *)
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+      subst; try not_solver_free.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    inversion Hcont_f; subst; try not_solver_free.
+    exists (EBot b). split; [apply Eval_AppBot | split; [apply Cont_Bot | assumption]].
+  - (* Rule Case: a case is not solver-free *)
+    inversion Hcont; subst; try not_solver_free.
+  - (* Rule If: a branch is not solver-free *)
+    inversion Hcont; subst; try not_solver_free.
+  - (* Rule Coercion *)
+    inversion Hcont; subst; try not_solver_free.
+    exists (ECoercion (subst_coerc Γs γ)). split; [apply Eval_Coercion | split].
+    + apply subst_coerc_contains_env. assumption.
+    + apply SF_Coercion.
+  - (* Rule Prune: the path condition of the concrete run is satisfiable *)
+    rewrite Hunsat in Hsat. discriminate.
+  - (* Rule Type *)
+    inversion Hcont; subst; try not_solver_free.
+    exists (EType (subst_type Γs τ)). split; [apply Eval_Type | split].
+    + apply subst_type_contains_env. assumption.
+    + apply SF_Type.
+Qed.
+
+(**
+  Completeness on the solver-free fragment. This is the lemma the leaf clause
+  of no_stuck leans on: a solver-free leaf whose concretion has a concrete
+  value has a symbolic value, so it is not stuck.
+*)
+Lemma solver_free_completeness : forall Φ Γs Γc σ S e_sym e_con v_con,
+  σ ⊨ Φ ->
+  contains_env σ S Γs Γc ->
+  contains σ S e_sym e_con ->
+  solver_free e_sym ->
+  solver_free_env Γs ->
+  Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+  exists v_sym, Φ ; Γs ⊢ e_sym ⇓ v_sym /\ contains σ S v_sym v_con.
+Proof.
+  intros Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hsf Hsfenv Hevalc.
+  destruct (solver_free_completeness_fix Inf pc_true Γc e_con v_con Hevalc eq_refl
+              sat_pc_true Φ Γs σ S e_sym Hmod Henv Hcont Hsf Hsfenv)
+    as [v_sym [Hev [Hcv Hsfv]]].
+  exists v_sym. split; assumption.
+Qed.
+
+(**
+  What the leaf clause of no_stuck asks for. Either the leaf makes no solver
+  call, and then the concrete run in the theorem's hypothesis already says it
+  is not stuck (solver_free_completeness above); or the leaf does make one,
+  and then the only handle this development has on it is a value at the
+  unlimited budget.
+
+  The first alternative is what makes the hypothesis weaker than it was.
+  Straight-line code used to have to be shown to converge, which is what
+  completeness is for. Now it is shown to be straight-line code, and the
+  convergence comes out of the proof.
+*)
+Definition leaf_not_stuck (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
+  (solver_free e /\ solver_free_env Γ) \/ (exists v, Φ ; Γ ⊢ e ⇓ v).
+
+Lemma leaf_not_stuck_of_terminating : forall Φ Γ e,
+  (exists v, Φ ; Γ ⊢ e ⇓ v) -> leaf_not_stuck Φ Γ e.
+Proof. intros Φ Γ e Hv. right. exact Hv. Qed.
+
+Lemma leaf_not_stuck_of_solver_free : forall Φ Γ e,
+  solver_free e -> solver_free_env Γ -> leaf_not_stuck Φ Γ e.
+Proof. intros Φ Γ e Hsf Henv. left. split; assumption. Qed.
+
+(** A leaf that satisfies the clause, and whose concretion the concrete run
+    answers, has a symbolic value. This is the leaf case of the proof below,
+    pulled out so that what the clause buys is visible on its own. *)
+Lemma leaf_not_stuck_converges : forall Φ Γs Γc σ S e e_con v_con,
+  σ ⊨ Φ ->
+  contains_env σ S Γs Γc ->
+  contains σ S e e_con ->
+  Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+  leaf_not_stuck Φ Γs e ->
+  exists v, Φ ; Γs ⊢ e ⇓ v.
+Proof.
+  intros Φ Γs Γc σ S e e_con v_con Hmod Henv Hcont Hevalc [[Hsf Hsfenv] | Hv].
+  - destruct (solver_free_completeness Φ Γs Γc σ S e e_con v_con
+                Hmod Henv Hcont Hsf Hsfenv Hevalc) as [v [Hev _]].
+    exists v. exact Hev.
+  - exact Hv.
+Qed.
+
+(**
+  Why the leaf clause cannot simply drop its last premise for every leaf
+  whose top node is not a branch.
+
+  is_if e = false says only that the TOP of the leaf is not a branch. A
+  branch further down is still a branch, and concretion resolves it: the
+  concrete side keeps the arm the model takes and never looks at the other
+  one. The program below is the counterexample. Its operator is a branch
+  whose untaken arm is a stuck application, so the whole application has no
+  value at all - eval_app_if_false in Section 10 says an application whose
+  operator is a branch is stuck outright - while its concretion is an
+  ordinary redex that the concrete run answers.
+
+  So a leaf clause that asked for nothing, or that asked only for
+  is_if e = false, would be false. What the clause asks instead is that the
+  leaf calls no solver, and a branch anywhere inside it is a solver call.
+*)
+Section BranchAtTheTopIsNotEnough.
+
+  Variables (σ : valuation) (S : symvars) (x y : var) (l : lit).
+
+  Hypothesis Hsx : S x = true.
+  Hypothesis Hmodx : σ ⊨ (PCVar x).
+  Hypothesis Hsy : S y = false.
+
+  Definition hidden_branch : expr :=
+    EApp (EIf (EVar x) (ELam y (EVar y)) (EApp (ELit l) (ELit l))) (ELit l).
+
+  Definition hidden_branch_con : expr := EApp (ELam y (EVar y)) (ELit l).
+
+  Lemma hidden_branch_not_if : is_if hidden_branch = false.
+  Proof. reflexivity. Qed.
+
+  Lemma hidden_branch_contains : contains σ S hidden_branch hidden_branch_con.
+  Proof.
+    apply Cont_App; [| apply Cont_Lit].
+    apply Cont_If_True.
+    - exists (PCVar x). split; [| exact Hmodx].
+      intros Γ Hfree. simpl. rewrite (Hfree x Hsx). reflexivity.
+    - apply Cont_Lam; [exact Hsy | apply Cont_Var_Bound; exact Hsy].
+  Qed.
+
+  Lemma hidden_branch_con_concore : concore_expr hidden_branch_con.
+  Proof. apply Con_App; [apply Con_Lam; apply Con_Var | apply Con_Lit]. Qed.
+
+  Lemma hidden_branch_con_converges : ⊢ᶜ hidden_branch_con ⇓ᶜ ELit l.
+  Proof.
+    unfold hidden_branch_con, eval_con.
+    eapply Eval_AppSpine.
+    - intros Hw. inversion Hw as [e0 Hsolv | | | | | | | ]; subst. inversion Hsolv.
+    - reflexivity.
+    - apply Eval_Lam.
+    - apply Eval_AppAbs. eapply Eval_Var.
+      + simpl. destruct (string_dec y y); [reflexivity | congruence].
+      + apply Eval_Lit.
+  Qed.
+
+  Lemma hidden_branch_has_no_value : forall Φ Γ v,
+    sat Φ = true -> ~ (Φ ; Γ ⊢ hidden_branch ⇓ v).
+  Proof.
+    intros Φ Γ v Hsat Hev.
+    eapply eval_app_if_false; [exact Hev | exact Hsat | reflexivity | reflexivity].
+  Qed.
+
+End BranchAtTheTopIsNotEnough.
+
+(** ------------------------------------------------------------------------- *)
+(** 13.3 The No-Stuck-Subterm Hypothesis                                      *)
 (** ------------------------------------------------------------------------- *)
 
 (**
@@ -4043,10 +4591,19 @@ Qed.
     of the budget, and the only place the predicate tolerates a loop.
 
   At the bottom (Rule NS_Leaf): the term is not a branch, it is the
-  concretion's counterpart, and it has a value at the unlimited budget. That
-  last clause is the no-stuck condition proper. It says only that a value
-  exists; which value it is, and that it matches the concrete run, is what
-  the theorem proves.
+  concretion's counterpart, and it is not stuck. leaf_not_stuck in Section
+  13.2 is what says the last part, and it offers two ways to say it. Either
+  the leaf makes no call to the solver - no branch, no case, no cast, no
+  primitive operation - and then it is not stuck for free, because the
+  concrete run the theorem is handed already proves that
+  (solver_free_completeness). Or the leaf does call the solver, and then all
+  this development can ask of it is a value at the unlimited budget.
+
+  THE SECOND ALTERNATIVE STILL SAYS "CONVERGES", AND THAT IS TOO MUCH. It is
+  what is left after the first alternative has taken the straight-line code
+  away. Section 13.2 says exactly which step blocks the rest: merge, and the
+  two other opaque solver functions, over which no syntactic property of a
+  term survives.
 
   WHY THE PREDICATE MENTIONS e_con. It has to know which arm the model takes,
   because only the other arm may loop. The verdict is models_cond σ S ec for
@@ -4063,7 +4620,7 @@ Inductive no_stuck (σ : valuation) (S : symvars)
   | NS_Leaf : forall Φ Γ e e_con,
       is_if e = false ->
       contains σ S e e_con ->
-      (exists v, Φ ; Γ ⊢ e ⇓ v) ->
+      leaf_not_stuck Φ Γ e ->
       no_stuck σ S Φ Γ e e_con
   | NS_Then : forall Φ Γ ec et ef ec' pc e_con,
       (forall n, eval (Fin n) Φ Γ ec ec') ->
@@ -4092,8 +4649,24 @@ Proof.
   - apply Cont_If_False; assumption.
 Qed.
 
+(**
+  The leaf clause this predicate used to carry asked the leaf for a value at
+  the unlimited budget. It is still a rule of the predicate, derived rather
+  than assumed, so nothing that satisfied the old hypothesis fails the new
+  one: the hypothesis of the completeness theorem only got weaker.
+*)
+Lemma NS_Leaf_converging : forall σ S Φ Γ e e_con,
+  is_if e = false ->
+  contains σ S e e_con ->
+  (exists v, Φ ; Γ ⊢ e ⇓ v) ->
+  no_stuck σ S Φ Γ e e_con.
+Proof.
+  intros σ S Φ Γ e e_con Hnotif Hcont Hv.
+  apply NS_Leaf; [exact Hnotif | exact Hcont | apply leaf_not_stuck_of_terminating; exact Hv].
+Qed.
+
 (** ------------------------------------------------------------------------- *)
-(** 13.3 Completeness, Upward Closed in the Budget                            *)
+(** 13.4 Completeness, Upward Closed in the Budget                            *)
 (** ------------------------------------------------------------------------- *)
 
 (**
@@ -4111,7 +4684,9 @@ Qed.
   skipped arm answered, the value still matches the concrete one.
 
   Where the budget comes from at the bottom. The leaf has an unlimited-budget
-  derivation, so concore_soundness gives it a concrete value, and
+  derivation - it was assumed to have one, or, for straight-line code, the
+  concrete run gives it one through leaf_not_stuck_converges. Then
+  concore_soundness gives it a concrete value, and
   concore_eval_deterministic identifies that value with the one the theorem
   was handed - a concrete program has at most one. eval_inf_has_budget then
   turns the leaf's unlimited-budget derivation into a finite one, and its
@@ -4129,11 +4704,13 @@ Lemma completeness_upward : forall σ S Φ Γs e_sym e_con,
 Proof.
   intros σ S Φ Γs e_sym e_con H.
   induction H as
-    [ Φ Γ e e_con Hnotif Hcont [v Hv]
+    [ Φ Γ e e_con Hnotif Hcont Hleaf
     | Φ Γ ec et ef ec' pc e_con Hguard Hmc Hmc' Hpc Htot Hns IH
     | Φ Γ ec et ef ec' pc e_con Hguard Hmnc Hmnc' Hpc Htot Hns IH ];
     intros Γc v_con Hmod Henv Hcon Hevalc.
   - (* the leaf: soundness carries the concrete run back, determinism pins the value *)
+    destruct (leaf_not_stuck_converges Φ Γ Γc σ S e e_con v_con
+                Hmod Henv Hcont Hevalc Hleaf) as [v Hv].
     destruct (concore_soundness Φ Γ Γc σ S e e_con v Hmod Henv Hcont Hcon Hv)
       as [v_con' [Hec Hcv]].
     assert (Hcenv : concrete_env Γc) by (eapply contains_env_concrete; exact Henv).
@@ -4221,7 +4798,10 @@ Qed.
       unlimited-budget value - so the finite budget is not decoration.
   (c) The hypothesis is NOT true of everything. Replace the looping arm by
       the stuck arm of scratch/CompletenessNeedsFuel.v and the predicate has
-      no derivation.
+      no derivation. Since the leaf clause was weakened, the reason has moved:
+      see the note on stuck_arm_has_no_concrete_value at the end of the
+      section for where it moved to, and why the theorem is still not saying
+      anything about a stuck program.
 
   The section takes the model, the symbolic variables and the guard as
   variables, exactly as Section 11 does, so nothing here is assumed globally.
@@ -4293,7 +4873,22 @@ Section CompletenessNonVacuity.
     - exact guard_judged.
     - reflexivity.
     - exists 0%nat. intros n _. apply self_app_has_value_at_every_budget.
-    - apply NS_Leaf; [reflexivity | apply Cont_Lit | exists (ELit l'); apply Eval_Lit].
+    - apply NS_Leaf; [reflexivity | apply Cont_Lit |].
+      apply leaf_not_stuck_of_terminating. exists (ELit l'). apply Eval_Lit.
+  Qed.
+
+  (** The same witness through the other half of the leaf clause. The literal
+      makes no call to the solver, so nothing about it has to be shown. *)
+  Lemma witness_no_stuck_solver_free : no_stuck σ Sv Φ · live_branch (ELit l').
+  Proof.
+    eapply NS_Then with (ec' := EVar x) (pc := PCVar x).
+    - intros n. apply Eval_SymVar. reflexivity.
+    - exact guard_judged.
+    - exact guard_judged.
+    - reflexivity.
+    - exists 0%nat. intros n _. apply self_app_has_value_at_every_budget.
+    - apply NS_Leaf; [reflexivity | apply Cont_Lit |].
+      apply leaf_not_stuck_of_solver_free; [apply SF_Lit | apply SFEnv_Empty].
   Qed.
 
   (* ================= (b) completeness applies to it ====================== *)
@@ -4385,13 +4980,42 @@ Section CompletenessNonVacuity.
       destruct Htot as [h Hh].
       destruct (Hh (Datatypes.S h) ltac:(lia)) as [v Hv].
       eapply app_lit_no_value_fin; [exact Hfeas | exact Hv].
-    - (* the model takes the stuck arm, so it must have an unlimited-budget value *)
+    - (* the model takes the stuck arm, so the stuck arm is the leaf, and the
+         leaf has to be the concretion's counterpart. The other arm's literal
+         is the concretion here, and applying a literal is not a literal. *)
       assert (Hec : ec' = EVar x)
         by (eapply eval_symvar_fin_same with (k := 0%nat) (Γ := ·);
             [reflexivity | exact HsatPhi | apply (Hguard 1%nat)]).
       subst ec'. simpl in Hpc. injection Hpc as Hpc. subst pc.
-      inversion Hns as [ Φ1 Γ1 e1 ec1 Hnotif1 Hcont1 [v Hv] | | ]; subst.
-      + eapply app_lit_no_value_inf; [exact Hfeas | exact Hv].
+      inversion Hns as [ Φ1 Γ1 e1 ec1 Hnotif1 Hcont1 Hleaf | | ]; subst.
+      + unfold stuck_arm in Hcont1. inversion Hcont1; subst.
+        match goal with
+        | [ Hun : unspool_app _ (@nil expr) = (EPrimOp _, _) |- _ ] =>
+            simpl in Hun; discriminate Hun
+        end.
+  Qed.
+
+  (**
+    Where the weight moved.
+
+    The stuck arm used to be refused because the leaf clause demanded a value
+    and this arm has none. The leaf clause no longer demands one of code that
+    calls no solver, and this arm calls none, so the refusal above now comes
+    from the concretion instead: the leaf must be the counterpart of the
+    concrete term the theorem runs, and this leaf is not.
+
+    Nothing is lost, because the concrete run is the other place the same
+    fact is written down. A stuck arm that IS its own concretion does satisfy
+    the predicate now - and then completeness says nothing about it, because
+    its concrete run has no value either, which is the lemma below. That is
+    the whole point of the weakening: for straight-line code, "not stuck" is
+    something the concrete run already says, so the hypothesis should not ask
+    for it a second time.
+  *)
+  Lemma stuck_arm_has_no_concrete_value : forall v, ~ (⊢ᶜ stuck_arm ⇓ᶜ v).
+  Proof.
+    intros v Hv. unfold stuck_arm, eval_con in Hv.
+    eapply app_lit_no_value_inf; [apply sat_pc_true | exact Hv].
   Qed.
 
 End CompletenessNonVacuity.
