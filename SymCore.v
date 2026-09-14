@@ -610,6 +610,31 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
       eval Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
       eval Φ Γ (EApp (ECast ef γ) ea) er
 
+  (**
+    Rule App-Cast-Opaque: applying a VALUE that carries a coercion which is
+    not an arrow.
+
+    Figure 3 has no rule for this shape, and without one the judgement is
+    stuck there: Rule App-Cast wants a coercion that splits into an argument
+    coercion and a result coercion, and this one does not split; Rule
+    App-Spine wants an operator that is not yet a value, and a cast over a
+    value is a value. A coercion that is not an arrow says nothing about the
+    argument, so applying the cast applies what the solver makes of the
+    value under it.
+
+    ConCore.v used to assume this rule instead of stating it (Axiom
+    cast_expr_eval_app), which hid it from Figure 3 and, because the
+    assumption did not exclude arrow coercions, also gave an arrow cast a
+    second value. Concrete evaluation needs the rule - see ConCore.v,
+    Section 12.5 - so it is written down here, arrows excluded.
+  *)
+  | Eval_AppCastOpaque : forall Φ Γ eb eb' γ ea v,
+      decomp_coerc_arrow γ = None ->
+      Whnf Γ eb ->
+      eval Φ Γ eb eb' ->
+      eval Φ Γ (EApp (cast_expr eb' γ) ea) v ->
+      eval Φ Γ (EApp (ECast eb γ) ea) v
+
   (** Rule App-Bot: Propagation of bottom in function position *)
   | Eval_AppBot : forall Φ Γ b ea,
       eval Φ Γ (EApp (EBot b) ea) (EBot b)
@@ -914,6 +939,8 @@ Proof.
     end.
   - (* Eval_AppCast *)
     inversion Hsolv; subst; try discriminate.
+  - (* Eval_AppCastOpaque *)
+    inversion Hsolv; subst; try discriminate.
   - (* Eval_AppBot *)
     inversion Hsolv; subst; try discriminate.
   - (* Eval_Prune *)
@@ -973,6 +1000,7 @@ Proof.
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
     | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | Φ Γ eb eb' γ ea v Hdecomp Hwhnf Heval_b Heval_pushed
     | Φ Γ b ea
     | Φ Γ es alts es' er Heval_es Hfold
     | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -1005,6 +1033,8 @@ Proof.
       * exact (IH Hstl).
   - (* Eval_Lam *) inversion Hsolv.
   - (* Eval_AppCast: a cast is not solvable *)
+    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
+  - (* Eval_AppCastOpaque: a cast is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
   - (* Eval_AppBot: a bottom is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
@@ -1043,6 +1073,10 @@ Proof.
       lia.
     + (* Eval_AppCast: v_f cannot be a cast *)
       rewrite <- H in Hsolv. inversion Hsolv.
+    + (* Eval_AppCastOpaque: v_f cannot be a cast *)
+      match goal with
+      | [ H : ECast ?b ?g = ?w |- _ ] => rewrite <- H in Hsolv; inversion Hsolv
+      end.
     + (* Eval_AppBot: v_f cannot be a bottom *)
       rewrite <- H2 in Hsolv. inversion Hsolv.
     + (* Eval_Prune: pc_true is always satisfiable *)

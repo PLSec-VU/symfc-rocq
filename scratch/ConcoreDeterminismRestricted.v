@@ -21,3 +21,37 @@ Proof.
   intros. apply Con_App; [| apply Con_Con].
   apply Con_Cast. apply Con_Lam. apply Con_Lam. apply Con_Var.
 Qed.
+
+(* ------------------------------------------------------------------- *)
+(* What the repair did to all of this.                                  *)
+(* ------------------------------------------------------------------- *)
+
+(* Counterexample 2 is no longer a counterexample. Rule App-Spine refuses
+   an operator whose coercion is an arrow, so the term keeps only the value
+   Rule App-Cast gives it. *)
+Lemma ce2_term_has_one_value :
+  (forall Γ0 x body γ, cast_expr (EClos Γ0 x body) γ = EClos Γ0 x body) ->
+  forall v, · ⊢ᶜ EApp coerced_operator plain_operand ⇓ᶜ v ->
+  v = EClos (extend_env · "x" · coerced_operand) "z" (EVar "x").
+Proof. exact casted_application_value_unique. Qed.
+
+(* But restricting only the EXPRESSION is still not enough. A ConCore
+   expression can be a variable, and the environment is unrestricted, so it
+   can bind that variable to the dead branch of counterexample 1. *)
+Lemma restriction_must_reach_the_environment : forall (x y : var),
+  sat (pc_true ∧ PCVar y) = false ->
+  ~ ConcoreEvalDeterministic.
+Proof. exact unsatisfiable_guard_in_environment_breaks_concore_determinism. Qed.
+
+(* Restrict the environment the same way and it holds. This is the
+   statement ConCore.v proves. *)
+Lemma concore_determinism_in_a_concore_environment : forall Γ e v1 v2,
+  concrete_env Γ -> concore_expr e ->
+  Γ ⊢ᶜ e ⇓ᶜ v1 -> Γ ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
+Proof. exact concore_eval_deterministic. Qed.
+
+(* A whole program starts in the empty environment, so for programs the
+   restriction on the expression alone is enough after all. *)
+Lemma concore_program_determinism : forall e v1 v2,
+  concore_expr e -> ⊢ᶜ e ⇓ᶜ v1 -> ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
+Proof. exact concore_eval_deterministic_top. Qed.

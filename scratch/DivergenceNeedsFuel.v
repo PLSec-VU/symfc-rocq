@@ -127,12 +127,15 @@ Proof.
   - (* Rule App-Spine *)
     inversion HL; subst.
     + (* head is the literal lambda w; Rule Lam turns it into the closure *)
-      assert (Hef : ef' = EClos Γ floop loop_body) by (apply (eval_w Φ Γ ef' Hsat H0)).
+      assert (Hef : ef' = EClos Γ floop loop_body) by (apply (eval_w Φ Γ ef' Hsat H1)).
       subst ef'. apply IHeval2; [exact Hsat | apply LC_ClosW].
     + exfalso. apply H. apply Whnf_Clos.
     + (* head is f; the chain resolves it to the closure *)
-      destruct (eval_loop_var Φ Γ H4 Hsat ef' H0) as [Γ0 Hef]. subst ef'.
-      apply IHeval2; [exact Hsat | apply LC_ClosVar; exact H4].
+      match goal with
+      | [ HR : ResolvesToW Γ |- _ ] =>
+          destruct (eval_loop_var Φ Γ HR Hsat ef' H1) as [Γ0 Hef]; subst ef';
+          apply IHeval2; [exact Hsat | apply LC_ClosVar; exact HR]
+      end.
     + exfalso. apply H. apply Whnf_Clos.
   - (* Rule App-Prim *)
     inversion HL; subst; unfold omega, loop_body, w in H; simpl in H;
@@ -157,6 +160,7 @@ Proof.
   intros Φ Γ v H. unfold omega.
   eapply Eval_AppSpine with (ef' := EClos Γ floop loop_body).
   - apply w_not_whnf.
+  - reflexivity.
   - unfold w. apply Eval_Lam.
   - apply Eval_AppAbs. exact H.
 Qed.
