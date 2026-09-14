@@ -198,23 +198,17 @@ Qed.
 (** ========================================================================= *)
 
 (**
-  In SymCore, any variable x with lookup_env Γ x = None is treated as an
-  uninterpreted symbolic variable (Axiom Solvable_Var).
-  In ConCore, concrete evaluation requires that all variables accessed in an
-  expression are concrete (bound in the environment), so that no symbolic
-  variables are present.
+  SymCore treats a variable that Γ does not bind as an uninterpreted symbolic
+  variable (Axiom Solvable_Var). ConCore requires every variable an expression
+  reads to be bound, so no symbolic variable is left.
 *)
 
-(** A variable x is concrete (bound) in environment Γ *)
 Definition is_concrete_var (Γ : environment) (x : var) : Prop :=
   exists Γ' e, lookup_env Γ x = Some (Γ', e).
 
-(** An expression e is evaluated in a concrete context (Γ, e) if none of its
-    free variables are symbolic (i.e. every free variable is bound in Γ). *)
 Definition concrete_context (Γ : environment) (e : expr) : Prop :=
   forall x, In x (fv e) -> is_concrete_var Γ x.
 
-(** Closed expressions contain no free variables at all *)
 Definition closed_expr (e : expr) : Prop :=
   forall x, ~ In x (fv e).
 
@@ -224,7 +218,6 @@ Definition closed_expr (e : expr) : Prop :=
 (** 7. Properties of Concrete Contexts                                         *)
 (** ========================================================================= *)
 
-(** A symbolic variable (unbound in Γ) is never in a concrete context *)
 Lemma sym_var_not_concrete_context : forall Γ x,
   lookup_env Γ x = None ->
   ~ concrete_context Γ (EVar x).
@@ -235,7 +228,6 @@ Proof.
   rewrite Hlookup in Heq. discriminate.
 Qed.
 
-(** A bound variable is in a concrete context *)
 Lemma bound_var_concrete_context : forall Γ x Γ' e,
   lookup_env Γ x = Some (Γ', e) ->
   concrete_context Γ (EVar x).
@@ -245,7 +237,6 @@ Proof.
   - contradiction.
 Qed.
 
-(** In the empty environment, concrete_context is equivalent to closed_expr *)
 Lemma concrete_context_empty_closed : forall e,
   concrete_context · e <-> closed_expr e.
 Proof.
@@ -257,7 +248,6 @@ Proof.
     exfalso. apply (Hclosed x Hin).
 Qed.
 
-(** Concrete context distributes over applications *)
 Lemma concrete_context_app : forall Γ f a,
   concrete_context Γ (EApp f a) <->
   concrete_context Γ f /\ concrete_context Γ a.
@@ -282,14 +272,12 @@ Proof.
   apply (concrete_context_app Γ f a) in H as [_ Ha]. exact Ha.
 Qed.
 
-(** Concrete context for casts *)
 Lemma concrete_context_cast : forall Γ e γ,
   concrete_context Γ (ECast e γ) <-> concrete_context Γ e.
 Proof.
   intros Γ e γ. unfold concrete_context. simpl. reflexivity.
 Qed.
 
-(** Extending the environment preserves bound variables *)
 Lemma is_concrete_var_extend : forall Γ x y Γ' e,
   is_concrete_var Γ y ->
   is_concrete_var (extend_env Γ x Γ' e) y.
@@ -301,7 +289,6 @@ Proof.
   - exists Γ0, e0. assumption.
 Qed.
 
-(** The newly extended variable is always concrete in the extended environment *)
 Lemma is_concrete_var_extend_self : forall Γ x Γ' e,
   is_concrete_var (extend_env Γ x Γ' e) x.
 Proof.
@@ -311,7 +298,6 @@ Proof.
   - exfalso. apply Hneq. reflexivity.
 Qed.
 
-(** Helper: membership in remove *)
 Lemma in_remove_helper : forall x y l,
   In y l -> y <> x -> In y (remove string_dec x l).
 Proof.
@@ -321,7 +307,6 @@ Proof.
   - destruct Hin; [subst; left; reflexivity | right; auto].
 Qed.
 
-(** Lambda body has a concrete context under the extended environment *)
 Lemma concrete_context_lam_extend : forall Γ x body Γ' ea,
   concrete_context Γ (ELam x body) ->
   concrete_context (extend_env Γ x Γ' ea) body.
@@ -338,11 +323,9 @@ Qed.
 (** 8. Concrete Evaluation Semantics and Preservation                         *)
 (** ========================================================================= *)
 
-(** Concrete evaluation is SymCore evaluation under the canonical trivial path condition pc_true *)
 Definition eval_con (Γ : environment) (e : expr) (v : expr) : Prop :=
   eval Inf pc_true Γ e v.
 
-(** Notation for concrete big-step reduction: Γ ⊢ᶜ e ⇓ᶜ v *)
 Notation "Γ '⊢ᶜ' e '⇓ᶜ' v" := (eval_con Γ e v) (at level 70, no associativity).
 Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con · e v) (at level 70, no associativity).
 
@@ -350,16 +333,14 @@ Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con · e v) (at level 70, no associati
 (** 8.1 SMT & Grisette Solver Behaviors for Concrete Evaluation               *)
 (** ------------------------------------------------------------------------- *)
 
-(** SMT solver & Grisette evaluation behaviors:
-    1. Primitive operations reduce to concrete terms in ConCore.
-    2. State merging on a ConCore term preserves ConCore syntax.
-    3. Coercion casts preserve ConCore syntax. *)
 (**
-  Primitive reduction stays inside ConCore WHEN ITS ARGUMENTS DO. The
-  hypothesis matters: concore_expr excludes EIf, so an unconditional version
-  would say the theory solver never returns a branch - not even when an
-  argument is itself a branch. That is precisely the erasure that the
-  repaired reduce_prim_solvable in SymCore.v is there to permit.
+  The theory solver, state merging and coercion casts are external to this
+  development. The three assumptions below say that none of them introduces a
+  symbolic branch, so a ConCore term stays in ConCore.
+
+  Primitive reduction stays inside ConCore only WHEN ITS ARGUMENTS DO.
+  concore_expr excludes EIf, so an unconditional version would say the theory
+  solver never returns a branch, not even when an argument is itself a branch.
 *)
 Axiom reduce_prim_concore : forall p args,
   Forall concore_expr args ->
@@ -372,28 +353,6 @@ Axiom merge_concore : forall e,
 Axiom cast_expr_concore : forall e γ,
   concore_expr e ->
   concore_expr (cast_expr e γ).
-
-(**
-  REMOVED: Axiom cast_expr_eval_app.
-
-    forall Φ Γ eb eb' γ ea v,
-      Φ; Γ ⊢ eb ⇓ eb' ->
-      Φ; Γ ⊢ EApp (cast_expr eb' γ) ea ⇓ v ->
-      Φ; Γ ⊢ EApp (ECast eb γ) ea ⇓ v
-
-  It was not a fact about the solver at all. It was a RULE of the judgement,
-  written as an assumption, and the rules could not derive a single instance
-  of it (Section 12.5). Two things were wrong with that. It was invisible in
-  Figure 3, so the calculus on paper was not the calculus in the proofs; and
-  because it said nothing about the coercion, it also handed an arrow cast
-  the value that Rule App-Cast denies it, which is one of the two reasons
-  concrete evaluation was not deterministic.
-
-  It is gone, and nothing replaced it. Rule App-Spine now refuses every cast
-  operator, which leaves the shape stuck on the symbolic and the concrete
-  side at once, so soundness never needs the step. Section 12.5 tells the
-  whole story.
-*)
 
 (** ------------------------------------------------------------------------- *)
 (** 8.2 Mutual Induction Scheme for Big-Step Semantics                        *)
@@ -494,16 +453,15 @@ Qed.
 (** ------------------------------------------------------------------------- *)
 
 (**
-  ConCore closure under evaluation, as a pair of mutually recursive fixpoints
-  rather than by the auto-derived mutual induction scheme. Rule App-Prim needs
-  the statement for every argument of its Forall2 (eval (dec f) Φ Γ) args args'
-  in order to feed the repaired (argument-conditional) reduce_prim_concore, and
-  the derived scheme supplies no induction hypothesis under a Forall2.
+  A pair of mutually recursive fixpoints, not the auto-derived mutual
+  induction scheme. Rule App-Prim needs the statement for every argument of
+  its Forall2 (eval (dec f) Φ Γ) args args' in order to feed the
+  argument-conditional reduce_prim_concore, and the derived scheme supplies no
+  induction hypothesis under a Forall2.
 
   The statement holds at every fuel, so it takes the fuel as a parameter and
-  asks nothing of it. Rule Out-Of-Fuel answers EBot BUndefined, and that is a
-  ConCore expression, so the case closes with the same constructor as Rule
-  Bot. Nothing here needs the budget to be unlimited.
+  asks nothing of it. Rule Out-Of-Fuel answers EBot BUndefined, which is a
+  ConCore expression.
 *)
 Fixpoint concore_eval_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
   (Heval : eval f0 Φ Γ e v) {struct Heval} :
@@ -628,8 +586,6 @@ Proof.
     exact (concore_fold_closed_fix Inf pc_true Γ e alts er Hfold sat_pc_true).
 Qed.
 
-(** ConCore Closure under Evaluation:
-    Concrete evaluation in a concrete environment never escapes ConCore. *)
 Lemma concore_eval_closed : forall Γ e v,
   concrete_env Γ ->
   concore_expr e ->
@@ -642,7 +598,6 @@ Proof.
   apply Heval_closed with (Φ := pc_true) (Γ := Γ) (e := e); auto.
 Qed.
 
-(** Closed ConCore expressions evaluate to ConCore values *)
 Corollary concore_eval_closed_top : forall e v,
   concore_expr e ->
   ⊢ᶜ e ⇓ᶜ v ->
@@ -653,7 +608,6 @@ Proof.
   constructor.
 Qed.
 
-(** Closed Source System FC expressions evaluate to ConCore values *)
 Corollary source_eval_closed : forall e v,
   source_expr e ->
   ⊢ᶜ e ⇓ᶜ v ->
@@ -669,20 +623,9 @@ Qed.
 (** ========================================================================= *)
 
 (**
-  An SMT valuation σ maps symbolic variables to concrete terms.
-  Under valuation σ and path condition Φ:
-  1. Symbolic variables are instantiated to concrete values: σ(x).
-  2. Symbolic branching (EIf ec et ef) collapses to the single feasible
-     branch according to whether σ ⊨ ec or σ ⊨ ¬ec.
-  3. The resulting expression e_con contains no EIf and belongs to ConCore.
-*)
-
-(** SMT valuation mapping symbolic variable names to concrete expressions *)
-(**
-  SMT valuation: a model returned by the solver assigns every symbolic
-  variable a value of its sort, and the values of an SMT sort are exactly the
-  literals. The old type var -> expr was too generous, in three ways that all
-  matter for soundness:
+  A model returned by the solver assigns every symbolic variable a value of
+  its sort, and the values of an SMT sort are exactly the literals. Three
+  things force the range to be lit rather than expr:
 
   - concore_expr (σ x) is required, or Cont_Var_Sym would inject a symbolic
     branch into a supposedly concrete term;
@@ -695,29 +638,26 @@ Qed.
 
   Literals satisfy all three, and nothing weaker does.
 *)
+
 Definition valuation : Type := var -> lit.
 
 (**
   The symbolic variables of a run: the SMT-level unknowns the symbolic
-  execution is parametric in. FIXED for a whole derivation.
+  execution is parametric in. The set is FIXED for a whole derivation.
 
-  Why a fixed set and not the evaluation environment Γ. "x is symbolic" has
-  to mean the same thing everywhere in one derivation, and in SymCore it does
-  not if it is read off Γ. Rule Var evaluates a closure body in the STORED
-  environment Γ' but the surrounding judgement lives in the AMBIENT
+  It is a fixed set and not the evaluation environment Γ, because "x is
+  symbolic" has to mean the same thing everywhere in one derivation and it
+  does not if it is read off Γ. Rule Var evaluates a closure body in the
+  STORED environment Γ' while the surrounding judgement lives in the AMBIENT
   environment Γ, and SymCore's environments are raw association lists with no
-  freshness discipline, so a variable can be unbound (hence symbolic) in Γ'
-  and bound in Γ. dev/probe1.v exhibits exactly that: Γ binds x to the
-  closure (∅, y) and also binds y, so the value y of that closure is symbolic
-  where it is produced and captured where it is used. Indexing concretion by
-  Γ therefore has no sound transport across Rule Var.
+  freshness discipline. A variable can therefore be unbound, hence symbolic,
+  in Γ' and bound in Γ, so concretion indexed by Γ has no sound transport
+  across Rule Var.
 
-  Indexing by a fixed symvars instead makes concretion environment
-  independent, and the freshness discipline SymCore lacks is recovered where
-  it belongs: every binder in a term or environment related by `contains` is
-  required to be non-symbolic. That requirement lives inside `contains` and
-  `contains_env`, so the soundness statement needs no extra hypothesis of its
-  own.
+  A fixed symvars makes concretion environment independent. The freshness
+  discipline lives inside `contains` and `contains_env`, which require every
+  binder in a related term or environment to be non-symbolic, so the soundness
+  statement needs no extra hypothesis of its own.
 *)
 Definition symvars : Type := var -> bool.
 
@@ -733,33 +673,25 @@ Parameter models : valuation -> path_condition -> Prop.
 
 Notation "σ '⊨' Φ" := (models σ Φ) (at level 70, no associativity).
 
-(** A satisfiable model implies SMT satisfiability *)
+(** `sat` reports satisfiability, so a formula with a model is satisfiable. *)
 Axiom models_sat : forall σ Φ,
   σ ⊨ Φ -> sat Φ = true.
 
-(** SMT solver semantics: valuation satisfies conjunction iff it satisfies both conjuncts *)
+(** The SMT theory reads ∧ as conjunction. *)
 Axiom models_and_iff : forall σ Φ1 Φ2,
   σ ⊨ (Φ1 ∧ Φ2) <-> σ ⊨ Φ1 /\ σ ⊨ Φ2.
 
 (**
-  SMT solver evaluation on boolean conditions, RELATIVE TO THE SYMBOLIC
-  VARIABLES the condition may mention.
+  e denotes the formula pc: read in any environment that binds no symbolic
+  variable, e converts to pc.
 
   The S parameter is not decoration. expr_to_pc Γ (EVar x) is None exactly
-  when Γ binds x, so "e denotes a path-condition formula" is only stable if
-  the variables of e are known not to be bound. The previous models_cond had
-  no such parameter and its totality axiom quantified over EVERY Γ; since one
-  can always exhibit a Γ that binds x, that made models_cond σ e refutable
-  for ANY e mentioning a variable - which is to say, for exactly the
-  conditions symbolic execution exists to reason about.
-*)
-(**
-  e denotes the formula pc: read in any environment that binds no symbolic
-  variable, e converts to pc. Quantifying over those environments rather than
-  fixing one is what makes the judgement scope independent, and it is the
-  reason S appears. Dropping S and reading e in the empty environment alone
-  would admit a condition whose variables the ambient environment captures,
-  and eval_models_cond then forces models to be empty on variable atoms; see
+  when Γ binds x, so "e denotes a path-condition formula" is stable only if
+  the variables of e are known not to be bound. Quantifying over every
+  sym-free environment, rather than fixing the empty one, is what makes the
+  judgement scope independent. Fixing the empty environment would allow a
+  condition whose variables the ambient environment captures, and
+  eval_models_cond would then force models to be empty on variable atoms; see
   the note on eval_models_cond below.
 *)
 Definition denotes (S : symvars) (e : expr) (pc : path_condition) : Prop :=
@@ -792,7 +724,6 @@ Proof.
   exact Hmod.
 Qed.
 
-(** Conversely, a denoted condition is judged exactly as its formula is. *)
 Lemma models_cond_denotes : forall σ S e pc,
   denotes S e pc -> (models_cond σ S e <-> σ ⊨ pc).
 Proof.
@@ -809,10 +740,6 @@ Proof.
   - intros H. exists pc. split; assumption.
 Qed.
 
-(** Whenever the SMT solver can judge a condition's truth value at all, that
-    condition is expressible as a path-condition formula in every environment
-    that binds none of the symbolic variables: expr_to_pc never fails on a
-    judgeable condition read in a scope that does not capture it. *)
 Lemma models_cond_total : forall σ S Γ e,
   sym_free_env S Γ ->
   models_cond σ S e \/ models_not_cond σ S e ->
@@ -822,9 +749,8 @@ Proof.
     exists pc; apply Hden; exact Hfree.
 Qed.
 
-(** A condition the solver can judge, read in a scope that does not capture
-    it, is solvable there. This is what rules out every evaluation rule
-    except App-Prim in eval_models_cond below. *)
+(** This is what rules out every evaluation rule except App-Prim in
+    eval_models_cond_residue below. *)
 Lemma models_cond_solvable : forall σ S Γ e,
   sym_free_env S Γ -> models_cond σ S e \/ models_not_cond σ S e -> Solvable Γ e.
 Proof.
@@ -840,12 +766,10 @@ Qed.
 (**
   The SMT theory's own reading of a primitive operation: the literal the
   solver gives to that operation applied to literal arguments. It is external
-  to this development in exactly the way lit and primop already are, and it
-  is the only new opaque constant the repair needs.
+  to this development in exactly the way lit and primop already are.
 *)
 Parameter prim_value : primop -> list lit -> lit.
 
-(** The value a model gives to a path-condition formula. *)
 Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
   match pc with
   | PCVar x => σ x
@@ -855,10 +779,9 @@ Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
 
 (**
   e has SMT value l under σ: e reads off a formula in every scope that does
-  not capture it, and the model gives that formula the value l. Reusing
-  `denotes` rather than introducing a second evaluator keeps the scoping
-  discipline of S, and keeps the new notion tied to the formulas the solver
-  is actually asked about.
+  not capture it, and the model gives that formula the value l. Building on
+  `denotes` instead of a second evaluator keeps the scoping discipline of S,
+  and ties the notion to the formulas the solver is actually asked about.
 *)
 Definition denote (σ : valuation) (S : symvars) (e : expr) (l : lit) : Prop :=
   exists pc, denotes S e pc /\ pc_value σ pc = l.
@@ -954,17 +877,14 @@ Qed.
   variable" well defined; see the comment on symvars.
 *)
 Inductive contains (σ : valuation) (S : symvars) : expr -> expr -> Prop :=
-  (** A non-symbolic variable stands for itself on both sides *)
   | Cont_Var_Bound : forall x,
       S x = false ->
       contains σ S (EVar x) (EVar x)
 
-  (** A symbolic variable is instantiated to its value under σ *)
   | Cont_Var_Sym : forall x,
       S x = true ->
       contains σ S (EVar x) (ELit (σ x))
 
-  (** Literals, Primitives, Constructors, Coercions, Types, Bottoms *)
   | Cont_Lit : forall l,
       contains σ S (ELit l) (ELit l)
   | Cont_PrimOp : forall p,
@@ -1014,14 +934,12 @@ Inductive contains (σ : valuation) (S : symvars) : expr -> expr -> Prop :=
     The SMT fragment is related semantically, not syntactically: a residual
     symbolic SMT term is concretized by the literal it denotes under σ.
 
-    The premises say exactly when the semantic rule is needed. The term must
-    be a SATURATED application of a primitive operation, because that is the
-    only shape whose concrete instance is not already fixed by the syntax: a
-    literal is its own instance, a symbolic variable goes to its value under
-    σ by Cont_Var_Sym, and a bare primitive operation is a function, not a
-    value of SMT sort. The term must also NOT be closed (smt_ground es =
-    false): a closed SMT term mentions no variable, so instantiation does
-    nothing to it and the structural rules already relate it to itself.
+    The premises say exactly when this rule is needed. The term must be a
+    SATURATED application of a primitive operation, the only shape whose
+    concrete instance the syntax does not already fix. The term must also NOT
+    be closed (smt_ground es = false), because a closed SMT term mentions no
+    variable, so instantiation does nothing to it and the structural rules
+    already relate it to itself.
 
     The concrete side is a literal because the concrete run has no symbolic
     variables left: every SMT term it holds is closed, and the solver's
@@ -1071,7 +989,6 @@ Ltac kill_denote :=
       destruct (cont_denote_is_app e _ _ Hun Hg) as [? [? ?]]; discriminate
   end.
 
-(** Aliases for compatibility *)
 Notation instantiates := contains.
 Notation instantiates_alt := contains_alt.
 Notation instantiates_env := contains_env.
@@ -1091,7 +1008,6 @@ Proof.
       | subst; rewrite Hx in Hy; discriminate | apply IHc; exact Hy ].
 Qed.
 
-(** Concretion matches environment domains exactly *)
 Lemma contains_env_lookup_none : forall σ S Γs Γc x,
   contains_env σ S Γs Γc ->
   lookup_env Γs x = None ->
@@ -1115,11 +1031,10 @@ Axiom reduce_prim_contains : forall σ S p args_s args_c,
 
 (**
   SMT solver behavior: reducing a primitive application preserves its SMT
-  value. This is the correctness statement for the external reducer, and it
-  is what lets the reducer COMPUTE. The old development had no such contract,
-  so the only way a reduced term could stay related to its concrete
-  counterpart was to be syntactically the same term, which is why
-  reduce_prim was forced never to compute.
+  value. This is the correctness statement for the external reducer, and it is
+  what lets the reducer COMPUTE. Without it, a reduced term could stay related
+  to its concrete counterpart only by being syntactically the same term, so
+  reduce_prim would be forced never to compute.
 *)
 Axiom reduce_prim_denote : forall σ S p args ls,
   Forall2 (denote σ S) args ls ->
@@ -1129,8 +1044,7 @@ Axiom reduce_prim_denote : forall σ S p args ls,
   SMT solver behavior: when the reducer's answer mentions no variable, it is
   a value. A closed SMT term is a number the solver already knows, and a
   reducer that returned an unevaluated closed application would simply have
-  stopped early. This is the one direction in which "reduce_prim computes" is
-  an assumption rather than a permission.
+  stopped early.
 *)
 Axiom reduce_prim_ground_value : forall p args,
   smt_ground (reduce_prim p args) = true ->
@@ -1150,25 +1064,25 @@ Axiom cast_expr_contains : forall σ S es ec γ,
   SMT condition truth preservation across evaluation, FOR MODELS OF THE PATH
   CONDITION THE EVALUATION RAN UNDER.
 
-  The hypothesis σ ⊨ Φ is what makes this an assumption about the solver
-  rather than a falsehood. Rule Prune lets any expression reduce to
-  EBot BUnreachable whenever sat Φ = false, and EBot has no path-condition
-  formula, so without tying σ to Φ this axiom said that every condition
-  becomes unjudgeable as soon as ONE unsatisfiable path condition exists -
-  which in turn made every symbolic branch unconcretisable. With σ ⊨ Φ,
-  models_sat gives sat Φ = true and Rule Prune cannot fire.
+  Both hypotheses keep the assumption from being a falsehood.
 
-  The hypothesis sym_free_env S Γ is load bearing for the same reason, and
-  only became so when models_cond stopped being abstract. Without it, take Γ
-  binding x and evaluate the condition x by Rule Var to EBot BUndefined,
-  which denotes no formula: the axiom would then prove that no model
-  satisfies the atom x, that is, it would empty out models on variables and
-  make the whole non-vacuity suite of §11 hollow. See
-  eval_models_cond_residue below for what is left once the hypothesis is
-  present: exactly one rule, App-Prim. So what these two now assume, beyond
-  what is proved, is that reduce_prim preserves both the denotation of a
-  condition and its truth under the model - an SMT solver property, which is
-  what reduce_prim is.
+  σ ⊨ Φ: Rule Prune lets any expression reduce to EBot BUnreachable whenever
+  sat Φ = false, and EBot denotes no path-condition formula. Untied from Φ,
+  the assumption would say that every condition becomes unjudgeable as soon as
+  ONE unsatisfiable path condition exists, and no symbolic branch could then
+  be concretised. Under σ ⊨ Φ, models_sat gives sat Φ = true and Rule Prune
+  cannot fire.
+
+  sym_free_env S Γ: without it, take Γ binding x and evaluate the condition x
+  by Rule Var to EBot BUndefined, which denotes no formula. The assumption
+  would then prove that no model satisfies the atom x, emptying out models on
+  variables and making the non-vacuity suite of §11 hollow.
+
+  eval_models_cond_residue below says what is left once both hypotheses are
+  present: exactly one rule, App-Prim. So these two assume, beyond what is
+  proved, that reduce_prim preserves both the denotation of a condition and
+  its truth under the model. That is an SMT solver property, and reduce_prim
+  is the SMT solver.
 *)
 Axiom eval_models_cond : forall Φ Γ S ec ec' σ,
   σ ⊨ Φ -> sym_free_env S Γ ->
@@ -1203,10 +1117,8 @@ Ltac inf_destruct H :=
   remember Inf as k eqn:Hk in H;
   revert Hk; destruct H; intro Hk; try discriminate Hk; subst.
 
-(** The residue of the two axioms above: under their own hypotheses, an
-    evaluation step out of a judgeable condition either changes nothing or is
-    a single application of Rule App-Prim. Every other rule is excluded, by
-    solvability or by Rule Prune being unreachable under a model.
+(** Every rule other than App-Prim is excluded here, by solvability or by Rule
+    Prune being unreachable under a model.
 
     Unlimited budget only: at Fin 0 Rule Out-Of-Fuel answers EBot BUndefined,
     which is neither the condition itself nor a primitive reduction. *)
@@ -1245,15 +1157,6 @@ Axiom subst_type_contains_env : forall σ S Γs Γc τ,
   contains_env σ S Γs Γc ->
   contains σ S (EType (subst_type Γs τ)) (EType (subst_type Γc τ)).
 
-(**
-  eval_prim_args_sound and fold_alts_contains used to be axioms here. Both are
-  now proved (see concore_soundness_fix / concore_soundness_fold_fix below):
-  the missing ingredient was not an external SMT/Grisette fact but a
-  strengthened induction principle that threads soundness through the
-  Forall2 argument list of Eval_AppPrim and the mutual eval/fold_alts
-  recursion, which Coq's auto-derived scheme does not provide on its own.
-*)
-
 (** ------------------------------------------------------------------------- *)
 (** 9.1 Proven Lemmas on SMT Models, Inversion, and Contexts                 *)
 (** ------------------------------------------------------------------------- *)
@@ -1278,7 +1181,6 @@ Qed.
 
 (** 9.1.2 Environment and Closure Context Lemmas *)
 
-(** Matched symbolic environments have concrete concretion environments *)
 Lemma contains_env_concrete : forall σ S Γs Γc,
   contains_env σ S Γs Γc -> concrete_env Γc.
 Proof.
@@ -1286,7 +1188,6 @@ Proof.
   induction H; [constructor | constructor; assumption].
 Qed.
 
-(** Bound variables in the environment cannot be replaced by symbolic valuation *)
 Lemma contains_var_bound : forall σ S Γs x Γ's es ec,
   sym_free_env S Γs ->
   lookup_env Γs x = Some (Γ's, es) ->
@@ -1301,9 +1202,8 @@ Proof.
   end.
 Qed.
 
-(** Dually: a symbolic variable is instantiated to its value under σ, and to
-    nothing else. This is the rule that makes the theorem say something about
-    genuinely symbolic programs. *)
+(** This is what makes the theorem say something about genuinely symbolic
+    programs. *)
 Lemma contains_var_sym : forall σ S x ec,
   S x = true ->
   contains σ S (EVar x) ec ->
@@ -1313,7 +1213,6 @@ Proof.
   inversion Hcont; subst; [congruence | congruence | kill_denote].
 Qed.
 
-(** Environment lookup preserves concore_expr *)
 Lemma lookup_env_concore : forall σ S Γs Γc x Γ's es Γ'c ec,
   contains_env σ S Γs Γc ->
   lookup_env Γs x = Some (Γ's, es) ->
@@ -1390,8 +1289,8 @@ Proof.
 Qed.
 
 (**
-  An application is the one shape the semantic rule can also produce, so the
-  inversion is now a disjunction. The second alternative carries Solvable Γ fs,
+  An application is the one shape Cont_Denote can also produce, so the
+  inversion is a disjunction. The second alternative carries Solvable Γ fs,
   which is what every caller uses to rule it out: a cast, a closure or a
   bottom in function position is not solvable, and neither is a function that
   Rule App-Spine has just declared not to be in WHNF.
@@ -1443,7 +1342,6 @@ Qed.
 
 (** 9.1.4 Proven Semantic Simulation Lemmas *)
 
-(** Higher-order coercion pushing simulation (Proven Lemma using Rule Eval_AppCast) *)
 Lemma eval_app_cast_sound : forall Φ Γs Γc σ S ef γ ea γ_a γ_r er e_con,
   σ ⊨ Φ ->
   contains_env σ S Γs Γc ->
@@ -1517,10 +1415,8 @@ Proof.
   rewrite sat_pc_true in H. discriminate.
 Qed.
 
-(** A variable in WHNF is unbound, hence symbolic, hence its own value.
-    (This replaces the former eval_evar_whnf_false, which claimed such a
-    variable could not reduce at all. That claim was only true because
-    SymCore had no Rule Sym-Var; with Rule Sym-Var it is false.) *)
+(** A variable in WHNF is unbound, hence symbolic, hence its own value. Rule
+    Sym-Var is what gives it that value. *)
 Lemma eval_evar_whnf_same : forall Γ x v,
   eval Inf pc_true Γ (EVar x) v -> Whnf Γ (EVar x) -> v = EVar x.
 Proof.
@@ -1723,7 +1619,6 @@ Proof.
   - apply eval_bot_con in Heval_f; subst. exact Heval_app.
 Qed.
 
-(** An operator spine in WHNF is solvable *)
 Lemma whnf_op_app_solvable : forall Γ f a,
   Whnf Γ (EApp f a) -> Solvable Γ (EApp f a).
 Proof.
@@ -1733,7 +1628,7 @@ Qed.
 (**
   A saturated operator spine reduces by Rule App-Prim, and its reduced
   arguments are still solvable. The second conjunct is what feeds the
-  repaired (argument-conditional) reduce_prim_solvable.
+  argument-conditional reduce_prim_solvable.
 *)
 Lemma eval_app_primop_head : forall Φ Γ f a v,
   sat Φ = true ->
@@ -1899,19 +1794,18 @@ Ltac denote_absurd :=
   end.
 
 (**
-  Symbolic evaluation of an SMT term preserves its SMT value. This is PROVED,
-  not assumed: every evaluation rule except App-Prim is excluded by the shape
-  of a denoting term (or, for Rule Prune, by the model of the path
-  condition), and App-Prim is exactly reduce_prim_denote applied to arguments
-  the recursion has already handled.
+  Symbolic evaluation of an SMT term preserves its SMT value. Every rule
+  except App-Prim is excluded by the shape of a denoting term, or, for Rule
+  Prune, by the model of the path condition. App-Prim is reduce_prim_denote
+  applied to arguments the recursion has already handled.
 
   It is a Fixpoint rather than an induction because App-Prim needs the result
   for every argument in its Forall2, which Coq's derived induction principle
   does not strengthen.
 
-  Unlimited budget only, hence the k0 = Inf premise. At Fin 0 Rule
-  Out-Of-Fuel answers EBot BUndefined, and expr_to_pc reads no formula off a
-  bottom, so the answer denotes nothing.
+  Unlimited budget only, hence the k0 = Inf premise. At Fin 0 Rule Out-Of-Fuel
+  answers EBot BUndefined, and expr_to_pc reads no formula off a bottom, so
+  the answer denotes nothing.
 *)
 Fixpoint eval_denote_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e e' : expr)
   (Heval : eval k0 Φ Γ e e') {struct Heval} :
@@ -1994,36 +1888,27 @@ Qed.
 (** ========================================================================= *)
 
 (**
-  Soundness (Rebuttal Formulation):
-  For any concrete expression e_con that is contained in a symbolic expression
-  e_sym under valuation σ ⊨ Φ, its concrete reduction is contained in the
-  symbolic reduction of e_sym.
-
   Proved as a pair of mutually recursive fixpoints rather than by plain
-  induction on the `eval`/`fold_alts` derivation: the Eval_AppPrim case
-  needs soundness for every argument in its Forall2 (eval Inf Φ Γ) args args',
-  and Eval_Case/FoldAlts_Con need it for the nested eval buried inside
-  fold_alts - neither is covered by Coq's auto-derived induction principle
-  for a mutually-recursive family, which only strengthens direct recursive
-  occurrences, not ones nested inside a Forall2 or the sibling relation.
-  Recursing through those manually (via `induction` on the embedded Forall2
-  / fold_alts proof, calling back into the very fixpoint being defined) is
-  what used to be papered over by the eval_prim_args_sound and
-  fold_alts_contains axioms.
+  induction on the `eval`/`fold_alts` derivation. The Eval_AppPrim case needs
+  soundness for every argument in its Forall2 (eval Inf Φ Γ) args args', and
+  Eval_Case/FoldAlts_Con need it for the nested eval buried inside fold_alts.
+  Coq's auto-derived induction principle for a mutually-recursive family
+  covers neither: it strengthens only direct recursive occurrences, not ones
+  nested inside a Forall2 or the sibling relation. The fixpoints recurse
+  through those by hand, by induction on the embedded Forall2 or fold_alts
+  proof, calling back into the fixpoint being defined.
 
   Unlimited budget only, hence the k0 = Inf premise on both fixpoints. The
   conclusion asks for a CONCRETE value that the symbolic value contains, and
   concrete evaluation has no budget of its own: it is fixed at Inf by
   eval_con. At Fin 0 the symbolic side answers EBot BUndefined, which
   contains only a concrete EBot BUndefined, and the concrete expression need
-  not reduce to that. Giving the concrete side a budget as well is a later
-  stage, not this one.
+  not reduce to that.
 *)
 
 (** `contains` commutes with `unspool_app`, threading an existing pointwise
     correspondence on the accumulator through the same accumulator on both
-    sides. This is what earlier let eval_app_spine_sound derive an arity
-    contradiction, and is the structural core of eval_prim_args_sound. *)
+    sides. This is the structural core of the App-Prim case of soundness. *)
 (**
   The accumulator must be non-empty and the spine saturated. Both premises
   say the same thing: the term being unspooled is a PROPER SUB-SPINE of a
@@ -2146,7 +2031,6 @@ Proof.
     + apply IH; assumption.
 Qed.
 
-(** Dually, a symbolic match miss is also a concrete match miss. *)
 Lemma find_alt_none_contains_alt : forall σ S alts altsc d,
   Forall2 (contains_alt σ S) alts altsc ->
   find_alt d alts = None ->
@@ -2538,17 +2422,14 @@ Proof.
 Qed.
 
 (**
-  The conclusion is existential: SOME concrete value matches the symbolic
-  one. The statement is left that way here.
+  The conclusion is existential: SOME concrete value matches the symbolic one.
 
   The stronger reading,
     forall v_con, Γc ⊢ᶜ e_con ⇓ᶜ v_con -> contains σ S v_sym v_con,
-  now follows for the terms the theorem is about, because Section 12.4
-  proves concrete evaluation deterministic on them: e_con is a ConCore
-  expression by hypothesis, and Γc is a ConCore environment by
-  contains_env_concrete, so e_con has at most one value and the existential
-  one is it. Deriving it costs nothing but is not done here, to keep the
-  theorem as it was stated.
+  follows for the terms the theorem is about, because Section 12.4 proves
+  concrete evaluation deterministic on them: e_con is a ConCore expression by
+  hypothesis, and Γc is a ConCore environment by contains_env_concrete, so
+  e_con has at most one value and the existential one is it.
 *)
 Theorem concore_soundness : forall Φ Γs Γc σ S e_sym e_con v_sym,
   σ ⊨ Φ ->
@@ -2582,38 +2463,35 @@ Qed.
 
 
 (**
-  The other half of this section, completeness, is in Section 13. It is
-  stated there and not here because its proof needs Section 12: a concrete
-  program has at most one value, and that is what identifies the value
-  soundness produces with the value completeness is handed.
+  The other half of this section, completeness, is in Section 13. Its proof
+  needs Section 12: a concrete program has at most one value, and that is what
+  identifies the value soundness produces with the value completeness is
+  handed.
 *)
 
 (** ========================================================================= *)
-(** 11. NonVacuity: what the repaired statement actually says                 *)
+(** 11. NonVacuity: what the statement actually says                          *)
 (** ========================================================================= *)
 
 (**
-  Six facts that the pre-repair development could not prove, and in three
-  cases actively refuted (see scratch/Audit.v, scratch/prim.v,
-  scratch/prim2.v):
+  Six facts that show the soundness theorem is not empty:
 
   (a) a free symbolic variable is genuinely instantiated to its value under
       the model, and the soundness theorem has real instances that use it;
   (b) a branch whose condition mentions a free symbolic variable DOES have a
-      concretion - the exact negation of soundness_vacuous_on_symbolic_branch;
-  (c) Rule Prune no longer kills every branch;
+      concretion;
+  (c) Rule Prune does not kill every branch;
   (d) reduce_prim is not forced to be a constant function on literals, and
-      the collapse is attributable exactly to the axiom that was weakened;
-  (e) the relation is still DISCRIMINATING: different literals, different
+      the assumption that would force it is identified;
+  (e) the relation is DISCRIMINATING: different literals, different
       constructors and different shapes stay unrelated, a symbolic SMT term
       has exactly one literal concretion, and a closed SMT term is related to
-      nothing but itself - so the repair did not buy non-vacuity with
-      triviality;
+      nothing but itself, so non-vacuity is not bought with triviality;
   (f) a primitive that really computes a function which is neither constant
-      nor the identity now lives inside the axiom set, and the soundness
-      theorem applies to a program that uses it.
+      nor the identity lives inside the axiom set, and the soundness theorem
+      applies to a program that uses it.
 
-  No new axiom is introduced by any of this: (e) and (f) use only the three
+  No new axiom is introduced by any of this. (e) and (f) use only the three
   declared in Sections 9.0 and 9.1 (prim_value, reduce_prim_denote and
   reduce_prim_ground_value), and (f) keeps its computing primitive in Section
   variables so that nothing is assumed globally.
@@ -2706,10 +2584,8 @@ Proof.
   exact Hmod.
 Qed.
 
-(** The exact negation of scratch/Audit.v's soundness_vacuous_on_symbolic_branch,
-    modulo the one premise that cannot be dispensed with: that the SMT theory
-    is non-degenerate, i.e. some model satisfies some atom. The audit theorem
-    needed no such premise because it refuted the condition for EVERY model. *)
+(** The one premise that cannot be dispensed with is non-degeneracy of the SMT
+    theory: some model must satisfy some atom. *)
 Corollary soundness_not_vacuous_on_symbolic_branch :
   (exists σ p x l, σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil))) ->
   ~ (forall σ S p x l et ef ec, ~ contains σ S (EIf (symcond p x l) et ef) ec).
@@ -2786,7 +2662,7 @@ Proof.
 Qed.
 
 (** The collapse is attributable exactly to the UNCONDITIONAL form of
-    reduce_prim_solvable, which this development no longer assumes. *)
+    reduce_prim_solvable, which this development does not assume. *)
 Corollary unconditional_solvable_forces_constancy :
   (forall Γ p args, Solvable Γ (reduce_prim p args)) ->
   forall σ S σ' S' p c l1 l2,
@@ -2822,9 +2698,9 @@ Section ReducePrimNotConstant.
     apply Cont_If_True; [exact Hc | apply Cont_Lit].
   Qed.
 
-  (** The branch premise is no longer an abstract judgement nobody can
-      discharge. models_cond is a definition now, so a caller supplies it
-      from a model of the condition's own formula and nothing else. *)
+  (** models_cond is a definition, not an abstract judgement, so a caller
+      discharges the branch premise from a model of the condition's own
+      formula and nothing else. *)
   Corollary distinct_images_survive_symbolic_conditions :
     forall σ q x l,
       σ ⊨ (PCPrim q (PCVar x :: PCLit l :: nil)) ->
@@ -2852,7 +2728,7 @@ End ReducePrimNotConstant.
 (**
   The mirror-image failure of vacuity is triviality. A relation that held of
   every pair would make the soundness theorem say nothing, exactly as a
-  relation that held of no pair did. The facts below are what stop that.
+  relation that holds of no pair does. The facts below stop that.
 *)
 
 (** Two different literals are NOT related. *)
@@ -2899,9 +2775,8 @@ Proof.
   intros σ S l x body Hcont. apply contains_lit_inv in Hcont. discriminate.
 Qed.
 
-(** The semantic rule relates a symbolic SMT term to ONE literal, the one it
-    denotes. This is the exact sense in which `contains` became semantic
-    rather than permissive: it is still a function on the SMT fragment. *)
+(** Cont_Denote relates a symbolic SMT term to ONE literal, the one it
+    denotes: `contains` is a function on the SMT fragment. *)
 Corollary smt_concretion_determined : forall σ S es l1 l2,
   denote σ S es l1 -> contains σ S es (ELit l2) -> l1 = l2.
 Proof.
@@ -2926,9 +2801,8 @@ Proof.
   exact (Hne (smt_concretion_determined σ S es l1 l2 Hden Hcont)).
 Qed.
 
-(** On CLOSED SMT terms the relation is still plain syntactic equality: the
-    semantic rule never fires where there is no symbolic variable to
-    instantiate. *)
+(** On CLOSED SMT terms the relation is plain syntactic equality: Cont_Denote
+    never fires where there is no symbolic variable to instantiate. *)
 Corollary closed_smt_term_is_rigid : forall σ S es ec,
   smt_ground es = true -> contains σ S es ec -> es = ec.
 Proof.
@@ -2940,16 +2814,13 @@ Qed.
 (* ======= (f) a primitive that computes, and soundness applied to it ===== *)
 
 (**
-  The positive counterpart of reduce_prim_cannot_compute. Everything below is
-  hypothetical in the Section's variables, so it adds no assumption to the
-  development; what it shows is that a reducer which really computes a
-  function that is NEITHER constant NOR the identity now sits inside the
-  axiom set instead of contradicting it.
+  Everything below is hypothetical in the Section's variables, so it adds no
+  assumption to the development. It shows that a reducer which really computes
+  a function that is NEITHER constant NOR the identity sits inside the axiom
+  set instead of contradicting it.
 
-  The load-bearing step is computing_primitive_concretion: the instance of
-  reduce_prim_contains that used to force reduce_prim to be constant or the
-  identity is now DERIVED from Cont_Denote, without appealing to
-  reduce_prim_contains at all.
+  The load-bearing step is computing_primitive_concretion: the concretion is
+  derived from Cont_Denote, without appealing to reduce_prim_contains at all.
 *)
 Section ComputingPrimitive.
   Variable psucc : primop.
@@ -2976,8 +2847,8 @@ Section ComputingPrimitive.
     - simpl. apply Hsucc_value.
   Qed.
 
-  (** The concretion the old axiom demanded, now available as a theorem of
-      the repaired relation. *)
+  (** The concretion, as a theorem about `contains` rather than an
+      assumption. *)
   Corollary computing_primitive_concretion : forall σ x,
     contains σ (only x) (reduce_prim psucc [EVar x])
                         (reduce_prim psucc [ELit (σ x)]).
@@ -3040,8 +2911,7 @@ Section ComputingPrimitive.
     exact (computing_primitive_concretion σ x).
   Qed.
 
-  (** succ is neither constant nor the identity, which is exactly the
-      conclusion the pre-repair development could force on it. *)
+  (** succ is neither constant nor the identity. *)
   Corollary computing_primitive_refutes_old_verdict :
     ~ ((exists l0, forall l, succ l = l0) \/ (forall l, succ l = l)).
   Proof.
@@ -3058,23 +2928,18 @@ End NonVacuity.
 (** ========================================================================= *)
 
 (**
-  Concrete evaluation runs at the satisfiable path condition pc_true, so
-  Rule Prune cannot fire at the root. Two rule overlaps used to survive that
-  and give the same concrete expression two values. One of them is gone.
+  Concrete evaluation runs at the satisfiable path condition pc_true, so Rule
+  Prune cannot fire at the root. One rule overlap survives that and gives the
+  same concrete expression two values: Rule Prune inside Rule If. Rule If
+  evaluates the branches under Φ ∧ pc_c and Φ ∧ ¬pc_c, not under Φ. One of
+  those is unsatisfiable whenever the branch is dead, which is the only reason
+  Rule Prune exists. Section 12.1 refutes the unrestricted statement with it.
 
-  Overlap 1, which REMAINS, is Rule Prune inside Rule If. Rule If evaluates
-  the branches under Φ ∧ pc_c and Φ ∧ ¬pc_c, not under Φ. One of those is
-  unsatisfiable whenever the branch is dead, which is the only reason Rule
-  Prune exists. Section 12.1 refutes the unrestricted statement with it.
+  Rule App-Cast and Rule App-Spine do not overlap: Rule App-Spine refuses
+  EVERY cast operator. Section 12.3 records what that costs and what it buys.
 
-  Overlap 2 was Rule App-Cast against Rule App-Spine. A cast whose body is
-  not in WHNF is itself not in WHNF, so both rules applied to the same
-  application, and they gave the function different arguments. Rule
-  App-Spine now refuses EVERY cast operator, so the two no longer meet.
-  Section 12.3 records what that costs and what it buys.
-
-  Rule App-Spine against Rule App-Prim is NOT a third overlap. Section 12.2
-  proves the two can never apply to the same expression.
+  Rule App-Spine and Rule App-Prim do not overlap either. Section 12.2 proves
+  the two can never apply to the same expression.
 
   What is left is deterministic, and Section 12.4 proves it: a ConCore
   expression in a ConCore environment has at most one value. Section 12.4
@@ -3252,9 +3117,8 @@ Variable closure_cast_erased :
   forall Γ0 x body γ, cast_expr (EClos Γ0 x body) γ = EClos Γ0 x body.
 
 (**
-  Rule App-Spine used to strip the cast first, which handed the function the
-  plain argument and gave the term a second value. It cannot do that any
-  more: its new premise refuses every cast operator, and this operator is a
+  Rule App-Spine cannot strip the cast and hand the function the plain
+  argument: its premise refuses every cast operator, and this operator is a
   cast.
 *)
 Lemma app_spine_refuses_the_coerced_operator :
@@ -3290,20 +3154,6 @@ Proof.
     + apply Eval_AppAbs. apply Eval_Lam.
 Qed.
 
-(**
-  REMOVED, and this is the point of the repair:
-
-    cast_overlap_breaks_con_determinism : ~ ConEvalDeterministic
-    erased_coercions_break_con_determinism
-
-  Both were proved by pitting the App-Spine value against the App-Cast value
-  of this one term. The App-Spine value is gone, so neither statement can be
-  proved that way any more, and Section 12.4 proves the opposite: this term
-  has exactly one value. Section 12.1 still refutes ConEvalDeterministic, by
-  a dead branch, so the unrestricted statement is still false; what changed
-  is that casts are no longer a second reason for it.
-*)
-
 End CastedApplication.
 
 (** ------------------------------------------------------------------------- *)
@@ -3311,8 +3161,6 @@ End CastedApplication.
 (** ------------------------------------------------------------------------- *)
 
 (**
-  What survives of determinism once Rule App-Spine refuses a cast operator.
-
   The statement below is the one that matters for soundness: a ConCore
   expression, run in an environment that binds only ConCore expressions, has
   at most one value. Both hypotheses are needed.
@@ -3330,14 +3178,10 @@ End CastedApplication.
   Everything else is rule disjointness, and the proof is one case per rule
   of the second derivation. The interesting rows:
 
-    App-Spine against App-Cast   : the new guard settles it.
+    App-Spine against App-Cast   : App-Spine's cast guard settles it.
     App-Spine against App-Prim   : Section 12.2 settles it.
     App-Spine against App-Abs    : a closure is a value.
     App-Spine against App-Bot    : a bottom is a value.
-
-  There is no longer a row for Rule App-Cast-Opaque, because there is no
-  longer such a rule. Where it used to fire, nothing fires:
-  eval_app_cast_opaque_stuck below says so.
 *)
 
 Ltac prune_absurd :=
@@ -3785,9 +3629,8 @@ Proof.
   exact (concore_eval_deterministic · e v1 v2 CEnv_Empty Hcon H1 H2).
 Qed.
 
-(** The term of Section 12.3 now has exactly one value, the one Rule
-    App-Cast gives it. The App-Spine value it used to have as well was the
-    coercion being dropped on the floor. *)
+(** The term of Section 12.3 has exactly one value, the one Rule App-Cast
+    gives it. *)
 Corollary casted_application_value_unique :
   (forall Γ0 x body γ, cast_expr (EClos Γ0 x body) γ = EClos Γ0 x body) ->
   forall v, · ⊢ᶜ EApp coerced_operator plain_operand ⇓ᶜ v ->
@@ -3848,71 +3691,28 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 12.5 What replaced Rule App-Cast-Opaque                                   *)
+(** 12.5 Applying a cast whose coercion does not split                        *)
 (** ------------------------------------------------------------------------- *)
 
 (**
-  This section used to argue that Rule App-Cast-Opaque had to be a rule.
-  That argument is superseded. Here is the history, the hole the old
-  argument found, and the guard that closes it instead.
+  Applying a cast whose coercion does not split is stuck on the symbolic side
+  and on the concrete side at once, so soundness never has to replay the step.
+  Three lemmas above establish that: eval_app_cast_opaque_stuck,
+  contains_is_cast and eval_app_if_false. The corollary just below packages
+  the last two into the step eval_app_spine_sound takes.
 
-  ConCore.v first ASSUMED the rule rather than stating it:
+  Rule App-Spine's guard tests the OPERATOR and not its coercion: it refuses
+  every cast, value or not. A guard on the coercion would let the two sides
+  disagree about whether the rule applies, because concretion can turn a
+  non-value into a value, as whnf_not_preserved_by_concretion below shows,
+  while leaving the coercion alone.
 
-    Axiom cast_expr_eval_app : forall Φ Γ eb eb' γ ea v,
-      Φ; Γ ⊢ eb ⇓ eb' ->
-      Φ; Γ ⊢ EApp (cast_expr eb' γ) ea ⇓ v ->
-      Φ; Γ ⊢ EApp (ECast eb γ) ea ⇓ v.
-
-  The assumption was then written out as Rule App-Cast-Opaque in SymCore.v.
-  The reason given was this. Soundness must replay every symbolic step on
-  the concrete side. Rule App-Spine at the time refused only an operator
-  whose coercion splits into an arrow, so it accepted a cast operator whose
-  coercion does not split, PROVIDED the operator was not yet a value. The
-  concrete operator is the same cast with the same coercion - concretion
-  does not turn a cast into anything else - but it need not still be a
-  non-value: being a value is not preserved by concretion, as
-  whnf_not_preserved_by_concretion below shows. So the concrete run could
-  arrive at "apply a VALUE carrying a coercion that does not split", where
-  Rule App-Cast wants a coercion that splits and Rule App-Spine wants an
-  operator that is not a value. The concrete run would be stuck while the
-  symbolic run walked on, and soundness would be false. Rule
-  App-Cast-Opaque was the patch for that gap.
-
-  The gap was real. The patch was not the only one, and not the right one.
-  The gap opened because Rule App-Spine's guard tested the COERCION, so the
-  two sides could disagree about whether the rule applied - the symbolic
-  side allowed the step, the concrete side did not. Rule App-Spine now
-  tests the OPERATOR instead: it refuses every cast, value or not. The two
-  sides can no longer disagree, because the test no longer mentions
-  anything that concretion can change.
-
-  Three facts carry the replacement, and all three are proved above.
-
-  1. eval_app_cast_opaque_stuck. On the shape "(e ⊲ γ) ea with γ not an
-     arrow", no rule fires at all. Symbolically at any satisfiable path
-     condition, and so concretely at pc_true as well. Both sides are stuck,
-     together. Soundness never has to replay the step, because there is no
-     step on either side.
-
-  2. contains_is_cast. If the symbolic operator is not a cast and not a
-     branch, the concrete operator is not a cast either. So a Rule
-     App-Spine step on the symbolic side always meets a non-cast operator
-     on the concrete side, and Rule App-Spine's own guard is satisfied
-     there too.
-
-  3. eval_app_if_false. An application whose operator is a branch has no
-     value. That is what excludes the one concretion rule that changes the
-     shape of a term, and it is why fact 2 may assume the operator is not a
-     branch. The corollary just below packages facts 2 and 3 into the exact
-     step eval_app_spine_sound takes.
-
-  What this costs is stated honestly: a program whose operator evaluates to
-  a cast with a non-arrow coercion now has no value. That is deliberate.
-  Such a term applies something whose coercion does not split, which is
-  applying a non-function, and System FC rejects it at type-check time.
-  This judgement has no typing rules, so it gets stuck there rather than
-  inventing an answer. scratch/OpaqueCastOperatorReachable.v holds the
-  witness program and records which of its claims flipped.
+  The cost: a program whose operator evaluates to a cast with a non-arrow
+  coercion has no value. Such a term applies something whose coercion does not
+  split, which is applying a non-function, and System FC rejects it at
+  type-check time. This judgement has no typing rules, so it gets stuck rather
+  than inventing an answer. scratch/OpaqueCastOperatorReachable.v holds the
+  witness program.
 *)
 
 (**
