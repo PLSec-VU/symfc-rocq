@@ -21,8 +21,8 @@ Import ListNotations.
 (** 1. Syntactic Restriction: ConCore as an Inductive Subset of SymCore       *)
 (** ========================================================================= *)
 
-(** ConCore expressions: System FC syntax with runtime closures, but
-    strictly excluding symbolic branching (EIf). *)
+(** ConCore expressions: System FC syntax with runtime closures and thunks,
+    but strictly excluding symbolic branching (EIf). *)
 Inductive concore_expr : expr -> Prop :=
   | Con_Var : forall x, concore_expr (EVar x)
   | Con_Lit : forall l, concore_expr (ELit l)
@@ -38,6 +38,7 @@ Inductive concore_expr : expr -> Prop :=
   | Con_Bot_Undefined : concore_expr (EBot BUndefined)
   | Con_Bot_Unreachable : concore_expr (EBot BUnreachable)
   | Con_Bot_Raise : forall e, concore_expr e -> concore_expr (EBot (BRaise e))
+  | Con_Thunk : forall Γ e, concrete_env Γ -> concore_expr e -> concore_expr (EThunk Γ e)
 
 with concore_alt : alt -> Prop :=
   | Con_Alt : forall d xs ep, concore_expr ep -> concore_alt (Alt d xs ep)
@@ -51,7 +52,8 @@ with concrete_env : environment -> Prop :=
       concrete_env (ExtendEnv x (MkClosure Γ' e) rest).
 
 (** Source System FC expressions: pure AST prior to execution,
-    excluding both runtime closures (EClos) and symbolic branching (EIf). *)
+    excluding runtime closures (EClos), runtime thunks (EThunk) and symbolic
+    branching (EIf). *)
 Inductive source_expr : expr -> Prop :=
   | Src_Var : forall x, source_expr (EVar x)
   | Src_Lit : forall l, source_expr (ELit l)
@@ -440,6 +442,24 @@ Proof.
   - constructor; [inversion Hcon; subst; assumption | assumption].
 Qed.
 
+Lemma concore_fold_left_app : forall args h,
+  Forall concore_expr args ->
+  concore_expr h ->
+  concore_expr (fold_left EApp args h).
+Proof.
+  induction args as [| a tl IH]; intros h Hargs Hh; simpl; [exact Hh |].
+  inversion Hargs; subst. apply IH; [assumption | apply Con_App; assumption].
+Qed.
+
+Lemma concore_con_value : forall Γ d args,
+  concrete_env Γ ->
+  Forall concore_expr args ->
+  concore_expr (make_con_app d (map (EThunk Γ) args)).
+Proof.
+  intros Γ d args HΓ Hargs. apply concore_fold_left_app; [| apply Con_Con].
+  induction Hargs; simpl; constructor; [apply Con_Thunk |]; assumption.
+Qed.
+
 Lemma decompose_con_app_concore : forall e d ea,
   decompose_con_app e = Some (d, ea) ->
   concore_expr e ->
@@ -512,6 +532,7 @@ Proof.
     | k Φ Γ γ
     | k Φ Γ e Hunsat
     | k Φ Γ τ
+    | k Φ Γ Γ' e e' Heval_t
     | Φ Γ e
     ]; intros Hsat Henv Hcon.
   - (* Eval_Var *)
@@ -519,19 +540,21 @@ Proof.
     exact (concore_eval_closed_fix (dec k) Φ Γ' e e' Heval_x Hsat Henv' He).
   - (* Eval_SymVar *) exact Hcon.
   - (* Eval_Lit *) constructor.
-  - (* Eval_Con *) exact Hcon.
+  - (* Eval_Con *)
+    apply concore_con_value; [exact Henv |].
+    exact (proj2 (unspool_app_concore econ [] (ECon d) args Hunspool_con Hcon (Forall_nil _))).
   - (* Eval_Cast *)
     apply cast_expr_concore.
     apply (concore_eval_closed_fix (dec k) Φ Γ e e' Heval_e Hsat Henv).
     inversion Hcon; subst; assumption.
   - (* Eval_AppAbs *)
-    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-    inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | ]; subst.
+    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
+    inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | | ]; subst.
     apply (concore_eval_closed_fix (dec k) Φ (extend_env Γ' x Γ ea) eb eb' Heval_b Hsat).
     + apply concrete_env_extend; assumption.
     + assumption.
   - (* Eval_AppSpine *)
-    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
+    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
     apply (concore_eval_closed_fix (dec k) Φ Γ (EApp ef' ea) er Heval_app2 Hsat Henv).
     apply Con_App; [| assumption].
     exact (concore_eval_closed_fix (dec k) Φ Γ ef ef' Heval_f Hsat Henv Hf).
@@ -552,15 +575,15 @@ Proof.
     constructor; [assumption |].
     inversion Hcon; subst; assumption.
   - (* Eval_AppCast *)
-    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-    inversion Hf as [| | | | | | | | e γ0 He | | | | | ]; subst.
+    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
+    inversion Hf as [| | | | | | | | e γ0 He | | | | | | ]; subst.
     apply (concore_eval_closed_fix (dec k) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed Hsat Henv).
     apply Con_Cast. apply Con_App; [assumption | apply Con_Cast; assumption].
   - (* Eval_AppBot *)
     inversion Hcon; subst. assumption.
   - (* Eval_Case *)
-    inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
+    inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | | ]; subst.
     apply (concore_fold_closed_fix (dec k) Φ Γ (merge Γ es') alts er Hfold Hsat Henv);
       [| assumption].
     apply merge_concore.
@@ -570,6 +593,9 @@ Proof.
   - (* Eval_Coercion *) constructor.
   - (* Eval_Prune *) constructor.
   - (* Eval_Type *) constructor.
+  - (* Eval_Thunk *)
+    inversion Hcon as [| | | | | | | | | | | | | | Γ0 e0 Henv' He]; subst.
+    exact (concore_eval_closed_fix (dec k) Φ Γ' e e' Heval_t Hsat Henv' He).
   - (* Eval_OutOfFuel *) constructor.
 }
 {
@@ -968,6 +994,10 @@ Inductive contains (σ : valuation) (S : symvars) : expr -> expr -> Prop :=
       contains_env σ S Γs Γc ->
       contains σ S bodys bodyc ->
       contains σ S (EClos Γs x bodys) (EClos Γc x bodyc)
+  | Cont_Thunk : forall Γs Γc es ec,
+      contains_env σ S Γs Γc ->
+      contains σ S es ec ->
+      contains σ S (EThunk Γs es) (EThunk Γc ec)
   | Cont_Cast : forall es ec γ,
       contains σ S es ec ->
       contains σ S (ECast es γ) (ECast ec γ)
@@ -1184,7 +1214,8 @@ Proof.
   - exfalso. inversion Hsolv as [| y Hnone | |]; subst. congruence.
   - left; reflexivity.
   - left; reflexivity.
-  - left; reflexivity.
+  - exfalso. apply unspool_is_con_app in H.
+    rewrite (solvable_not_con_app Γ e Hsolv) in H. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst.
     apply H. apply Whnf_Solvable. exact Hf.
@@ -1413,8 +1444,8 @@ Proof.
     [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
     [subst e_con | exfalso; exact (solvable_not_cast Γs ef γ Hsolv)].
   apply contains_cast_inv in Hcont_f as [efc [Heq_fc Hcont_ef]]; subst fc.
-  inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-  inversion Hf as [| | | | | | | | efc0 γ0 Hcon_ef | | | | | ]; subst.
+  inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
+  inversion Hf as [| | | | | | | | efc0 γ0 Hcon_ef | | | | | | ]; subst.
   assert (Hcont_pushed : contains σ S (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
                                    (ECast (EApp efc (ECast ac (sym_coerc γ_a))) γ_r)).
   { constructor. constructor; [assumption | constructor; assumption]. }
@@ -1440,10 +1471,7 @@ Qed.
 Lemma eval_con_con : forall Γ d v,
   eval Inf pc_true Γ (ECon d) v -> v = ECon d.
 Proof.
-  intros Γ d v Heval.
-  inversion Heval; subst.
-  - reflexivity.
-  - rewrite sat_pc_true in H. discriminate.
+  intros Γ d v Heval. exact (eval_con_same pc_true Γ d v sat_pc_true Heval).
 Qed.
 
 Lemma eval_bot_con : forall Γ b v,
@@ -1621,6 +1649,53 @@ Proof.
   - (* Eval_Prune *) rewrite Hsat in H. discriminate.
 Qed.
 
+Lemma unspool_app_head_of_app : forall e a,
+  fst (unspool_app (EApp e a) []) = fst (unspool_app e []).
+Proof.
+  intros e a. simpl. destruct (unspool_app e []) as [h args] eqn:Hu.
+  pose proof (unspool_app_shift e [] [a] h args Hu) as Hshift. simpl in Hshift.
+  rewrite Hshift. reflexivity.
+Qed.
+
+Lemma eval_spine_if_head_false : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  sat Φ = true ->
+  is_if e = false ->
+  is_if (fst (unspool_app e [])) = true ->
+  False.
+Proof.
+  intros Φ Γ e v Heval. inf_induction Heval; intros Hsat Hnif Hhead;
+    try (simpl in Hhead; discriminate Hhead).
+  - match goal with
+    | [ Hu : unspool_app _ [] = (ECon _, _) |- _ ] => rewrite Hu in Hhead; discriminate Hhead
+    end.
+  - rewrite unspool_app_head_of_app in Hhead.
+    destruct (is_if ef) eqn:Hif.
+    + apply (IHHeval2 eq_refl Hsat eq_refl).
+      rewrite unspool_app_head_of_app.
+      pose proof (eval_preserves_if Φ Γ ef ef' Heval1 Hsat Hif) as Hif'.
+      destruct ef'; try discriminate Hif'. reflexivity.
+    + exact (IHHeval1 eq_refl Hsat eq_refl Hhead).
+  - match goal with
+    | [ Hu : unspool_app _ [] = (EPrimOp _, _) |- _ ] => rewrite Hu in Hhead; discriminate Hhead
+    end.
+  - discriminate Hnif.
+  - congruence.
+Qed.
+
+Lemma contains_con_app_origin : forall σ S es ec,
+  contains σ S es ec ->
+  is_con_app ec = true ->
+  is_con_app es = true \/ is_if (fst (unspool_app es [])) = true.
+Proof.
+  induction 1; intros Hc; simpl in Hc; try discriminate Hc.
+  - left. reflexivity.
+  - rewrite unspool_app_head_of_app.
+    destruct (IHcontains1 Hc) as [Hs | Hs]; [left | right]; exact Hs.
+  - right. reflexivity.
+  - right. reflexivity.
+Qed.
+
 (**
   Concretion does not invent a cast. Every rule of the relation keeps the
   head constructor, and the two rules that do not - a symbolic variable and
@@ -1643,26 +1718,21 @@ Lemma eval_con_app_whnf : forall Γc fc ac v_f v_con,
   concore_expr fc ->
   Whnf Γc fc ->
   is_op_app fc = false ->
+  is_con_app fc = false ->
   is_cast fc = false ->
   pc_true ; Γc ⊢ fc ⇓ v_f ->
   pc_true ; Γc ⊢ EApp v_f ac ⇓ v_con ->
   pc_true ; Γc ⊢ EApp fc ac ⇓ v_con.
 Proof.
-  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Hnocast Heval_f Heval_app.
+  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Hncon Hnocast Heval_f Heval_app.
   destruct fc.
   - assert (Heqv : v_f = EVar v) by (eapply eval_evar_whnf_same; eassumption).
     subst v_f. exact Heval_app.
   - apply eval_lit_con in Heval_f; subst.
     exfalso. apply (eval_app_lit_false _ _ _ _ Heval_app).
   - exfalso. eapply eval_primop_false; eassumption.
-  - apply eval_con_con in Heval_f; subst. exact Heval_app.
-  - (* a constructor spine is its own value; anything else is not a value *)
-    destruct (is_con_app (EApp fc1 fc2)) eqn:Hcon_app.
-    + destruct (is_con_app_unspool _ Hcon_app) as [d [args Hu]].
-      assert (Heq : v_f = EApp fc1 fc2)
-        by (eapply eval_con_spine_same; [apply sat_pc_true | exact Hu | exact Heval_f]).
-      subst v_f. exact Heval_app.
-    + exfalso. apply (not_op_app_not_whnf Γc fc1 fc2 Hnop Hcon_app Hwhnf).
+  - discriminate Hncon.
+  - exfalso. apply (not_op_app_not_whnf Γc fc1 fc2 Hnop Hncon Hwhnf).
   - apply not_whnf_lam in Hwhnf. contradiction.
   - exfalso. eapply eval_clos_false; eassumption.
   - apply not_whnf_case in Hwhnf. contradiction.
@@ -1674,6 +1744,7 @@ Proof.
     exfalso. apply (eval_app_type_false _ _ _ _ Heval_app).
   - inversion Hcon.
   - apply eval_bot_con in Heval_f; subst. exact Heval_app.
+  - exfalso. exact (not_whnf_thunk _ _ _ Hwhnf).
 Qed.
 
 Lemma whnf_op_app_solvable : forall Γ f a,
@@ -1772,7 +1843,7 @@ Proof.
   destruct (contains_app_inv σ S Γs ef ea e_con Hfree Hcont) as
     [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
     [subst e_con | exfalso; exact (Hnotwhnf (Whnf_Solvable Γs ef Hsolv))].
-  inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
+  inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
   destruct (IH1 Γc σ fc Hmod Henv Hcont_f Hf) as [v_f [Heval_f Hcont_vf]].
   assert (Henv_c : concrete_env Γc) by (eapply contains_env_concrete; eassumption).
   assert (Hcon_vf : concore_expr v_f) by (eapply concore_eval_closed; [exact Henv_c | exact Hf | exact Heval_f]).
@@ -1791,7 +1862,13 @@ Proof.
         eapply eval_app_primop_head in Heval_f as [p [args' [Heq Hsargs]]]; [| exact sat_pc_true | exact Hwhnf_c | exact Hop].
         subst v_f.
         eapply reduce_prim_app_false; [exact Hsargs | exact Heval_app2].
-    + eapply eval_con_app_whnf; eassumption.
+    + assert (Hncon_c : is_con_app fc = false).
+      { destruct (is_con_app fc) eqn:Hc; [exfalso | reflexivity].
+        destruct (contains_con_app_origin σ S ef fc Hcont_f Hc) as [Hcs | Hhead].
+        - apply Hnotwhnf. destruct (is_con_app_unspool ef Hcs) as [d [args Hu]].
+          exact (Whnf_Con Γs ef d args Hu).
+        - exact (eval_spine_if_head_false Φ Γs ef ef' Heval1 Hsat Hnotif Hhead). }
+      eapply eval_con_app_whnf; eassumption.
   - eapply Eval_AppSpine;
       [exact Hnot_whnf_c | exact Hnocast_c | exact Heval_f | exact Heval_app2].
 Qed.
@@ -1903,6 +1980,7 @@ Proof.
     | kv Φ Γ γ
     | kv Φ Γ eb Hunsat
     | kv Φ Γ τ
+    | kv Φ Γ Γ' eb eb' Heval_t
     | Φ Γ eb
     ]; intros Hk0; try discriminate Hk0; subst kv; intros σ S l Hmod Hfree Hden;
     try denote_absurd.
@@ -1911,7 +1989,11 @@ Proof.
     specialize (Hfree x Hsx). rewrite Hlookup in Hfree. discriminate.
   - (* Eval_SymVar *) exact Hden.
   - (* Eval_Lit *) exact Hden.
-  - (* Eval_Con *) exact Hden.
+  - (* Eval_Con: a denoting term is solvable, so its head is not a constructor *)
+    exfalso. destruct Hden as [pc [Hd _]].
+    pose proof (expr_to_pc_solvable Γ econ pc (Hd Γ Hfree)) as Hsolv.
+    apply unspool_is_con_app in Hunspool_con.
+    rewrite (solvable_not_con_app Γ econ Hsolv) in Hunspool_con. discriminate.
   - (* Eval_AppSpine: a denoting spine has a solvable, hence WHNF, operator *)
     exfalso. apply Hnotwhnf. apply Whnf_Solvable.
     destruct Hden as [pc [Hd _]].
@@ -2358,6 +2440,17 @@ Proof.
       * apply IH; assumption.
 Qed.
 
+Lemma contains_con_value : forall σ S Γs Γc d args_s args_c,
+  contains_env σ S Γs Γc ->
+  Forall2 (contains σ S) args_s args_c ->
+  contains σ S (make_con_app d (map (EThunk Γs) args_s))
+               (make_con_app d (map (EThunk Γc) args_c)).
+Proof.
+  intros σ S Γs Γc d args_s args_c Henv Hargs.
+  unfold make_con_app. apply contains_fold_left_app; [| apply Cont_Con].
+  induction Hargs; simpl; constructor; [apply Cont_Thunk |]; assumption.
+Qed.
+
 Fixpoint concore_soundness_fix (k0 : fuel) (Φ : path_condition) (Γs : environment) (e_sym v_sym : expr)
   (Heval : eval k0 Φ Γs e_sym v_sym) {struct Heval} :
   k0 = Inf ->
@@ -2401,6 +2494,7 @@ Proof.
     | kv Φ Γ γ
     | kv Φ Γ e Hunsat
     | kv Φ Γ τ
+    | kv Φ Γ Γ' e e' Heval_t
     | Φ Γ e
     ]; intros Hk0; try discriminate Hk0; subst kv; intros Γc σ S e_con Hmod Henv Hcont Hcon.
   - (* Eval_Var *)
@@ -2433,16 +2527,17 @@ Proof.
   - (* Eval_Lit *)
     apply contains_lit_inv in Hcont; subst.
     exists (ELit l). split; [apply Eval_Lit | apply Cont_Lit].
-  - (* Eval_Con: concretion keeps the constructor at the head of the spine,
-       so the concrete side is its own value too *)
+  - (* Eval_Con: concretion keeps the constructor at the head of the spine
+       and relates the fields one by one *)
     assert (Hnil : Forall2 (contains σ S) [] []) by constructor.
     destruct (contains_unspool_con σ S esp e_con Hcont [] [] Hnil d args Hunspool_con)
-      as [args_c [Hunspool_c _]].
-    exists e_con. split; [| exact Hcont].
-    unfold eval_con. exact (Eval_Con Inf pc_true Γc e_con d args_c Hunspool_c).
+      as [args_c [Hunspool_c Hargs_c]].
+    exists (make_con_app d (map (EThunk Γc) args_c)). split.
+    + unfold eval_con. exact (Eval_Con Inf pc_true Γc e_con d args_c Hunspool_c).
+    + exact (contains_con_value σ S Γ Γc d args args_c Henv Hargs_c).
   - (* Eval_Cast *)
     apply contains_cast_inv in Hcont as [ec [Heq Hcont_e]]; subst.
-    inversion Hcon as [| | | | | | | | ec0 γ0 Hcon_e | | | | | ]; subst.
+    inversion Hcon as [| | | | | | | | ec0 γ0 Hcon_e | | | | | | ]; subst.
     destruct (concore_soundness_fix Inf Φ Γ e e' Heval_e eq_refl Γc σ S ec Hmod Henv Hcont_e Hcon_e) as [vc [Hevalc Hcont_v]].
     exists (cast_expr vc γ). split; [unfold eval_con; apply Eval_Cast; exact Hevalc | apply cast_expr_contains; exact Hcont_v].
   - (* Eval_AppAbs *)
@@ -2452,8 +2547,8 @@ Proof.
       [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
       [subst e_con | exfalso; inversion Hsolv].
     apply contains_clos_inv in Hcont_f as [Γ'c [ebc [Heq_f [Hsx [Henv_clos Hcont_b]]]]]; subst.
-    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-    inversion Hf as [| | | | | | Γ0 x0 body Henv_clos_c Hcon_b | | | | | | | ]; subst.
+    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
+    inversion Hf as [| | | | | | Γ0 x0 body Henv_clos_c Hcon_b | | | | | | | | ]; subst.
     assert (Henv_ext : contains_env σ S (ExtendEnv x (MkClosure Γ ea) Γ') (ExtendEnv x (MkClosure Γc ac) Γ'c)).
     { apply Cont_Env_Extend; assumption. }
     destruct (concore_soundness_fix Inf Φ (extend_env Γ' x Γ ea) eb eb' Heval_b eq_refl
@@ -2509,7 +2604,7 @@ Proof.
              [ eapply reduce_prim_saturated; rewrite Hrt in Hunq; exact Hunq
              | exact Hg | exact Hden' ] ] ] ].
     assert (Hcont_full : contains σ S (EApp ef ea) (EApp fc ac)) by (constructor; assumption).
-    inversion Hcon as [| | | | fc0 ac0 Hcon_f Hcon_a | | | | | | | | | ]; subst.
+    inversion Hcon as [| | | | fc0 ac0 Hcon_f Hcon_a | | | | | | | | | | ]; subst.
     assert (HL : Forall2 (contains σ S) [ea] [ac])
       by (constructor; [exact Hcont_a | constructor]).
     assert (Hne : [ea] <> (@nil expr)) by discriminate.
@@ -2559,7 +2654,7 @@ Proof.
     exists (EBot b). split; [apply Eval_AppBot | constructor].
   - (* Eval_Case *)
     apply contains_case_inv in Hcont as [esc [altsc [Heq [Hcont_es Hcont_alts]]]]; subst.
-    inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
+    inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | | ]; subst.
     destruct (concore_soundness_fix Inf Φ Γ es es' Heval_es eq_refl Γc σ S esc Hmod Henv Hcont_es Hcon_es) as [vc_s [Heval_esc Hcont_vs]].
     assert (Hcont_merge : contains σ S (merge Γ es') vc_s) by (apply merge_contains; exact Hcont_vs).
     destruct (concore_soundness_fold_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl Γc σ S esc altsc Hmod Henv Hcon_es Hcon_alts
@@ -2592,6 +2687,14 @@ Proof.
     inversion Hcont; subst; [| kill_denote].
     exists (EType (subst_type Γc τ)).
     split; [apply Eval_Type | apply subst_type_contains_env; assumption].
+  - (* Eval_Thunk *)
+    inversion Hcont as [| | | | | | | | | | | Γs0 Γ'c es0 ec Henv' Hcont_e | | | | | ];
+      subst; [| kill_denote].
+    inversion Hcon as [| | | | | | | | | | | | | | Γ0 e0 Henv_c He_c]; subst.
+    destruct (concore_soundness_fix Inf Φ Γ' e e' Heval_t eq_refl Γ'c σ S ec
+                Hmod Henv' Hcont_e He_c) as [v_con [Hevalc Hcont_v]].
+    exists v_con. split; [| exact Hcont_v].
+    unfold eval_con. apply Eval_Thunk. exact Hevalc.
 }
 {
   destruct Hfold as
@@ -3525,8 +3628,7 @@ Qed.
 Lemma eval_con_inv : forall Φ Γ d v,
   sat Φ = true -> Φ ; Γ ⊢ ECon d ⇓ v -> v = ECon d.
 Proof.
-  intros Φ Γ d v Hsat Heval.
-  inversion Heval; subst; try prune_absurd; try no_con_head; reflexivity.
+  intros Φ Γ d v Hsat Heval. exact (eval_con_same Φ Γ d v Hsat Heval).
 Qed.
 
 Lemma eval_bot_inv : forall Φ Γ b v,
@@ -3555,6 +3657,13 @@ Lemma eval_type_inv : forall Φ Γ τ v,
 Proof.
   intros Φ Γ τ v Hsat Heval.
   inversion Heval; subst; try prune_absurd; try no_con_head; reflexivity.
+Qed.
+
+Lemma eval_thunk_inv : forall Φ Γ Γ' e0 v,
+  sat Φ = true -> Φ ; Γ ⊢ EThunk Γ' e0 ⇓ v -> Φ ; Γ' ⊢ e0 ⇓ v.
+Proof.
+  intros Φ Γ Γ' e0 v Hsat Heval.
+  inversion Heval; subst; try prune_absurd; try no_con_head; assumption.
 Qed.
 
 Lemma eval_cast_inv : forall Φ Γ e0 γ v,
@@ -3816,6 +3925,7 @@ Proof.
     | kv Φ Γ γ
     | kv Φ Γ e0 Hunsat
     | kv Φ Γ τ
+    | kv Φ Γ Γ' e0 e' Heval_t
     | Φ Γ e0
     ]; intros Hk0; try discriminate Hk0; subst kv; intros v2 Hsat Henv Hcon H2.
   - (* Rule Var *)
@@ -3892,6 +4002,10 @@ Proof.
   - (* Rule Prune: the path condition holds *)
     exfalso. rewrite Hsat in Hunsat. discriminate.
   - (* Rule Type *) symmetry. exact (eval_type_inv Φ Γ τ v2 Hsat H2).
+  - (* Rule Thunk *)
+    inversion Hcon as [| | | | | | | | | | | | | | Γ0 e1 Henv' He]; subst.
+    exact (eval_det_fix Inf Φ Γ' e0 e' Heval_t eq_refl v2 Hsat Henv' He
+             (eval_thunk_inv Φ Γ Γ' e0 v2 Hsat H2)).
 }
 {
   destruct Hfold as
@@ -4074,9 +4188,10 @@ Qed.
   through: it builds Just l, matches it against the alternative Just y, and
   reads the field back out of the environment the match binds.
 
-  Note where the field goes. Rule Con leaves the argument exactly as
-  written, and fold-alts binds that written argument to y as a thunk. The
-  literal is read only when Rule Var reaches it through y.
+  Note where the field goes. Rule Con does not evaluate the argument; it
+  pairs it with the environment it was written in. fold-alts binds that
+  thunk to y, and the literal is read only when Rule Var reaches the thunk
+  through y and Rule Thunk forces it.
 *)
 Section AppliedConstructorMatches.
 
@@ -4084,6 +4199,7 @@ Section AppliedConstructorMatches.
 
   Definition just : expr := EApp (ECon "Just") (ELit l).
   Definition just_alts : list alt := [Alt "Just" ["y"] (EVar "y")].
+  Definition just_value (Γ : environment) : expr := EApp (ECon "Just") (EThunk Γ (ELit l)).
 
   Lemma just_unspools : unspool_app just [] = (ECon "Just", [ELit l]).
   Proof. reflexivity. Qed.
@@ -4091,7 +4207,7 @@ Section AppliedConstructorMatches.
   Lemma just_is_a_value : forall Γ, Whnf Γ just.
   Proof. intros Γ. exact (Whnf_Con Γ just "Just" [ELit l] just_unspools). Qed.
 
-  Lemma just_evaluates : forall Γ, pc_true ; Γ ⊢ just ⇓ just.
+  Lemma just_evaluates : forall Γ, pc_true ; Γ ⊢ just ⇓ just_value Γ.
   Proof.
     intros Γ. exact (Eval_Con Inf pc_true Γ just "Just" [ELit l] just_unspools).
   Qed.
@@ -4105,14 +4221,15 @@ Section AppliedConstructorMatches.
   Proof.
     intros Γ.
     eapply Eval_Case; [apply just_evaluates |].
-    rewrite (merge_not_if Γ just eq_refl).
-    eapply FoldAlts_Con with (d := "Just") (ea := [ELit l]) (xs := ["y"]) (ep := EVar "y").
-    - unfold decompose_con_app. rewrite just_unspools. reflexivity.
+    rewrite (merge_not_if Γ (just_value Γ) eq_refl).
+    eapply FoldAlts_Con with (d := "Just") (ea := [EThunk Γ (ELit l)]) (xs := ["y"])
+                             (ep := EVar "y").
+    - reflexivity.
     - simpl. destruct (string_dec "Just" "Just"); [reflexivity | congruence].
     - simpl. eapply Eval_Var.
       + unfold extend_env. simpl.
         destruct (string_dec "y" "y"); [reflexivity | congruence].
-      + simpl. apply Eval_Lit.
+      + simpl. apply Eval_Thunk. apply Eval_Lit.
   Qed.
 
 End AppliedConstructorMatches.
@@ -4205,7 +4322,8 @@ Qed.
   ECase, which folds through merge; ECast, which reduces through cast_expr;
   and EPrimOp, which reduces through reduce_prim. What is left is the
   applicative core - variables, literals, constructors, lambdas, closures,
-  applications, coercions, types and bottoms - which is straight-line code.
+  thunks, applications, coercions, types and bottoms - which is straight-line
+  code.
 
   On that core completeness DELIVERS convergence instead of assuming it. If
   the concrete run of the concretion has a value, then the symbolic run has
@@ -4248,6 +4366,8 @@ Inductive solver_free : expr -> Prop :=
   | SF_Bot_Undefined : solver_free (EBot BUndefined)
   | SF_Bot_Unreachable : solver_free (EBot BUnreachable)
   | SF_Bot_Raise : forall e, solver_free e -> solver_free (EBot (BRaise e))
+  | SF_Thunk : forall Γ e,
+      solver_free_env Γ -> solver_free e -> solver_free (EThunk Γ e)
 
 with solver_free_env : environment -> Prop :=
   | SFEnv_Empty : solver_free_env ·
@@ -4404,7 +4524,7 @@ Proof.
       * apply Whnf_Solvable. apply Solvable_Lit.
       * kill_denote.
     + inversion Hsf.
-    + exfalso. inversion Hsf as [| | | f0 a0 Hsf_f Hsf_a | | | | | | |]; subst.
+    + exfalso. inversion Hsf as [| | | f0 a0 Hsf_f Hsf_a | | | | | | | |]; subst.
       simpl in Hop. rewrite (solver_free_is_op_app f Hsf_f) in Hop. discriminate.
   - (* the concrete spine carries the same constructor at its head *)
     assert (Hnil : Forall2 (contains σ S) [] []) by constructor.
@@ -4459,9 +4579,34 @@ Proof.
     try discriminate; try reflexivity.
   - (* Cont_App *)
     apply IHcontains1; [| exact Hc].
-    inversion Hsf as [ | | | f0 a0 Hsf_f Hsf_a | | | | | | | ]; subst. exact Hsf_f.
+    inversion Hsf as [ | | | f0 a0 Hsf_f Hsf_a | | | | | | | | ]; subst. exact Hsf_f.
   - (* Cont_If_True *) inversion Hsf.
   - (* Cont_If_False *) inversion Hsf.
+Qed.
+
+Lemma solver_free_unspool_args : forall e acc h args,
+  solver_free e ->
+  Forall solver_free acc ->
+  unspool_app e acc = (h, args) ->
+  Forall solver_free args.
+Proof.
+  induction e; intros acc h args Hsf Hacc Hu; simpl in Hu;
+    try (injection Hu as _ <-; exact Hacc).
+  inversion Hsf; subst.
+  apply (IHe1 (e2 :: acc) h args); [assumption | constructor; assumption | exact Hu].
+Qed.
+
+Lemma solver_free_con_value : forall Γ d args,
+  solver_free_env Γ ->
+  Forall solver_free args ->
+  solver_free (make_con_app d (map (EThunk Γ) args)).
+Proof.
+  intros Γ d args HΓ Hargs. unfold make_con_app.
+  assert (Hthunks : Forall solver_free (map (EThunk Γ) args)).
+  { induction Hargs; simpl; constructor; [apply SF_Thunk |]; assumption. }
+  generalize (SF_Con d). generalize (ECon d).
+  induction Hthunks as [| a tl Ha Htl IH]; intros h Hh; simpl; [exact Hh |].
+  apply IH. apply SF_App; assumption.
 Qed.
 
 (**
@@ -4508,6 +4653,7 @@ Proof.
     | kv Ψ0 Γ0 γ
     | kv Ψ0 Γ0 e0 Hunsat
     | kv Ψ0 Γ0 τ
+    | kv Ψ0 Γ0 Γ' e0 e' Hev_t
     | Ψ0 Γ0 e0
     ]; intros Hk0 Hsat; try discriminate Hk0; subst kv;
     intros Φ Γs σ S e_sym Hmod Henv Hcont Hsf Hsfenv.
@@ -4531,7 +4677,7 @@ Proof.
        the model sends to it, or a residual SMT term - and the last one has a
        primitive operation at its head, so it is not solver-free *)
     inversion Hcont as
-      [ | y Hsy Heqs Heqc | l0 Heqs Heqc | | | | | | | | | | | | | es p args l0 Hun Har Hg Hden ];
+      [ | y Hsy Heqs Heqc | l0 Heqs Heqc | | | | | | | | | | | | | | es p args l0 Hun Har Hg Hden ];
       subst; try not_solver_free.
     + exists (EVar y). split; [| split].
       * apply Eval_SymVar.
@@ -4542,24 +4688,28 @@ Proof.
     + exists (ELit l). split; [apply Eval_Lit | split; [apply Cont_Lit | apply SF_Lit]].
     + exfalso. eapply solver_free_no_primop_head; eassumption.
   - (* Rule Con: the concrete spine has a constructor at its head, so the
-       symbolic one does too, and it is already its own value *)
+       symbolic one does too, with fields related one by one *)
     assert (Hccon : is_con_app e_sym = true).
     { eapply contains_con_app_rev; [exact Hcont | exact Hsf |].
       eapply unspool_is_con_app. exact Hunspool_con. }
     destruct (is_con_app_unspool e_sym Hccon) as [d0 [args0 Hu0]].
-    exists e_sym. split; [| split].
-    + exact (Eval_Con Inf Φ Γs e_sym d0 args0 Hu0).
-    + exact Hcont.
-    + exact Hsf.
+    destruct (contains_unspool_con σ S e_sym espc Hcont [] [] (Forall2_nil _) d0 args0 Hu0)
+      as [args_c' [Hu_c Hargs]].
+    rewrite Hunspool_con in Hu_c. injection Hu_c as <- <-.
+    exists (make_con_app d (map (EThunk Γs) args0)). split; [| split].
+    + exact (Eval_Con Inf Φ Γs e_sym d args0 Hu0).
+    + exact (contains_con_value σ S Γs Γ0 d args0 args_c Henv Hargs).
+    + apply solver_free_con_value; [exact Hsfenv |].
+      exact (solver_free_unspool_args e_sym [] _ _ Hsf (Forall_nil _) Hu0).
   - (* Rule Cast: a cast is not solver-free *)
     inversion Hcont; subst; try not_solver_free.
   - (* Rule App-Abs *)
-    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | | ];
       subst; try not_solver_free.
-    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | | ]; subst.
     destruct (contains_clos_rev σ S fs Γ' x eb Hcont_f Hsf_f)
       as [Γ's [ebs [Heqf [Hsx [Henv_clos Hcont_b]]]]]. subst fs.
-    inversion Hsf_f as [ | | | | | Γ's0 x0 b0 Hsf_env' Hsf_ebs | | | | | ]; subst.
+    inversion Hsf_f as [ | | | | | Γ's0 x0 b0 Hsf_env' Hsf_ebs | | | | | | ]; subst.
     assert (Henv_ext : contains_env σ S (extend_env Γ's x Γs as_) (extend_env Γ' x Γ0 ea)).
     { apply Cont_Env_Extend; try assumption.
       apply solver_free_concore. eapply contains_solver_free; eassumption. }
@@ -4572,9 +4722,9 @@ Proof.
     exists v_sym. split; [| split; assumption].
     apply Eval_AppAbs. exact Hev.
   - (* Rule App-Spine *)
-    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | | ];
       subst; try not_solver_free.
-    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | | ]; subst.
     destruct (solver_free_completeness_fix Inf Ψ0 Γ0 ef ef' Hev_f eq_refl Hsat
                 Φ Γs σ S fs Hmod Henv Hcont_f Hsf_f Hsfenv)
       as [fs' [Hev_fs [Hcv_f Hsf_fs']]].
@@ -4605,14 +4755,14 @@ Proof.
     + apply Cont_Clos; assumption.
     + apply SF_Clos; assumption.
   - (* Rule App-Cast: a cast operator is not solver-free *)
-    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | | ];
       subst; try not_solver_free.
-    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | | ]; subst.
     inversion Hcont_f; subst; try not_solver_free.
   - (* Rule App-Bot *)
-    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | ];
+    inversion Hcont as [ | | | | | | | | fs as_ fc ac Hcont_f Hcont_a | | | | | | | | ];
       subst; try not_solver_free.
-    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | ]; subst.
+    inversion Hsf as [ | | | fs0 as0 Hsf_f Hsf_a | | | | | | | | ]; subst.
     inversion Hcont_f; subst; try not_solver_free.
     exists (EBot b). split; [apply Eval_AppBot | split; [apply Cont_Bot | assumption]].
   - (* Rule Case: a case is not solver-free *)
@@ -4631,6 +4781,15 @@ Proof.
     exists (EType (subst_type Γs τ)). split; [apply Eval_Type | split].
     + apply subst_type_contains_env. assumption.
     + apply SF_Type.
+  - (* Rule Thunk *)
+    inversion Hcont as [| | | | | | | | | | | Γs' Γc' es ec Henv' Hcont_e | | | | | ];
+      subst; try not_solver_free.
+    inversion Hsf as [| | | | | | | | | | | Γs0 es0 Hsfenv' Hsf_es]; subst.
+    destruct (solver_free_completeness_fix Inf Ψ0 Γ' e0 e' Hev_t eq_refl Hsat
+                Φ Γs' σ S es Hmod Henv' Hcont_e Hsf_es Hsfenv')
+      as [v_sym [Hev [Hcv Hsfv]]].
+    exists v_sym. split; [| split; assumption].
+    apply Eval_Thunk. exact Hev.
 Qed.
 
 (**
@@ -5144,7 +5303,7 @@ Section CompletenessNonVacuity.
     assert (HsatPhi : sat Φ = true) by (apply models_sat with (σ := σ); exact HmodPhi).
     intros [v Hv]. unfold live_branch in Hv.
     inversion Hv as [| | | | | | | | | | | | | kf Φ0 Γ0 ec0 et0 ef0 ec' et' ef' pc_c
-                       Hc Hpc Ht Hf | | kf Φ0 Γ0 e0 Hunsat | |]; subst.
+                       Hc Hpc Ht Hf | | kf Φ0 Γ0 e0 Hunsat | | |]; subst.
     - no_con_head.
     - assert (Hec : ec' = EVar x)
         by (inversion Hc; subst; [discriminate | reflexivity | no_con_head | congruence]).

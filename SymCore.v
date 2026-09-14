@@ -141,7 +141,8 @@ Definition decomp_coerc_arrow (γ : coercion) : option (coercion * coercion) :=
 (**
   Expressions (Fig. 1) and Environment Γ ::= {x ↦ (Γ, e)} (Fig. 2).
   Extended with runtime closures (Γ, λx. e) produced by Rule Lam and applied
-  in Rule App-Abs.
+  in Rule App-Abs, and with thunks (Γ, e) produced by Rule Con for the fields
+  of a constructor value and forced by Rule Thunk.
 *)
 
 Inductive bottom : Type :=
@@ -163,6 +164,7 @@ with expr : Type :=
   | EType : type_fc -> expr                       (** τ: type *)
   | EIf : expr -> expr -> expr -> expr            (** if ec then et else ef: symbolic branch *)
   | EBot : bottom -> expr                         (** b: bottom *)
+  | EThunk : environment -> expr -> expr          (** (Γ, e): runtime thunk (Rules Con and Thunk) *)
 
 with alt : Type :=
   | Alt : dcon -> list var -> expr -> alt         (** D x⃗ → e: pattern *)
@@ -215,6 +217,7 @@ Fixpoint expr_eqb (e1 e2 : expr) {struct e1} : bool :=
   | EIf c1 t1 f1, EIf c2 t2 f2 =>
       andb (andb (expr_eqb c1 c2) (expr_eqb t1 t2)) (expr_eqb f1 f2)
   | EBot b1, EBot b2 => bottom_eqb b1 b2
+  | EThunk Γ1 b1, EThunk Γ2 b2 => andb (env_eqb Γ1 Γ2) (expr_eqb b1 b2)
   | _, _ => false
   end
 with bottom_eqb (b1 b2 : bottom) {struct b1} : bool :=
@@ -284,6 +287,8 @@ Proof.
       rewrite (expr_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2), (expr_eqb_eq _ _ H3).
       reflexivity.
     + rewrite (bottom_eqb_eq _ _ H). reflexivity.
+    + apply andb_prop in H as [H1 H2].
+      rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2). reflexivity.
   - destruct b1; intros b2 H; destruct b2; simpl in H;
       try discriminate; try reflexivity.
     rewrite (expr_eqb_eq _ _ H). reflexivity.
@@ -580,6 +585,7 @@ Proof.
   - right. intros H. inversion H.
   - right. intros H. inversion H.
   - right. intros H. inversion H.
+  - right. intros H. inversion H.
 Defined.
 
 (** Helper inversion lemmas on Solvable *)
@@ -646,6 +652,7 @@ Proof.
         -- no_con_head.
         -- apply NS1; auto.
     + left. apply Whnf_Bot.
+    + right. intros H. inversion H; subst; [contradiction | no_con_head].
 Defined.
 
 (** An abstraction ELam is never in WHNF: it must evaluate to a closure EClos before application *)
@@ -653,6 +660,14 @@ Lemma not_whnf_lam : forall Γ x body,
   ~ Whnf Γ (ELam x body).
 Proof.
   intros Γ x body Hw.
+  inversion Hw; subst; [| no_con_head].
+  match goal with [ H : Solvable _ _ |- _ ] => inversion H end.
+Qed.
+
+Lemma not_whnf_thunk : forall Γ Γ' e,
+  ~ Whnf Γ (EThunk Γ' e).
+Proof.
+  intros Γ Γ' e Hw.
   inversion Hw; subst; [| no_con_head].
   match goal with [ H : Solvable _ _ |- _ ] => inversion H end.
 Qed.
@@ -767,6 +782,36 @@ Qed.
 (** Construct curried constructor application from constructor name and argument list *)
 Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
+
+Lemma unspool_fold_left_app : forall args h acc,
+  unspool_app (fold_left EApp args h) acc = unspool_app h (args ++ acc).
+Proof.
+  induction args as [| a tl IH]; intros h acc; simpl; [reflexivity |].
+  rewrite IH. reflexivity.
+Qed.
+
+Lemma make_con_app_unspool : forall d args,
+  unspool_app (make_con_app d args) [] = (ECon d, args).
+Proof.
+  intros d args. unfold make_con_app. rewrite unspool_fold_left_app.
+  rewrite app_nil_r. reflexivity.
+Qed.
+
+Lemma make_con_app_is_con_app : forall d args,
+  is_con_app (make_con_app d args) = true.
+Proof. intros d args. exact (unspool_is_con_app _ _ _ _ (make_con_app_unspool d args)). Qed.
+
+Ltac no_con_value :=
+  match goal with
+  | [ H : make_con_app ?d ?args = _ |- _ ] =>
+      let Hc := fresh "Hc" in
+      pose proof (make_con_app_is_con_app d args) as Hc;
+      rewrite H in Hc; simpl in Hc; discriminate Hc
+  | [ H : _ = make_con_app ?d ?args |- _ ] =>
+      let Hc := fresh "Hc" in
+      pose proof (make_con_app_is_con_app d args) as Hc;
+      rewrite <- H in Hc; simpl in Hc; discriminate Hc
+  end.
 
 (** A spine rebuilt from its head and arguments is the spine it came from *)
 Lemma unspool_fold_left : forall e acc h args,
@@ -959,12 +1004,13 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   | Eval_Lit : forall f Φ Γ l,
       eval f Φ Γ (ELit l) (ELit l)
 
-  (** Rule Con: a constructor spine is its own value. The arguments stay as
-      they are written: fold-alts binds them into the environment as thunks,
-      so evaluating them here would force them too early. *)
+  (** Rule Con: a constructor spine is a value once each field is paired with
+      the environment it was written in. The fields stay unevaluated:
+      fold-alts binds them into the environment, and Rule Thunk forces one
+      only when a variable reads it. *)
   | Eval_Con : forall f Φ Γ e d args,
       unspool_app e [] = (ECon d, args) ->
-      eval f Φ Γ e e
+      eval f Φ Γ e (make_con_app d (map (EThunk Γ) args))
 
   (** Rule Cast: Evaluate expression and simplify cast *)
   | Eval_Cast : forall f Φ Γ e γ e',
@@ -1056,6 +1102,11 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   (** Rule Type: Evaluate type under substitution *)
   | Eval_Type : forall f Φ Γ τ,
       eval f Φ Γ (EType τ) (EType (subst_type Γ τ))
+
+  (** Rule Thunk: a thunk evaluates its expression in its own environment *)
+  | Eval_Thunk : forall f Φ Γ Γ' e e',
+      eval (dec f) Φ Γ' e e' ->
+      eval f Φ Γ (EThunk Γ' e) e'
 
   (**
     Rule Out-Of-Fuel: an exhausted budget gives up and reports an undefined
@@ -1158,6 +1209,7 @@ Fixpoint fv (e : expr) : list var :=
   | ECast e _ => fv e
   | EIf ec et ef => fv ec ++ fv et ++ fv ef
   | EBot (BRaise e) => fv e
+  | EThunk _ e => fv e
   | _ => []
   end
 with fv_alt (a : alt) : list var :=
@@ -1483,13 +1535,16 @@ Proof.
     | k Φ Γ γ
     | k Φ Γ e Hunsat
     | k Φ Γ τ
+    | k Φ Γ Γ' e e' Heval_t
     | Φ Γ e
     ]; intros Hk0 Hsat Hsolv; try (subst k).
   - (* Eval_Var: a bound variable is not solvable *)
     inversion Hsolv; subst. rewrite Hlookup in H0. discriminate.
   - (* Eval_SymVar *) exact Hsolv.
   - (* Eval_Lit *) exact Hsolv.
-  - (* Eval_Con *) exact Hsolv.
+  - (* Eval_Con: a solvable head is never a constructor *)
+    exfalso. apply unspool_is_con_app in Hunspool.
+    rewrite (solvable_not_con_app Γ e Hsolv) in Hunspool. discriminate.
   - (* Eval_Cast *) inversion Hsolv.
   - (* Eval_AppAbs: a closure is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
@@ -1518,6 +1573,7 @@ Proof.
   - (* Eval_Coercion *) inversion Hsolv.
   - (* Eval_Prune *) rewrite Hsat in Hunsat. discriminate.
   - (* Eval_Type *) inversion Hsolv.
+  - (* Eval_Thunk *) inversion Hsolv.
   - (* Eval_OutOfFuel *) discriminate Hk0.
 Qed.
 
@@ -1625,17 +1681,20 @@ Lemma eval_con_same : forall Φ Γ d v,
 Proof.
   intros Φ Γ d v Hsat Heval.
   inversion Heval; subst.
-  - reflexivity.
+  - match goal with
+    | [ Hu : unspool_app (ECon d) [] = (ECon _, _) |- _ ] =>
+        simpl in Hu; injection Hu as <- <-; reflexivity
+    end.
   - rewrite Hsat in H; discriminate.
 Qed.
 
-(** A constructor spine is its own value, and it is the only value it has:
-    every other application rule wants a different head. *)
+(** A constructor spine has one value, the one Rule Con builds: every other
+    application rule wants a different head. *)
 Lemma eval_con_spine_same : forall Φ Γ e d args v,
   sat Φ = true ->
   unspool_app e [] = (ECon d, args) ->
   Φ ; Γ ⊢ e ⇓ v ->
-  v = e.
+  v = make_con_app d (map (EThunk Γ) args).
 Proof.
   intros Φ Γ e d args v Hsat Hu Heval.
   destruct e; simpl in Hu; try discriminate.
@@ -1644,7 +1703,10 @@ Proof.
     exact (eval_con_same Φ Γ d v Hsat Heval).
   - (* EApp *)
     inversion Heval; subst.
-    + reflexivity.
+    + match goal with
+      | [ Hu2 : unspool_app (EApp _ _) [] = (ECon _, _) |- _ ] =>
+          simpl in Hu2; rewrite Hu in Hu2; injection Hu2 as <- <-; reflexivity
+      end.
     + simpl in Hu; discriminate.
     + match goal with
       | [ Hn : ~ Whnf _ e1 |- _ ] =>
@@ -1951,6 +2013,7 @@ Proof.
     | k Φ Γ γ
     | k Φ Γ e Hunsat
     | k Φ Γ τ
+    | k Φ Γ Γ' e e' Heval_t
     | Φ Γ e
     ]; intros Hk0; try (subst k).
   - (* Eval_Var *)
@@ -2029,6 +2092,10 @@ Proof.
     exists 0%nat. intros n _. apply Eval_Prune. exact Hunsat.
   - (* Eval_Type *)
     exists 0%nat. intros n _. apply Eval_Type.
+  - (* Eval_Thunk *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ' e e' Heval_t eq_refl) as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    apply Eval_Thunk. simpl. apply Hh. lia.
   - (* Eval_OutOfFuel *)
     discriminate Hk0.
 }
@@ -2118,7 +2185,7 @@ Lemma bigger_budget_changes_the_value : forall Φ Γ d,
 Proof.
   intros Φ Γ d. split.
   - apply Eval_OutOfFuel.
-  - intro H. inversion H.
+  - intro H. inversion H; subst. no_con_value.
 Qed.
 
 Lemma eval_fuel_not_monotone :
