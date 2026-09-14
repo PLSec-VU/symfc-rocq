@@ -1248,7 +1248,7 @@ Proof.
 Qed.
 
 (** Alternative folding is completely deterministic given determinism of evaluation *)
-Theorem fold_alts_deterministic_given_eval :
+Lemma fold_alts_deterministic_given_eval :
   (forall Φ Γ e v1 v2, Φ ; Γ ⊢ e ⇓ v1 -> Φ ; Γ ⊢ e ⇓ v2 -> v1 = v2) ->
   forall Φ Γ e alts r1 r2,
     fold_alts Φ Γ e alts r1 ->

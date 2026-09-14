@@ -590,7 +590,7 @@ Proof.
 }
 Qed.
 
-Theorem concore_eval_closed_mut :
+Lemma concore_eval_closed_mut :
   (forall Φ Γ e v (Heval : Φ; Γ ⊢ e ⇓ v),
      Φ = pc_true -> concrete_env Γ -> concore_expr e -> concore_expr v) /\
   (forall Φ Γ e alts er (Hfold : fold_alts Φ Γ e alts er),
@@ -605,7 +605,7 @@ Qed.
 
 (** ConCore Closure under Evaluation:
     Concrete evaluation in a concrete environment never escapes ConCore. *)
-Theorem concore_eval_closed : forall Γ e v,
+Lemma concore_eval_closed : forall Γ e v,
   concrete_env Γ ->
   concore_expr e ->
   Γ ⊢ᶜ e ⇓ᶜ v ->
@@ -1871,7 +1871,7 @@ Qed.
 
 
 (** Top-level Soundness for whole programs starting from · *)
-Theorem concore_soundness_top : forall Φ σ S e_sym e_con v_sym,
+Corollary concore_soundness_top : forall Φ σ S e_sym e_con v_sym,
   σ ⊨ Φ ->
   contains σ S e_sym e_con ->
   concore_expr e_con ->
@@ -1915,15 +1915,15 @@ Proof. intros x. unfold only. destruct (string_dec x x); congruence. Qed.
 
 (* ================= (a) symbolic variables are instantiated ============== *)
 
-Theorem symvar_instantiated : forall σ x,
+Corollary symvar_instantiated : forall σ x,
   contains σ (only x) (EVar x) (ELit (σ x)).
 Proof. intros. apply Cont_Var_Sym. apply only_self. Qed.
 
-Theorem symvar_instantiated_uniquely : forall σ S x ec,
+Corollary symvar_instantiated_uniquely : forall σ S x ec,
   S x = true -> contains σ S (EVar x) ec -> ec = ELit (σ x).
 Proof. intros. eapply contains_var_sym; eassumption. Qed.
 
-Theorem soundness_applies_to_symvar : forall σ S x,
+Corollary soundness_applies_to_symvar : forall σ S x,
   σ ⊨ pc_true -> S x = true ->
   exists v_con, · ⊢ᶜ ELit (σ x) ⇓ᶜ v_con /\ contains σ S (EVar x) v_con.
 Proof.
@@ -1939,7 +1939,7 @@ Qed.
 Definition symprim (p : primop) (a : expr) (l : lit) : expr :=
   EApp (EApp (EPrimOp p) a) (ELit l).
 
-Theorem soundness_on_symbolic_primop : forall σ S p x l,
+Corollary soundness_on_symbolic_primop : forall σ S p x l,
   σ ⊨ pc_true -> S x = true -> primop_arity p = 2%nat ->
   exists v_con,
     eval_con · (symprim p (ELit (σ x)) l) v_con /\
@@ -1973,7 +1973,7 @@ Proof.
   intros p x l Γ Hnone. unfold symcond. simpl. rewrite Hnone. reflexivity.
 Qed.
 
-Theorem symbolic_branch_has_concretion : forall σ S p x l lt lf,
+Corollary symbolic_branch_has_concretion : forall σ S p x l lt lf,
   σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
   contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
 Proof.
@@ -1988,7 +1988,7 @@ Qed.
     modulo the one premise that cannot be dispensed with: that the SMT theory
     is non-degenerate, i.e. some model satisfies some atom. The audit theorem
     needed no such premise because it refuted the condition for EVERY model. *)
-Theorem soundness_not_vacuous_on_symbolic_branch :
+Corollary soundness_not_vacuous_on_symbolic_branch :
   (exists σ p x l, σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil))) ->
   ~ (forall σ S p x l et ef ec, ~ contains σ S (EIf (symcond p x l) et ef) ec).
 Proof.
@@ -1997,7 +1997,7 @@ Proof.
   apply symbolic_branch_has_concretion. exact Hmod.
 Qed.
 
-Theorem symbolic_branch_condition_is_judgeable : forall σ S p x l,
+Corollary symbolic_branch_condition_is_judgeable : forall σ S p x l,
   models_cond σ S (symcond p x l) <-> σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)).
 Proof.
   intros. apply (models_cond_pc σ S ·).
@@ -2006,13 +2006,13 @@ Qed.
 
 (* ==================== (c) the Prune attack is dead ====================== *)
 
-Theorem prune_attack_blocked : forall Φ σ,
+Corollary prune_attack_blocked : forall Φ σ,
   σ ⊨ Φ -> sat Φ = false -> False.
 Proof.
   intros Φ σ Hmod Hunsat. apply models_sat in Hmod. congruence.
 Qed.
 
-Theorem prune_does_not_kill_branches :
+Corollary prune_does_not_kill_branches :
   (exists Φ, sat Φ = false) ->
   forall σ S p x l lt lf,
     σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
@@ -2023,7 +2023,7 @@ Qed.
 
 (* ============ (d) reduce_prim is not forced to be constant ============== *)
 
-Theorem contains_not_rigid_on_solvable : forall σ : valuation,
+Corollary contains_not_rigid_on_solvable : forall σ : valuation,
   ~ (forall S Γ es ec, Solvable Γ es -> contains σ S es ec -> es = ec).
 Proof.
   intros σ Hrigid.
@@ -2057,7 +2057,7 @@ Qed.
 
 (** The collapse is attributable exactly to the UNCONDITIONAL form of
     reduce_prim_solvable, which this development no longer assumes. *)
-Theorem unconditional_solvable_forces_constancy :
+Corollary unconditional_solvable_forces_constancy :
   (forall Γ p args, Solvable Γ (reduce_prim p args)) ->
   forall σ S σ' S' p c l1 l2,
     models_cond σ S c ->
@@ -2083,7 +2083,7 @@ Section ReducePrimNotConstant.
   Variables l1 l2 : lit.
   Hypothesis Hdistinct : reduce_prim p [ELit l1] <> reduce_prim p [ELit l2].
 
-  Theorem distinct_images_survive_resolvable_conditions :
+  Corollary distinct_images_survive_resolvable_conditions :
     forall σ S c,
       models_cond σ S c ->
       contains σ S (reduce_prim p [EIf c (ELit l1) (ELit l2)]) (reduce_prim p [ELit l1]).
@@ -2092,7 +2092,7 @@ Section ReducePrimNotConstant.
     apply Cont_If_True; [exact Hc | apply Cont_Lit].
   Qed.
 
-  Theorem old_axiom_refutes_distinct_images :
+  Corollary old_axiom_refutes_distinct_images :
     (forall Γ q args, Solvable Γ (reduce_prim q args)) ->
     forall σ S σ' S' c, models_cond σ S c -> models_not_cond σ' S' c -> False.
   Proof.
