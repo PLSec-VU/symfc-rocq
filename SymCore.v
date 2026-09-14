@@ -807,10 +807,6 @@ Ltac no_con_value :=
       let Hc := fresh "Hc" in
       pose proof (make_con_app_is_con_app d args) as Hc;
       rewrite H in Hc; simpl in Hc; discriminate Hc
-  | [ H : _ = make_con_app ?d ?args |- _ ] =>
-      let Hc := fresh "Hc" in
-      pose proof (make_con_app_is_con_app d args) as Hc;
-      rewrite <- H in Hc; simpl in Hc; discriminate Hc
   end.
 
 (** A spine rebuilt from its head and arguments is the spine it came from *)
