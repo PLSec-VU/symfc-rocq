@@ -2581,6 +2581,13 @@ Proof.
 Qed.
 
 
+(**
+  The other half of this section, completeness, is in Section 13. It is
+  stated there and not here because its proof needs Section 12: a concrete
+  program has at most one value, and that is what identifies the value
+  soundness produces with the value completeness is handed.
+*)
+
 (** ========================================================================= *)
 (** 11. NonVacuity: what the repaired statement actually says                 *)
 (** ========================================================================= *)
@@ -3945,3 +3952,446 @@ Proof.
   - apply Whnf_Solvable. apply Solvable_AppPrim;
       [reflexivity | apply Solvable_PrimOp | apply Solvable_Lit].
 Qed.
+
+(** ========================================================================= *)
+(** 13. Completeness of Symbolic Execution                                    *)
+(** ========================================================================= *)
+
+(**
+  Completeness is the converse of Section 10: whenever the concrete run
+  delivers a value, the symbolic run delivers one that matches it.
+
+  It is stated here rather than next to concore_soundness because its proof
+  needs concore_eval_deterministic from Section 12. A concrete program has at
+  most one value, and that is what lets the value soundness produces be
+  identified with the value the theorem is handed.
+
+  WHY A BUDGET IS IN THE STATEMENT. Rule If asks for a derivation of BOTH
+  arms, while the concrete run exercises one. The symbolic execution never
+  consults the model, so it cannot skip the arm the model does not take. If
+  that arm loops forever, the unlimited budget has no derivation for it and
+  Rule If cannot fire at all - the whole symbolic run is blocked by a piece
+  of the program the concrete run never entered. A finite budget unblocks it:
+  the loop drives the budget to zero, Rule Out-Of-Fuel answers, and Rule If
+  gets its second premise. scratch/DivergenceNeedsFuel.v is the worked
+  counterexample, and Section 14 below repeats it against this theorem.
+
+  WHY A BUDGET IS NOT ENOUGH. A budget rescues an arm that LOOPS. It does not
+  rescue an arm that is STUCK, because a stuck term has no derivation at any
+  positive budget either, and at budget zero the whole program truncates
+  instead. scratch/CompletenessNeedsFuel.v proves this. So completeness is
+  stated for programs with no stuck subterm, and the predicate no_stuck below
+  is what says that.
+*)
+
+(** ------------------------------------------------------------------------- *)
+(** 13.1 Budget-Total Terms                                                   *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  A term is budget-total when, from some budget on, every budget gives it a
+  value. The value may change with the budget, and that is the point: the
+  arm the model does not take is never inspected, so any answer will do.
+
+  Three kinds of term are budget-total.
+  - A term that terminates. eval_inf_has_budget turns its unlimited-budget
+    derivation into one at every budget from its height on; see
+    budget_total_of_terminating below.
+  - A term that loops. self_app_has_value_at_every_budget in SymCore.v
+    Section 10.5 proves it for the self-application loop: the budget runs out
+    and Rule Out-Of-Fuel answers.
+  - Nothing else. A stuck term has no value at any positive budget, which is
+    what completeness_rejects_a_stuck_arm in Section 14 shows.
+
+  The threshold h is a refinement of the plainer "forall n, exists v". The
+  plainer form is stronger, so assuming it would make the theorem weaker, and
+  it would exclude terms that merely need room to finish. A term that needs
+  four steps has no value at a budget of three, and that is not stuckness.
+*)
+Definition budget_total (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
+  exists h, forall n, (h <= n)%nat -> exists v, eval (Fin n) Φ Γ e v.
+
+Lemma budget_total_of_terminating : forall Φ Γ e,
+  (exists v, Φ ; Γ ⊢ e ⇓ v) -> budget_total Φ Γ e.
+Proof.
+  intros Φ Γ e [v Hv].
+  destruct (eval_inf_has_budget Φ Γ e v Hv) as [h Hh].
+  exists h. intros n Hn. exists v. apply Hh. exact Hn.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 13.2 The No-Stuck-Subterm Hypothesis                                      *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  no_stuck σ S Φ Γ e_sym e_con says: along the path the model σ takes through
+  the branches of e_sym, nothing is stuck.
+
+  The predicate walks down the branches of e_sym. At each branch it asks for
+  three things, and at the bottom it asks for one.
+
+  At a branch (Rules NS_Then and NS_Else):
+  - the guard has ONE value ec' at every budget, so the formula Rule If reads
+    off the guard does not depend on the budget. It has to be one value: the
+    arms below are evaluated under Φ ∧ pc, and a formula that changed with
+    the budget would change the path condition the recursion runs under.
+  - the model reads the guard's value the same way it reads the guard. This
+    is what eval_models_cond assumes of the solver at the unlimited budget;
+    here it is asked for directly, because the guard is evaluated at a finite
+    budget and that axiom does not reach there.
+  - the arm the model does NOT take is budget-total. This is the whole point
+    of the budget, and the only place the predicate tolerates a loop.
+
+  At the bottom (Rule NS_Leaf): the term is not a branch, it is the
+  concretion's counterpart, and it has a value at the unlimited budget. That
+  last clause is the no-stuck condition proper. It says only that a value
+  exists; which value it is, and that it matches the concrete run, is what
+  the theorem proves.
+
+  WHY THE PREDICATE MENTIONS e_con. It has to know which arm the model takes,
+  because only the other arm may loop. The verdict is models_cond σ S ec for
+  one arm and models_not_cond σ S ec for the other, and this development
+  cannot prove those two are exclusive: models is a Parameter and the only
+  facts about it are models_sat and models_and_iff, neither of which forbids
+  a model from satisfying both a formula and its negation. So the branch the
+  predicate descends into cannot be read off the symbolic side alone, and the
+  concretion is what picks it. no_stuck_contains below shows the cost is
+  nothing: the predicate already implies the concretion it mentions.
+*)
+Inductive no_stuck (σ : valuation) (S : symvars)
+  : path_condition -> environment -> expr -> expr -> Prop :=
+  | NS_Leaf : forall Φ Γ e e_con,
+      is_if e = false ->
+      contains σ S e e_con ->
+      (exists v, Φ ; Γ ⊢ e ⇓ v) ->
+      no_stuck σ S Φ Γ e e_con
+  | NS_Then : forall Φ Γ ec et ef ec' pc e_con,
+      (forall n, eval (Fin n) Φ Γ ec ec') ->
+      models_cond σ S ec ->
+      models_cond σ S ec' ->
+      expr_to_pc Γ ec' = Some pc ->
+      budget_total (Φ ∧ ¬ pc) Γ ef ->
+      no_stuck σ S (Φ ∧ pc) Γ et e_con ->
+      no_stuck σ S Φ Γ (EIf ec et ef) e_con
+  | NS_Else : forall Φ Γ ec et ef ec' pc e_con,
+      (forall n, eval (Fin n) Φ Γ ec ec') ->
+      models_not_cond σ S ec ->
+      models_not_cond σ S ec' ->
+      expr_to_pc Γ ec' = Some pc ->
+      budget_total (Φ ∧ pc) Γ et ->
+      no_stuck σ S (Φ ∧ ¬ pc) Γ ef e_con ->
+      no_stuck σ S Φ Γ (EIf ec et ef) e_con.
+
+(** The hypothesis already carries the concretion it is stated against. *)
+Lemma no_stuck_contains : forall σ S Φ Γ e e_con,
+  no_stuck σ S Φ Γ e e_con -> contains σ S e e_con.
+Proof.
+  intros σ S Φ Γ e e_con H. induction H.
+  - assumption.
+  - apply Cont_If_True; assumption.
+  - apply Cont_If_False; assumption.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 13.3 Completeness, Upward Closed in the Budget                            *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  The statement is upward closed on purpose. "Some budget works" does not
+  survive the induction, for the same reason it did not survive the induction
+  in eval_fin_of_inf_fix: a bigger budget is not always safe, so the only
+  claim a branch can pass up to the branch above is "every budget from here
+  on works". Rule If then combines the two budgets its premises report with
+  max and spends one more on itself.
+
+  The value found at budget n is allowed to depend on n. It has to be: the
+  arm the model skips answers something different at every budget, and that
+  answer sits inside the value. What does not depend on n is the concretion:
+  Rule Cont_If_True never looks at the arm it did not take, so whatever the
+  skipped arm answered, the value still matches the concrete one.
+
+  Where the budget comes from at the bottom. The leaf has an unlimited-budget
+  derivation, so concore_soundness gives it a concrete value, and
+  concore_eval_deterministic identifies that value with the one the theorem
+  was handed - a concrete program has at most one. eval_inf_has_budget then
+  turns the leaf's unlimited-budget derivation into a finite one, and its
+  threshold is the budget the whole recursion is built on.
+*)
+Lemma completeness_upward : forall σ S Φ Γs e_sym e_con,
+  no_stuck σ S Φ Γs e_sym e_con ->
+  forall Γc v_con,
+    σ ⊨ Φ ->
+    contains_env σ S Γs Γc ->
+    concore_expr e_con ->
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+    exists h, forall n, (h <= n)%nat ->
+      exists v_sym, eval (Fin n) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
+Proof.
+  intros σ S Φ Γs e_sym e_con H.
+  induction H as
+    [ Φ Γ e e_con Hnotif Hcont [v Hv]
+    | Φ Γ ec et ef ec' pc e_con Hguard Hmc Hmc' Hpc Htot Hns IH
+    | Φ Γ ec et ef ec' pc e_con Hguard Hmnc Hmnc' Hpc Htot Hns IH ];
+    intros Γc v_con Hmod Henv Hcon Hevalc.
+  - (* the leaf: soundness carries the concrete run back, determinism pins the value *)
+    destruct (concore_soundness Φ Γ Γc σ S e e_con v Hmod Henv Hcont Hcon Hv)
+      as [v_con' [Hec Hcv]].
+    assert (Hcenv : concrete_env Γc) by (eapply contains_env_concrete; exact Henv).
+    assert (Heqv : v_con' = v_con)
+      by (eapply concore_eval_deterministic; eassumption).
+    subst v_con'.
+    destruct (eval_inf_has_budget Φ Γ e v Hv) as [h Hh].
+    exists h. intros n Hn. exists v. split; [apply Hh; exact Hn | exact Hcv].
+  - (* the model takes the then-arm; the else-arm only has to answer something *)
+    assert (Hpcmod : σ ⊨ pc) by (eapply models_cond_pc; eassumption).
+    assert (Hmod_and : σ ⊨ (Φ ∧ pc)) by (apply models_and; assumption).
+    destruct (IH Γc v_con Hmod_and Henv Hcon Hevalc) as [h1 Hh1].
+    destruct Htot as [h2 Hh2].
+    exists (Datatypes.S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    destruct (Hh1 m ltac:(lia)) as [et' [Het' Hcet']].
+    destruct (Hh2 m ltac:(lia)) as [ef' Hef'].
+    exists (EIf ec' et' ef'). split.
+    + eapply Eval_If;
+        [ simpl; apply Hguard | exact Hpc | simpl; exact Het' | simpl; exact Hef' ].
+    + apply Cont_If_True; [exact Hmc' | exact Hcet'].
+  - (* the model takes the else-arm *)
+    assert (Hpcmod : σ ⊨ (¬ pc)) by (eapply models_not_cond_pc; eassumption).
+    assert (Hmod_and : σ ⊨ (Φ ∧ ¬ pc)) by (apply models_and; assumption).
+    destruct (IH Γc v_con Hmod_and Henv Hcon Hevalc) as [h1 Hh1].
+    destruct Htot as [h2 Hh2].
+    exists (Datatypes.S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    destruct (Hh1 m ltac:(lia)) as [ef' [Hef' Hcef']].
+    destruct (Hh2 m ltac:(lia)) as [et' Het'].
+    exists (EIf ec' et' ef'). split.
+    + eapply Eval_If;
+        [ simpl; apply Hguard | exact Hpc | simpl; exact Het' | simpl; exact Hef' ].
+    + apply Cont_If_False; [exact Hmnc' | exact Hcef'].
+Qed.
+
+(**
+  Completeness of symbolic execution.
+
+  The concretion hypothesis is listed even though no_stuck_contains derives
+  it from the no-stuck hypothesis. It is what the theorem is about, and
+  leaving it out would hide the statement inside a predicate.
+*)
+Theorem concore_completeness : forall Φ Γs Γc σ S e_sym e_con v_con,
+  σ ⊨ Φ ->
+  contains_env σ S Γs Γc ->
+  contains σ S e_sym e_con ->
+  concore_expr e_con ->
+  no_stuck σ S Φ Γs e_sym e_con ->
+  Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+  exists k v_sym, eval (Fin k) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
+Proof.
+  intros Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hns Hevalc.
+  destruct (completeness_upward σ S Φ Γs e_sym e_con Hns Γc v_con Hmod Henv Hcon Hevalc)
+    as [h Hh].
+  destruct (Hh h ltac:(lia)) as [v_sym [Heval Hcv]].
+  exists h, v_sym. split; assumption.
+Qed.
+
+(** Top-level completeness for whole programs starting from · *)
+Corollary concore_completeness_top : forall Φ σ S e_sym e_con v_con,
+  σ ⊨ Φ ->
+  contains σ S e_sym e_con ->
+  concore_expr e_con ->
+  no_stuck σ S Φ · e_sym e_con ->
+  ⊢ᶜ e_con ⇓ᶜ v_con ->
+  exists k v_sym, eval (Fin k) Φ · e_sym v_sym /\ contains σ S v_sym v_con.
+Proof.
+  intros Φ σ S e_sym e_con v_con Hmod Hcont Hcon Hns Hevalc.
+  eapply concore_completeness; try eassumption. apply Cont_Env_Empty.
+Qed.
+
+(** ========================================================================= *)
+(** 14. NonVacuity of Completeness                                            *)
+(** ========================================================================= *)
+
+(**
+  Section 11 exists because the development once carried a theorem whose
+  hypotheses nothing satisfied. Completeness gets the same treatment. Three
+  things are shown, on one program and with no new axiom.
+
+  (a) The no-stuck hypothesis is SATISFIABLE, and not on a toy: the program
+      is a symbolic branch whose untaken arm is the self-application loop, a
+      term with no unlimited-budget value at all (self_app_diverges).
+  (b) Completeness really applies to it. Every hypothesis is discharged, a
+      budget is exhibited, and the whole program is shown to have no
+      unlimited-budget value - so the finite budget is not decoration.
+  (c) The hypothesis is NOT true of everything. Replace the looping arm by
+      the stuck arm of scratch/CompletenessNeedsFuel.v and the predicate has
+      no derivation.
+
+  The section takes the model, the symbolic variables and the guard as
+  variables, exactly as Section 11 does, so nothing here is assumed globally.
+*)
+
+Lemma app_lit_no_value_inf : forall Ψ Γ l a v,
+  sat Ψ = true -> Ψ ; Γ ⊢ EApp (ELit l) a ⇓ v -> False.
+Proof.
+  intros Ψ Γ l a v Hsat Heval.
+  inversion Heval; subst; try discriminate.
+  - match goal with [ H : ~ Whnf _ (ELit _) |- _ ] =>
+      apply H; apply Whnf_Solvable; apply Solvable_Lit end.
+  - congruence.
+Qed.
+
+(** The same at a positive budget. Rule Out-Of-Fuel fires at Fin 0 only, so
+    it cannot rescue the stuck application here. *)
+Lemma app_lit_no_value_fin : forall k Ψ Γ l a v,
+  sat Ψ = true -> eval (Fin (Datatypes.S k)) Ψ Γ (EApp (ELit l) a) v -> False.
+Proof.
+  intros k Ψ Γ l a v Hsat Heval.
+  inversion Heval; subst; try discriminate.
+  - match goal with [ H : ~ Whnf _ (ELit _) |- _ ] =>
+      apply H; apply Whnf_Solvable; apply Solvable_Lit end.
+  - congruence.
+Qed.
+
+Lemma eval_symvar_fin_same : forall k Ψ Γ x v,
+  lookup_env Γ x = None -> sat Ψ = true ->
+  eval (Fin (Datatypes.S k)) Ψ Γ (EVar x) v -> v = EVar x.
+Proof.
+  intros k Ψ Γ x v Hnone Hsat Heval.
+  inversion Heval; subst; [congruence | reflexivity | congruence].
+Qed.
+
+Section CompletenessNonVacuity.
+
+  Variables (Φ : path_condition) (σ : valuation) (Sv : symvars).
+  Variables (x : var) (l l' : lit).
+
+  (** x is one of the symbolic variables, the model satisfies the atom x and
+      the ambient path condition, and the branch the model does not take is
+      feasible. The last one is what keeps Rule Prune from answering for the
+      untaken arm and making the exercise trivial. *)
+  Hypothesis Hsx : Sv x = true.
+  Hypothesis Hmodx : σ ⊨ (PCVar x).
+  Hypothesis HmodPhi : σ ⊨ Φ.
+  Hypothesis Hfeas : sat (Φ ∧ ¬ PCVar x) = true.
+
+  Lemma guard_denotes : denotes Sv (EVar x) (PCVar x).
+  Proof. intros Γ Hfree. simpl. rewrite (Hfree x Hsx). reflexivity. Qed.
+
+  Lemma guard_judged : models_cond σ Sv (EVar x).
+  Proof. exists (PCVar x). split; [exact guard_denotes | exact Hmodx]. Qed.
+
+  (** if x then l' else (loop) *)
+  Definition live_branch : expr := EIf (EVar x) (ELit l') self_app.
+
+  (* ============ (a) the hypothesis holds of a looping program ============ *)
+
+  Lemma witness_arm_diverges : forall v, ~ ((Φ ∧ ¬ PCVar x) ; · ⊢ self_app ⇓ v).
+  Proof. intros v. apply self_app_diverges. exact Hfeas. Qed.
+
+  Lemma witness_no_stuck : no_stuck σ Sv Φ · live_branch (ELit l').
+  Proof.
+    eapply NS_Then with (ec' := EVar x) (pc := PCVar x).
+    - intros n. apply Eval_SymVar. reflexivity.
+    - exact guard_judged.
+    - exact guard_judged.
+    - reflexivity.
+    - exists 0%nat. intros n _. apply self_app_has_value_at_every_budget.
+    - apply NS_Leaf; [reflexivity | apply Cont_Lit | exists (ELit l'); apply Eval_Lit].
+  Qed.
+
+  (* ================= (b) completeness applies to it ====================== *)
+
+  Corollary witness_completeness_instance :
+    exists k v_sym, eval (Fin k) Φ · live_branch v_sym /\ contains σ Sv v_sym (ELit l').
+  Proof.
+    eapply concore_completeness_top with (e_con := ELit l').
+    - exact HmodPhi.
+    - apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
+    - apply Con_Lit.
+    - exact witness_no_stuck.
+    - apply Eval_Lit.
+  Qed.
+
+  (** The budget the recursion computes here is one, and this is what it
+      derives: the taken arm reaches its literal, the looping arm runs the
+      budget to zero and Rule Out-Of-Fuel answers, and the concretion never
+      looks at that answer. *)
+  Lemma witness_budget_is_one :
+    eval (Fin 1) Φ · live_branch (EIf (EVar x) (ELit l') (EBot BUndefined))
+    /\ contains σ Sv (EIf (EVar x) (ELit l') (EBot BUndefined)) (ELit l').
+  Proof.
+    split.
+    - eapply Eval_If with (pc_c := PCVar x).
+      + apply Eval_SymVar. reflexivity.
+      + reflexivity.
+      + apply Eval_Lit.
+      + apply Eval_OutOfFuel.
+    - apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
+  Qed.
+
+  (** And every budget works, which is what completeness_upward claims. The
+      value changes with the budget; the concretion does not. *)
+  Lemma witness_every_budget : forall n,
+    exists v, eval (Fin n) Φ · live_branch v /\ contains σ Sv v (ELit l').
+  Proof.
+    intros n. destruct n as [| m].
+    - destruct (self_app_has_value_at_every_budget 0%nat (Φ ∧ ¬ PCVar x) ·) as [vf Hvf].
+      exists (EIf (EVar x) (ELit l') vf). split.
+      + eapply Eval_If with (pc_c := PCVar x);
+          [apply Eval_SymVar; reflexivity | reflexivity | apply Eval_Lit | exact Hvf].
+      + apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
+    - destruct (self_app_has_value_at_every_budget m (Φ ∧ ¬ PCVar x) ·) as [vf Hvf].
+      exists (EIf (EVar x) (ELit l') vf). split.
+      + eapply Eval_If with (pc_c := PCVar x);
+          [apply Eval_SymVar; reflexivity | reflexivity | apply Eval_Lit | exact Hvf].
+      + apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
+  Qed.
+
+  (** The budget is not decoration: at the unlimited budget this program has
+      no value at all, because Rule If cannot get past the looping arm. So
+      the finite budget in the theorem is carrying the whole statement here. *)
+  Lemma witness_has_no_unlimited_value : ~ (exists v, Φ ; · ⊢ live_branch ⇓ v).
+  Proof.
+    assert (HsatPhi : sat Φ = true) by (apply models_sat with (σ := σ); exact HmodPhi).
+    intros [v Hv]. unfold live_branch in Hv.
+    inversion Hv as [| | | | | | | | | | | | | kf Φ0 Γ0 ec0 et0 ef0 ec' et' ef' pc_c
+                       Hc Hpc Ht Hf | | kf Φ0 Γ0 e0 Hunsat | |]; subst.
+    - assert (Hec : ec' = EVar x)
+        by (inversion Hc; subst; [discriminate | reflexivity | congruence]).
+      subst ec'. simpl in Hpc. injection Hpc as Hpc. subst pc_c.
+      exact (self_app_diverges (Φ ∧ ¬ PCVar x) · ef' Hfeas Hf).
+    - congruence.
+  Qed.
+
+  (* ============ (c) the hypothesis rejects a stuck arm =================== *)
+
+  (** The counterexample of scratch/CompletenessNeedsFuel.v. Applying a
+      literal is stuck: no rule matches it, and Rule Prune cannot fire while
+      the branch is feasible. *)
+  Definition stuck_arm : expr := EApp (ELit l) (ELit l).
+  Definition stuck_branch : expr := EIf (EVar x) (ELit l') stuck_arm.
+
+  Lemma completeness_rejects_a_stuck_arm :
+    ~ no_stuck σ Sv Φ · stuck_branch (ELit l').
+  Proof.
+    assert (HsatPhi : sat Φ = true) by (apply models_sat with (σ := σ); exact HmodPhi).
+    intros H. inversion H as
+      [ Φ0 Γ0 e0 ec0 Hnotif Hcont Hval
+      | Φ0 Γ0 ec0 et0 ef0 ec' pc e_con Hguard Hmc Hmc' Hpc Htot Hns
+      | Φ0 Γ0 ec0 et0 ef0 ec' pc e_con Hguard Hmnc Hmnc' Hpc Htot Hns ]; subst.
+    - discriminate Hnotif.
+    - (* the model takes the literal arm, so the stuck arm must be budget-total *)
+      assert (Hec : ec' = EVar x)
+        by (eapply eval_symvar_fin_same with (k := 0%nat) (Γ := ·);
+            [reflexivity | exact HsatPhi | apply (Hguard 1%nat)]).
+      subst ec'. simpl in Hpc. injection Hpc as Hpc. subst pc.
+      destruct Htot as [h Hh].
+      destruct (Hh (Datatypes.S h) ltac:(lia)) as [v Hv].
+      eapply app_lit_no_value_fin; [exact Hfeas | exact Hv].
+    - (* the model takes the stuck arm, so it must have an unlimited-budget value *)
+      assert (Hec : ec' = EVar x)
+        by (eapply eval_symvar_fin_same with (k := 0%nat) (Γ := ·);
+            [reflexivity | exact HsatPhi | apply (Hguard 1%nat)]).
+      subst ec'. simpl in Hpc. injection Hpc as Hpc. subst pc.
+      inversion Hns as [ Φ1 Γ1 e1 ec1 Hnotif1 Hcont1 [v Hv] | | ]; subst.
+      + eapply app_lit_no_value_inf; [exact Hfeas | exact Hv].
+  Qed.
+
+End CompletenessNonVacuity.
