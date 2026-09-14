@@ -6,3 +6,4 @@
 .Makefile.d
 Makefile
 Makefile.conf
+.lia.cache

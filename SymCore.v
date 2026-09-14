@@ -490,6 +490,15 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
       eval Φ Γ' e e' ->
       eval Φ Γ (EVar x) e'
 
+  (** Rule Sym-Var: a variable that Γ does not bind is a symbolic value.
+      Solvable_Var already classifies it as a value, and every other value
+      form (literal, constructor, bottom, coercion, type, closure) has a
+      reflexivity rule; without this one no expression that mentions a
+      symbolic variable can reduce at all. *)
+  | Eval_SymVar : forall Φ Γ x,
+      lookup_env Γ x = None ->
+      eval Φ Γ (EVar x) (EVar x)
+
   (** Rule Lit: Literal reflexivity *)
   | Eval_Lit : forall Φ Γ l,
       eval Φ Γ (ELit l) (ELit l)
@@ -749,8 +758,27 @@ Axiom fold_alts_no_nested_if : forall Φ Γ e alts er,
 Axiom cast_expr_whnf : forall Γ e γ,
   Whnf Γ e -> Whnf Γ (cast_expr e γ).
 
-(** Primitive reduction produces a solvable expression (§3.2, SMT contract - Axiom 2) *)
+(**
+  Primitive reduction produces a solvable expression WHEN ITS ARGUMENTS ARE
+  THEMSELVES SOLVABLE (§3.2, SMT contract - Axiom 2).
+
+  The hypothesis is essential and was missing. Solvable admits no EIf, so an
+  unconditional version would say that reduce-prim of a *branching* argument
+  is still a plain SMT term - i.e. that the theory solver silently erases the
+  branch. Worse, it is stated for EVERY Γ, and Solvable_Var demands the
+  variable be unbound in Γ, so an unconditional version would force the result
+  to mention no variable at all: reduce-prim's range would be ground terms.
+  Combined with reduce_prim_contains that collapses concretion on a primitive
+  result into syntactic equality, which forces reduce_prim to be a CONSTANT
+  function on literals as soon as any condition is resolvable (1+1 = 1+2).
+
+  With the hypothesis, a primitive applied to plain SMT arguments still yields
+  a plain SMT term, while a primitive applied to an argument that still
+  branches is left free to distribute over that branch and return an EIf -
+  which Whnf_If already accepts as a value.
+*)
 Axiom reduce_prim_solvable : forall Γ p args,
+  Forall (Solvable Γ) args ->
   Solvable Γ (reduce_prim p args).
 
 (**
@@ -768,9 +796,10 @@ Axiom reduce_prim_saturated : forall p args p0 args0,
 
 (** WHNF follows directly from being solvable *)
 Lemma reduce_prim_whnf : forall Γ p args,
+  Forall (Solvable Γ) args ->
   Whnf Γ (reduce_prim p args).
 Proof.
-  intros. apply Whnf_Solvable. apply reduce_prim_solvable.
+  intros. apply Whnf_Solvable. apply reduce_prim_solvable. assumption.
 Qed.
 
 (** Unspooling an application spine preserves the operator head property *)
@@ -843,12 +872,98 @@ Qed.
   argument too many gets stuck, and no other rule can fire on an already-WHNF
   operator application.
 *)
+(** Every argument of a solvable operator spine is itself solvable *)
+Lemma solvable_spine_args : forall Γ e,
+  Solvable Γ e ->
+  forall L p args,
+    Forall (Solvable Γ) L ->
+    unspool_app e L = (EPrimOp p, args) ->
+    Forall (Solvable Γ) args.
+Proof.
+  induction 1; intros L p0 args0 HL Hunspool; simpl in Hunspool;
+    try (injection Hunspool as ? ?; subst; assumption);
+    try discriminate.
+  eapply IHSolvable1; [| exact Hunspool].
+  constructor; assumption.
+Qed.
+
+(**
+  Solvable terms reduce to solvable terms: a literal and a symbolic variable
+  are already values, a bare operator is stuck, and an operator spine reduces
+  by Rule App-Prim, whose arguments are solvable by solvable_spine_args and
+  so reduce to solvable results - which is exactly the hypothesis the
+  repaired reduce_prim_solvable needs.
+
+  Written as a Fixpoint on the derivation rather than by `induction` because
+  Rule App-Prim needs the statement for every argument of its
+  Forall2 (eval Φ Γ) args args', which Coq's auto-derived induction principle
+  does not supply.
+*)
+Fixpoint solvable_eval_solvable (Φ : path_condition) (Γ : environment) (e v : expr)
+  (Heval : eval Φ Γ e v) {struct Heval} :
+  sat Φ = true -> Solvable Γ e -> Solvable Γ v.
+Proof.
+  destruct Heval as
+    [ Φ Γ x Γ' e e' Hlookup Heval_x
+    | Φ Γ x Hnone
+    | Φ Γ l
+    | Φ Γ d
+    | Φ Γ e γ e' Heval_e
+    | Φ Γ Γ' x eb ea eb' Heval_b
+    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | Φ Γ b
+    | Φ Γ ef ea p args args' Hunspool Harity Hargs
+    | Φ Γ x e
+    | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | Φ Γ b ea
+    | Φ Γ es alts es' er Heval_es Hfold
+    | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
+    | Φ Γ γ
+    | Φ Γ e Hunsat
+    | Φ Γ τ
+    ]; intros Hsat Hsolv.
+  - (* Eval_Var: a bound variable is not solvable *)
+    inversion Hsolv; subst. rewrite Hlookup in H0. discriminate.
+  - (* Eval_SymVar *) exact Hsolv.
+  - (* Eval_Lit *) exact Hsolv.
+  - (* Eval_Con *) inversion Hsolv.
+  - (* Eval_Cast *) inversion Hsolv.
+  - (* Eval_AppAbs: a closure is not solvable *)
+    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
+  - (* Eval_AppSpine: the head is solvable, hence already WHNF *)
+    exfalso. apply Hnotwhnf. apply Whnf_Solvable.
+    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. exact Hsf.
+  - (* Eval_Bot *) inversion Hsolv.
+  - (* Eval_AppPrim *)
+    assert (Hsargs : Forall (Solvable Γ) args)
+      by (eapply solvable_spine_args; [exact Hsolv | constructor | exact Hunspool]).
+    apply reduce_prim_solvable.
+    clear Hunspool Harity Hsolv.
+    induction Hargs as [| a a' args_tl args'_tl Ha Hargs_tl IH].
+    + constructor.
+    + inversion Hsargs as [| a0 tl0 Hsa Hstl]; subst.
+      constructor.
+      * exact (solvable_eval_solvable Φ Γ a a' Ha Hsat Hsa).
+      * exact (IH Hstl).
+  - (* Eval_Lam *) inversion Hsolv.
+  - (* Eval_AppCast: a cast is not solvable *)
+    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
+  - (* Eval_AppBot: a bottom is not solvable *)
+    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
+  - (* Eval_Case *) inversion Hsolv.
+  - (* Eval_If *) inversion Hsolv.
+  - (* Eval_Coercion *) inversion Hsolv.
+  - (* Eval_Prune *) rewrite Hsat in Hunsat. discriminate.
+  - (* Eval_Type *) inversion Hsolv.
+Qed.
+
 Lemma reduce_prim_app_false : forall Γ p args ac v,
+  Forall (Solvable Γ) args ->
   eval pc_true Γ (EApp (reduce_prim p args) ac) v -> False.
 Proof.
-  intros Γ p args ac v Heval.
+  intros Γ p args ac v Hsargs Heval.
   remember (reduce_prim p args) as v_f eqn:Heqvf.
-  assert (Hsolv : Solvable Γ v_f) by (subst v_f; apply reduce_prim_solvable).
+  assert (Hsolv : Solvable Γ v_f) by (subst v_f; apply reduce_prim_solvable; assumption).
   assert (Hwhnf : Whnf Γ v_f) by (apply Whnf_Solvable; exact Hsolv).
   destruct (is_op_app v_f) eqn:Hop.
   - destruct (is_op_app_unspool v_f Hop) as [p0 [args0 Hunspool]].
@@ -978,18 +1093,33 @@ Proof.
   - reflexivity.
 Qed.
 
-(** Inversion of variable evaluation under a satisfiable path condition *)
+(** Inversion of variable evaluation under a satisfiable path condition:
+    a bound variable reduces to the reduct of its closure, an unbound
+    (symbolic) one reduces to itself. *)
 Lemma eval_var_inv : forall Φ Γ x v,
   sat Φ = true ->
   Φ ; Γ ⊢ EVar x ⇓ v ->
-  exists Γ' e,
-    lookup_env Γ x = Some (Γ', e) /\
-    Φ ; Γ' ⊢ e ⇓ v.
+  (exists Γ' e, lookup_env Γ x = Some (Γ', e) /\ Φ ; Γ' ⊢ e ⇓ v)
+  \/ (lookup_env Γ x = None /\ v = EVar x).
 Proof.
   intros Φ Γ x v Hsat Heval.
   inversion Heval; subst.
-  - exists Γ', e. split; [assumption | assumption].
+  - left. exists Γ', e. split; [assumption | assumption].
+  - right. split; [assumption | reflexivity].
   - rewrite Hsat in H; discriminate.
+Qed.
+
+(** A bound variable's evaluation still inverts to its closure alone *)
+Lemma eval_var_bound_inv : forall Φ Γ x v Γ' e,
+  sat Φ = true ->
+  lookup_env Γ x = Some (Γ', e) ->
+  Φ ; Γ ⊢ EVar x ⇓ v ->
+  Φ ; Γ' ⊢ e ⇓ v.
+Proof.
+  intros Φ Γ x v Γ' e Hsat Hlook Heval.
+  destruct (eval_var_inv Φ Γ x v Hsat Heval) as [[Γ'' [e'' [Hlook'' Hev'']]] | [Hnone Heq]].
+  - rewrite Hlook in Hlook''. injection Hlook'' as ? ?; subst. assumption.
+  - rewrite Hlook in Hnone. discriminate.
 Qed.
 
 (** Inversion of cast evaluation under a satisfiable path condition *)
