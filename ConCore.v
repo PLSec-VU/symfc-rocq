@@ -707,11 +707,11 @@ Notation "σ '⊨' Φ" := (models σ Φ) (at level 70, no associativity).
 
 (** A satisfiable model implies SMT satisfiability *)
 Axiom models_sat : forall σ Φ,
-  models σ Φ -> sat Φ = true.
+  σ ⊨ Φ -> sat Φ = true.
 
 (** SMT solver semantics: valuation satisfies conjunction iff it satisfies both conjuncts *)
 Axiom models_and_iff : forall σ Φ1 Φ2,
-  models σ (Φ1 ∧ Φ2) <-> models σ Φ1 /\ models σ Φ2.
+  σ ⊨ (Φ1 ∧ Φ2) <-> σ ⊨ Φ1 /\ σ ⊨ Φ2.
 
 (**
   SMT solver evaluation on boolean conditions, RELATIVE TO THE SYMBOLIC
@@ -730,11 +730,11 @@ Parameter models_not_cond : valuation -> symvars -> expr -> Prop.
 
 Axiom models_cond_pc : forall σ S Γ e pc,
   expr_to_pc Γ e = Some pc ->
-  (models_cond σ S e <-> models σ pc).
+  (models_cond σ S e <-> σ ⊨ pc).
 
 Axiom models_not_cond_pc : forall σ S Γ e pc,
   expr_to_pc Γ e = Some pc ->
-  (models_not_cond σ S e <-> models σ (¬ pc)).
+  (models_not_cond σ S e <-> σ ⊨ (¬ pc)).
 
 (** Whenever the SMT solver can judge a condition's truth value at all, that
     condition is expressible as a path-condition formula in every environment
@@ -886,20 +886,20 @@ Axiom cast_expr_contains : forall σ S es ec γ,
   SMT condition truth preservation across evaluation, FOR MODELS OF THE PATH
   CONDITION THE EVALUATION RAN UNDER.
 
-  The hypothesis models σ Φ is what makes this an assumption about the solver
+  The hypothesis σ ⊨ Φ is what makes this an assumption about the solver
   rather than a falsehood. Rule Prune lets any expression reduce to
   EBot BUnreachable whenever sat Φ = false, and EBot has no path-condition
   formula, so without tying σ to Φ this axiom said that every condition
   becomes unjudgeable as soon as ONE unsatisfiable path condition exists -
-  which in turn made every symbolic branch unconcretisable. With models σ Φ,
+  which in turn made every symbolic branch unconcretisable. With σ ⊨ Φ,
   models_sat gives sat Φ = true and Rule Prune cannot fire.
 *)
 Axiom eval_models_cond : forall Φ Γ S ec ec' σ,
-  models σ Φ ->
+  σ ⊨ Φ ->
   Φ ; Γ ⊢ ec ⇓ ec' -> models_cond σ S ec -> models_cond σ S ec'.
 
 Axiom eval_models_not_cond : forall Φ Γ S ec ec' σ,
-  models σ Φ ->
+  σ ⊨ Φ ->
   Φ ; Γ ⊢ ec ⇓ ec' -> models_not_cond σ S ec -> models_not_cond σ S ec'.
 
 
@@ -928,17 +928,17 @@ Axiom subst_type_contains_env : forall σ S Γs Γc τ,
 (** 9.1.1 Logical Properties of SMT Models *)
 
 Lemma models_and : forall σ Φ1 Φ2,
-  models σ Φ1 -> models σ Φ2 -> models σ (Φ1 ∧ Φ2).
+  σ ⊨ Φ1 -> σ ⊨ Φ2 -> σ ⊨ (Φ1 ∧ Φ2).
 Proof.
   intros σ Φ1 Φ2 H1 H2. apply models_and_iff. split; assumption.
 Qed.
 
-Lemma models_and_l : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ1.
+Lemma models_and_l : forall σ Φ1 Φ2, σ ⊨ (Φ1 ∧ Φ2) -> σ ⊨ Φ1.
 Proof.
   intros σ Φ1 Φ2 H. apply models_and_iff in H. destruct H; assumption.
 Qed.
 
-Lemma models_and_r : forall σ Φ1 Φ2, models σ (Φ1 ∧ Φ2) -> models σ Φ2.
+Lemma models_and_r : forall σ Φ1 Φ2, σ ⊨ (Φ1 ∧ Φ2) -> σ ⊨ Φ2.
 Proof.
   intros σ Φ1 Φ2 H. apply models_and_iff in H. destruct H; assumption.
 Qed.
@@ -1085,14 +1085,14 @@ Qed.
 
 (** Higher-order coercion pushing simulation (Proven Lemma using Rule Eval_AppCast) *)
 Lemma eval_app_cast_sound : forall Φ Γs Γc σ S ef γ ea γ_a γ_r er e_con,
-  models σ Φ ->
+  σ ⊨ Φ ->
   contains_env σ S Γs Γc ->
   contains σ S (EApp (ECast ef γ) ea) e_con ->
   concore_expr e_con ->
   decomp_coerc_arrow γ = Some (γ_a, γ_r) ->
   Φ ; Γs ⊢ ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r ⇓ er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
-    models σ Φ ->
+    σ ⊨ Φ ->
     contains_env σ S Γs Γc ->
     contains σ S (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) e_con ->
     concore_expr e_con ->
@@ -1345,7 +1345,7 @@ Proof.
 Qed.
 
 Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
-  models σ Φ ->
+  σ ⊨ Φ ->
   contains_env σ S Γs Γc ->
   contains σ S (EApp ef ea) e_con ->
   concore_expr e_con ->
@@ -1353,14 +1353,14 @@ Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
   Φ ; Γs ⊢ ef ⇓ ef' ->
   Φ ; Γs ⊢ EApp ef' ea ⇓ er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
-    models σ Φ ->
+    σ ⊨ Φ ->
     contains_env σ S Γs Γc ->
     contains σ S ef e_con ->
     concore_expr e_con ->
     exists v_con : expr,
       Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S ef' v_con) ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
-    models σ Φ ->
+    σ ⊨ Φ ->
     contains_env σ S Γs Γc ->
     contains σ S (EApp ef' ea) e_con ->
     concore_expr e_con ->
@@ -1561,7 +1561,7 @@ Qed.
 Fixpoint concore_soundness_fix (Φ : path_condition) (Γs : environment) (e_sym v_sym : expr)
   (Heval : Φ ; Γs ⊢ e_sym ⇓ v_sym) {struct Heval} :
   forall Γc σ S e_con,
-    models σ Φ ->
+    σ ⊨ Φ ->
     contains_env σ S Γs Γc ->
     contains σ S e_sym e_con ->
     concore_expr e_con ->
@@ -1571,7 +1571,7 @@ Fixpoint concore_soundness_fix (Φ : path_condition) (Γs : environment) (e_sym 
 with concore_soundness_fold_fix (Φ : path_condition) (Γs : environment) (escrut : expr) (alts : list alt) (er : expr)
   (Hfold : fold_alts Φ Γs escrut alts er) {struct Hfold} :
   forall Γc σ S esc altsc,
-    models σ Φ ->
+    σ ⊨ Φ ->
     contains_env σ S Γs Γc ->
     concore_expr esc ->
     Forall concore_alt altsc ->
@@ -1714,14 +1714,14 @@ Proof.
     inversion Hcont; subst.
     + assert (Hcond' : models_cond σ S ec')
         by (apply eval_models_cond with (Φ:=Φ)(Γ:=Γ)(ec:=ec); assumption).
-      assert (Hpc_mod : models σ pc_c) by (apply (models_cond_pc σ S Γ ec' pc_c Hpc); exact Hcond').
-      assert (Hmod_and : models σ (Φ ∧ pc_c)) by (apply models_and; assumption).
+      assert (Hpc_mod : σ ⊨ pc_c) by (apply (models_cond_pc σ S Γ ec' pc_c Hpc); exact Hcond').
+      assert (Hmod_and : σ ⊨ (Φ ∧ pc_c)) by (apply models_and; assumption).
       destruct (concore_soundness_fix (Φ ∧ pc_c) Γ et et' Heval_t Γc σ S e_con Hmod_and Henv H4 Hcon) as [v_con [Hevalc' Hcont_v]].
       exists v_con. split; [exact Hevalc' |]. apply Cont_If_True; [exact Hcond' | exact Hcont_v].
     + assert (Hncond' : models_not_cond σ S ec')
         by (apply eval_models_not_cond with (Φ:=Φ)(Γ:=Γ)(ec:=ec); assumption).
-      assert (Hpc_mod : models σ (¬ pc_c)) by (apply (models_not_cond_pc σ S Γ ec' pc_c Hpc); exact Hncond').
-      assert (Hmod_and : models σ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
+      assert (Hpc_mod : σ ⊨ (¬ pc_c)) by (apply (models_not_cond_pc σ S Γ ec' pc_c Hpc); exact Hncond').
+      assert (Hmod_and : σ ⊨ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
       destruct (concore_soundness_fix (Φ ∧ ¬ pc_c) Γ ef ef' Heval_f Γc σ S e_con Hmod_and Henv H4 Hcon) as [v_con [Hevalc' Hcont_v]].
       exists v_con. split; [exact Hevalc' |]. apply Cont_If_False; [exact Hncond' | exact Hcont_v].
   - (* Eval_Coercion *)
@@ -1746,13 +1746,13 @@ Proof.
   - (* FoldAlts_If *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
     inversion Hcont_vs; subst.
-    + assert (Hpc_mod : models σ pc_c) by (apply (models_cond_pc σ S Γ ec pc_c Hpc); assumption).
-      assert (Hmod_and : models σ (Φ ∧ pc_c)) by (apply models_and; assumption).
+    + assert (Hpc_mod : σ ⊨ pc_c) by (apply (models_cond_pc σ S Γ ec pc_c Hpc); assumption).
+      assert (Hmod_and : σ ⊨ (Φ ∧ pc_c)) by (apply models_and; assumption).
       destruct (concore_soundness_fold_fix (Φ ∧ pc_c) Γ et alts et' Hfold_t Γc σ S esc altsc Hmod_and Henv Hcon_esc Hcon_altsc
                   (ex_intro _ vc_s (conj Heval_esc H4)) Halts) as [v_con [Heval_case Hcont_er]].
       exists v_con. split; [exact Heval_case | apply Cont_If_True; assumption].
-    + assert (Hpc_mod : models σ (¬ pc_c)) by (apply (models_not_cond_pc σ S Γ ec pc_c Hpc); assumption).
-      assert (Hmod_and : models σ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
+    + assert (Hpc_mod : σ ⊨ (¬ pc_c)) by (apply (models_not_cond_pc σ S Γ ec pc_c Hpc); assumption).
+      assert (Hmod_and : σ ⊨ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
       destruct (concore_soundness_fold_fix (Φ ∧ ¬ pc_c) Γ ef alts ef' Hfold_f Γc σ S esc altsc Hmod_and Henv Hcon_esc Hcon_altsc
                   (ex_intro _ vc_s (conj Heval_esc H4)) Halts) as [v_con [Heval_case Hcont_er]].
       exists v_con. split; [exact Heval_case | apply Cont_If_False; assumption].
@@ -1856,7 +1856,7 @@ Qed.
   semantics, not to this file, and it is left undone.
 *)
 Theorem concore_soundness : forall Φ Γs Γc σ S e_sym e_con v_sym,
-  models σ Φ ->
+  σ ⊨ Φ ->
   contains_env σ S Γs Γc ->
   contains σ S e_sym e_con ->
   concore_expr e_con ->
@@ -1872,7 +1872,7 @@ Qed.
 
 (** Top-level Soundness for whole programs starting from EmptyEnv *)
 Theorem concore_soundness_top : forall Φ σ S e_sym e_con v_sym,
-  models σ Φ ->
+  σ ⊨ Φ ->
   contains σ S e_sym e_con ->
   concore_expr e_con ->
   Φ ; EmptyEnv ⊢ e_sym ⇓ v_sym ->
@@ -1924,7 +1924,7 @@ Theorem symvar_instantiated_uniquely : forall σ S x ec,
 Proof. intros. eapply contains_var_sym; eassumption. Qed.
 
 Theorem soundness_applies_to_symvar : forall σ S x,
-  models σ pc_true -> S x = true ->
+  σ ⊨ pc_true -> S x = true ->
   exists v_con, EmptyEnv ⊢ᶜ ELit (σ x) ⇓ᶜ v_con /\ contains σ S (EVar x) v_con.
 Proof.
   intros σ S x Hmod Hx.
@@ -1940,7 +1940,7 @@ Definition symprim (p : primop) (a : expr) (l : lit) : expr :=
   EApp (EApp (EPrimOp p) a) (ELit l).
 
 Theorem soundness_on_symbolic_primop : forall σ S p x l,
-  models σ pc_true -> S x = true -> primop_arity p = 2%nat ->
+  σ ⊨ pc_true -> S x = true -> primop_arity p = 2%nat ->
   exists v_con,
     eval_con EmptyEnv (symprim p (ELit (σ x)) l) v_con /\
     contains σ S (reduce_prim p (EVar x :: ELit l :: nil)) v_con.
@@ -1974,7 +1974,7 @@ Proof.
 Qed.
 
 Theorem symbolic_branch_has_concretion : forall σ S p x l lt lf,
-  models σ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
+  σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
   contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
 Proof.
   intros σ S p x l lt lf Hmod.
@@ -1989,7 +1989,7 @@ Qed.
     is non-degenerate, i.e. some model satisfies some atom. The audit theorem
     needed no such premise because it refuted the condition for EVERY model. *)
 Theorem soundness_not_vacuous_on_symbolic_branch :
-  (exists σ p x l, models σ (PCPrim p (PCVar x :: PCLit l :: nil))) ->
+  (exists σ p x l, σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil))) ->
   ~ (forall σ S p x l et ef ec, ~ contains σ S (EIf (symcond p x l) et ef) ec).
 Proof.
   intros [σ [p [x [l Hmod]]]] Hvac.
@@ -1998,7 +1998,7 @@ Proof.
 Qed.
 
 Theorem symbolic_branch_condition_is_judgeable : forall σ S p x l,
-  models_cond σ S (symcond p x l) <-> models σ (PCPrim p (PCVar x :: PCLit l :: nil)).
+  models_cond σ S (symcond p x l) <-> σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)).
 Proof.
   intros. apply (models_cond_pc σ S EmptyEnv).
   apply symcond_is_formula. reflexivity.
@@ -2007,7 +2007,7 @@ Qed.
 (* ==================== (c) the Prune attack is dead ====================== *)
 
 Theorem prune_attack_blocked : forall Φ σ,
-  models σ Φ -> sat Φ = false -> False.
+  σ ⊨ Φ -> sat Φ = false -> False.
 Proof.
   intros Φ σ Hmod Hunsat. apply models_sat in Hmod. congruence.
 Qed.
@@ -2015,7 +2015,7 @@ Qed.
 Theorem prune_does_not_kill_branches :
   (exists Φ, sat Φ = false) ->
   forall σ S p x l lt lf,
-    models σ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
+    σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)) ->
     contains σ S (EIf (symcond p x l) (ELit lt) (ELit lf)) (ELit lt).
 Proof.
   intros _ σ S p x l lt lf Hmod. apply symbolic_branch_has_concretion. exact Hmod.
