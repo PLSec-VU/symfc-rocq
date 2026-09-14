@@ -701,8 +701,9 @@ Definition symvars : Type := var -> bool.
 Definition sym_free_env (S : symvars) (Γ : environment) : Prop :=
   forall x, S x = true -> lookup_env Γ x = None.
 
-(** Valuation satisfies path condition Φ (σ ⊨ Φ) *)
 Parameter models : valuation -> path_condition -> Prop.
+
+Notation "σ '⊨' Φ" := (models σ Φ) (at level 70, no associativity).
 
 (** A satisfiable model implies SMT satisfiability *)
 Axiom models_sat : forall σ Φ,
