@@ -556,7 +556,7 @@ Proof.
     | k Φ Γ ec et ef alts Hpc_none
     | k Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
     | k Φ Γ b alts
-    | k Φ Γ e alts Hnotif Hnoalt Hnotbot
+    | k Φ Γ e alts Hnothead Hnoalt Hnotbot
     ]; intros Hsat Henv Hcon Halts.
   - exfalso. apply (not_concore_if ec et ef). assumption.
   - exfalso. apply (not_concore_if ec et ef). assumption.
@@ -2387,7 +2387,7 @@ Proof.
     | kv Φ Γ ec et ef alts Hpc_none
     | kv Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
     | kv Φ Γ b alts
-    | kv Φ Γ e alts Hnotif Hnoalt Hnotbot
+    | kv Φ Γ e alts Hnothead Hnoalt Hnotbot
     ]; intros Hk0; subst kv; intros Γc σ S esc altsc Hmod Henv Hcon_esc Hcon_altsc Hvc Halts.
   - (* FoldAlts_If *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
@@ -2452,19 +2452,15 @@ Proof.
     + apply merge_fold_alts_equiv. apply FoldAlts_Bot.
   - (* FoldAlts_Otherwise *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
-    assert (Hrec : fold_alts Inf Φ Γ e alts (EBot BUndefined)) by (eapply FoldAlts_Otherwise; eassumption).
-    assert (Hno_nested := fold_alts_no_nested_if Φ Γ e alts (EBot BUndefined) Hrec).
     destruct (unspool_app e []) as [head args] eqn:Hunspool_e.
     assert (Hif_head : is_if head = false).
-    { destruct (is_if head) eqn:Hcase; [| reflexivity].
-      specialize (Hno_nested head args eq_refl Hcase). subst head.
-      rewrite Hnotif in Hcase. discriminate. }
+    { simpl in Hnothead. exact Hnothead. }
     assert (Hfacts :
       (match decompose_con_app vc_s with
        | Some (d, _) => find_alt d altsc = None
        | None => True
        end)
-      /\ is_bot vc_s = false /\ is_if vc_s = false).
+      /\ is_bot vc_s = false /\ is_if (fst (unspool_app vc_s [])) = false).
     { destruct (contains_unspool_general σ S e vc_s Hcont_vs [] [] (Forall2_nil _) head args Hunspool_e Hif_head)
         as [[head_c [args_c [Hunspool_vcs [Hcont_head Hcont_args]]]]
            | [lv [args_c Hunspool_vcs]]].
@@ -2477,20 +2473,21 @@ Proof.
           exact (find_alt_none_contains_alt σ S alts altsc d Halts Hnoalt).
         + destruct (is_bot vc_s) eqn:Hbc; [| reflexivity].
           exfalso. destruct vc_s; simpl in Hbc; try discriminate.
-          inversion Hcont_vs; subst; discriminate.
-        + destruct (is_if vc_s) eqn:Hic; [| reflexivity].
-          exfalso. destruct vc_s; simpl in Hic; try discriminate.
-          inversion Hcont_vs; subst; discriminate.
+          inversion Hcont_vs; subst; try discriminate;
+            simpl in Hunspool_e; injection Hunspool_e as Hh Ha; subst; discriminate.
+        + assert (Hif_head_c : is_if head_c = false).
+          { inversion Hcont_head; subst; try reflexivity;
+              simpl in Hif_head; discriminate. }
+          rewrite Hunspool_vcs. simpl. exact Hif_head_c.
       - (* the scrutinee concretised to an SMT value, which matches no
            constructor alternative, exactly as the symbolic side did *)
         split; [| split].
         + unfold decompose_con_app. rewrite Hunspool_vcs. exact I.
         + destruct (is_bot vc_s) eqn:Hbc; [| reflexivity].
           exfalso. destruct vc_s; simpl in Hbc; discriminate.
-        + destruct (is_if vc_s) eqn:Hic; [| reflexivity].
-          exfalso. destruct vc_s; simpl in Hic; discriminate.
+        + rewrite Hunspool_vcs. reflexivity.
     }
-    destruct Hfacts as [Hnoalt_c [Hnotbot_c Hnotif_c]].
+    destruct Hfacts as [Hnoalt_c [Hnotbot_c Hnothead_c]].
     exists (EBot BUndefined). split; [| apply Cont_Bot].
     unfold eval_con. eapply Eval_Case.
     + exact Heval_esc.
@@ -3686,7 +3683,7 @@ Proof.
     | kv Φ Γ ec et ef alts Hpc_none
     | kv Φ Γ e0 d ea xs ep alts er Hdec Halt Heval_ep
     | kv Φ Γ b alts
-    | kv Φ Γ e0 alts Hnotif Hnoalt Hnotbot
+    | kv Φ Γ e0 alts Hnothead Hnoalt Hnotbot
     ]; intros Hk0; subst kv; intros r2 Hsat Henv Hcon Halts H2.
   - exfalso. exact (not_concore_if ec et ef Hcon).
   - exfalso. exact (not_concore_if ec et ef Hcon).
@@ -3701,7 +3698,8 @@ Proof.
   - (* a bottom scrutinee *) symmetry. exact (fold_alts_bot_inv Inf Φ Γ b alts r2 H2).
   - (* no alternative matches *)
     symmetry.
-    exact (fold_alts_otherwise_inv Inf Φ Γ e0 alts r2 Hnotif Hnoalt Hnotbot H2).
+    exact (fold_alts_otherwise_inv Inf Φ Γ e0 alts r2
+             (is_if_false_of_spine_head e0 Hnothead) Hnoalt Hnotbot H2).
 }
 Qed.
 
