@@ -526,6 +526,22 @@ Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
 
 (**
+  An operator that Rule App-Cast owns: a cast whose coercion decomposes into
+  an arrow. Rule App-Spine refuses such an operator, because stripping the
+  cast off it would drop the domain coercion that Rule App-Cast pushes into
+  the argument.
+*)
+Definition cast_arrow_operator (e : expr) : bool :=
+  match e with
+  | ECast _ γ =>
+      match decomp_coerc_arrow γ with
+      | Some _ => true
+      | None => false
+      end
+  | _ => false
+  end.
+
+(**
   Mutual inductive definitions of:
   - Big-Step Reduction Judgement: Φ; Γ ⊢ e ⇓ e' (Figure 3)
   - Pattern Matching and Branch Folding: fold-alts(Φ, Γ, e, a⃗) (§3.2, lines 570-590)
@@ -564,9 +580,11 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
       eval Φ (extend_env Γ' x Γ ea) eb eb' ->
       eval Φ Γ (EApp (EClos Γ' x eb) ea) eb'
 
-  (** Rule App-Spine: Reduce function head when not in WHNF *)
+  (** Rule App-Spine: Reduce function head when not in WHNF, unless Rule
+      App-Cast owns that head *)
   | Eval_AppSpine : forall Φ Γ ef ea ef' er,
       ~ Whnf Γ ef ->
+      cast_arrow_operator ef = false ->
       eval Φ Γ ef ef' ->
       eval Φ Γ (EApp ef' ea) er ->
       eval Φ Γ (EApp ef ea) er

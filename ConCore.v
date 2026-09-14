@@ -373,7 +373,31 @@ Axiom cast_expr_concore : forall e γ,
   concore_expr e ->
   concore_expr (cast_expr e γ).
 
+(**
+  Applying a VALUE that carries a coercion which is not an arrow.
+
+  Figure 3 gives no rule for this shape. Rule App-Cast wants a coercion that
+  splits into an argument coercion and a result coercion, and this one does
+  not split. Rule App-Spine wants an operator that is not yet a value, and a
+  cast over a value is a value. So the judgement gets stuck, and this
+  assumption is the missing rule: a coercion that is not an arrow says
+  nothing about the argument, so applying the cast applies what the solver
+  makes of the value under it.
+
+  It cannot be dropped. Concrete evaluation must keep step with symbolic
+  evaluation, and a symbolic operator that is NOT a value can have a
+  concrete instance that IS one - a branch collapses to its live arm - so
+  the concrete run meets this shape while the symbolic run walks on by Rule
+  App-Spine. Section 12.4 proves the stuckness that makes the rule
+  necessary, and Section 12.5 exhibits the mismatch that reaches it.
+
+  The arrow case is excluded on purpose. There Rule App-Cast applies, and
+  letting this assumption erase an arrow coercion as well is what used to
+  make concrete evaluation non-deterministic (Section 12.3).
+*)
 Axiom cast_expr_eval_app : forall Φ Γ eb eb' γ ea v,
+  decomp_coerc_arrow γ = None ->
+  Whnf Γ eb ->
   eval Φ Γ eb eb' ->
   eval Φ Γ (EApp (cast_expr eb' γ) ea) v ->
   eval Φ Γ (EApp (ECast eb γ) ea) v.
@@ -499,7 +523,7 @@ Proof.
     | Φ Γ d
     | Φ Γ e γ e' Heval_e
     | Φ Γ Γ' x eb ea eb' Heval_b
-    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
     | Φ Γ b
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
@@ -1577,15 +1601,73 @@ Proof.
   rewrite Hop in Hnop. discriminate.
 Qed.
 
+(** A branch stays a branch: only Rule If applies to one, and it rebuilds a
+    branch. Rule Prune is the other candidate and the path condition holds. *)
+Lemma eval_preserves_if : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  sat Φ = true ->
+  is_if e = true ->
+  is_if v = true.
+Proof.
+  intros Φ Γ e v Heval Hsat Hif.
+  destruct e; try discriminate.
+  inversion Heval; subst; [reflexivity | rewrite Hsat in *; discriminate].
+Qed.
+
+(**
+  An application whose operator is a branch has no value at all. Rule
+  App-Spine is the only rule that could give it one, and it puts the value
+  of the branch - another branch - back in operator position, so no
+  derivation ever ends.
+*)
+Lemma eval_app_if_false : forall Φ Γ e v,
+  Φ ; Γ ⊢ e ⇓ v ->
+  sat Φ = true ->
+  forall ef ea, e = EApp ef ea -> is_if ef = true -> False.
+Proof.
+  induction 1; intros Hsat f0 a0 Heq Hif; try discriminate.
+  - (* Eval_AppAbs *) injection Heq as Hf Ha. subst f0. discriminate.
+  - (* Eval_AppSpine *)
+    injection Heq as Hf Ha. subst f0 a0.
+    apply (IHeval2 Hsat ef' ea eq_refl).
+    exact (eval_preserves_if Φ Γ ef ef' H1 Hsat Hif).
+  - (* Eval_AppPrim *)
+    injection Heq as Hf Ha. subst f0 a0.
+    destruct ef; try discriminate;
+      simpl in H; injection H as Hh _; discriminate.
+  - (* Eval_AppCast *) injection Heq as Hf Ha. subst f0. discriminate.
+  - (* Eval_AppBot *) injection Heq as Hf Ha. subst f0. discriminate.
+  - (* Eval_Prune *) rewrite Hsat in H. discriminate.
+Qed.
+
+(**
+  Concretion does not invent an arrow cast. Every rule of the relation keeps
+  the head constructor, and the two rules that do not - a symbolic variable
+  and an SMT term both go to a literal - cannot start from a cast. The one
+  rule that changes the shape is branch resolution, which is why the
+  operator must not be a branch.
+*)
+Lemma contains_cast_arrow_operator : forall σ S es ec,
+  contains σ S es ec ->
+  is_if es = false ->
+  cast_arrow_operator ec = cast_arrow_operator es.
+Proof.
+  intros σ S es ec Hcont Hif.
+  inversion Hcont; subst; simpl in *; try reflexivity; try discriminate.
+  destruct es; simpl in *; try reflexivity.
+  injection H as Hh _. discriminate.
+Qed.
+
 Lemma eval_con_app_whnf : forall Γc fc ac v_f v_con,
   concore_expr fc ->
   Whnf Γc fc ->
   is_op_app fc = false ->
+  cast_arrow_operator fc = false ->
   pc_true ; Γc ⊢ fc ⇓ v_f ->
   pc_true ; Γc ⊢ EApp v_f ac ⇓ v_con ->
   pc_true ; Γc ⊢ EApp fc ac ⇓ v_con.
 Proof.
-  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Heval_f Heval_app.
+  intros Γc fc ac v_f v_con Hcon Hwhnf Hnop Hnoarrow Heval_f Heval_app.
   destruct fc.
   - assert (Heqv : v_f = EVar v) by (eapply eval_evar_whnf_same; eassumption).
     subst v_f. exact Heval_app.
@@ -1599,7 +1681,14 @@ Proof.
   - exfalso. eapply eval_clos_false; eassumption.
   - apply not_whnf_case in Hwhnf. contradiction.
   - inversion Heval_f; subst.
-    + eapply cast_expr_eval_app; eassumption.
+    + eapply cast_expr_eval_app; [| | eassumption | eassumption].
+      * simpl in Hnoarrow.
+        match goal with
+        | [ |- decomp_coerc_arrow ?g = None ] =>
+            destruct (decomp_coerc_arrow g); [discriminate | reflexivity]
+        end.
+      * inversion Hwhnf as [e0 Hsolv | | | | | | eb0 γ0 Hwb | ]; subst;
+          [inversion Hsolv | assumption].
     + rewrite sat_pc_true in H. discriminate.
   - apply eval_coercion_con in Heval_f; subst.
     exfalso. apply (eval_app_coercion_false _ _ _ _ Heval_app).
@@ -1633,10 +1722,11 @@ Proof.
   inversion Heval; subst.
   - simpl in Hop. discriminate.
   - (* Eval_AppSpine *)
-    inversion Hwhnf; subst; try discriminate.
-    inversion H; subst; try discriminate.
-    apply Whnf_Solvable in H5.
-    contradiction.
+    exfalso.
+    inversion Hsolv as [| | | f0 a0 Hop0 Hsf Hsa]; subst.
+    match goal with
+    | [ Hnw : ~ Whnf Γ f |- _ ] => apply Hnw; apply Whnf_Solvable; exact Hsf
+    end.
   - (* Eval_AppPrim *)
     exists p, args'. split; [reflexivity |].
     assert (Hsargs : Forall (Solvable Γ) args)
@@ -1662,6 +1752,7 @@ Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
   contains σ S (EApp ef ea) e_con ->
   concore_expr e_con ->
   ~ Whnf Γs ef ->
+  cast_arrow_operator ef = false ->
   Φ ; Γs ⊢ ef ⇓ ef' ->
   Φ ; Γs ⊢ EApp ef' ea ⇓ er ->
   (forall (Γc : environment) (σ : valuation) (e_con : expr),
@@ -1681,7 +1772,12 @@ Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
   exists v_con,
     Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S er v_con.
 Proof.
-  intros Φ Γs Γc σ S ef ea ef' er e_con Hmod Henv Hcont Hcon Hnotwhnf Heval1 Heval2 IH1 IH2.
+  intros Φ Γs Γc σ S ef ea ef' er e_con Hmod Henv Hcont Hcon Hnotwhnf Hnoarrow Heval1 Heval2 IH1 IH2.
+  assert (Hsat : sat Φ = true) by (eapply models_sat; eassumption).
+  assert (Hnotif : is_if ef = false).
+  { destruct (is_if ef) eqn:Hif; [| reflexivity].
+    exfalso. apply (eval_app_if_false Φ Γs (EApp ef' ea) er Heval2 Hsat ef' ea eq_refl).
+    exact (eval_preserves_if Φ Γs ef ef' Heval1 Hsat Hif). }
   assert (Hfree : sym_free_env S Γs)
     by (destruct (contains_env_sym_free σ S Γs Γc Henv) as [Hf _]; exact Hf).
   destruct (contains_app_inv σ S Γs ef ea e_con Hfree Hcont) as
@@ -1695,6 +1791,8 @@ Proof.
   assert (Hcon_app2 : concore_expr (EApp v_f ac)) by (apply Con_App; assumption).
   destruct (IH2 Γc σ (EApp v_f ac) Hmod Henv Hcont_app2 Hcon_app2) as [v_con [Heval_app2 Hcont_er]].
   exists v_con. split; [| exact Hcont_er].
+  assert (Hnoarrow_c : cast_arrow_operator fc = false)
+    by (rewrite (contains_cast_arrow_operator σ S ef fc Hcont_f Hnotif); exact Hnoarrow).
   unfold eval_con in *.
   destruct (whnf_dec Γc fc) as [Hwhnf_c | Hnot_whnf_c].
   - destruct (is_op_app fc) eqn:Hop.
@@ -1705,7 +1803,8 @@ Proof.
         subst v_f.
         eapply reduce_prim_app_false; [exact Hsargs | exact Heval_app2].
     + eapply eval_con_app_whnf; eassumption.
-  - eapply Eval_AppSpine; [exact Hnot_whnf_c | exact Heval_f | exact Heval_app2].
+  - eapply Eval_AppSpine;
+      [exact Hnot_whnf_c | exact Hnoarrow_c | exact Heval_f | exact Heval_app2].
 Qed.
 
 (** ------------------------------------------------------------------------- *)
@@ -1800,7 +1899,7 @@ Proof.
     | Φ Γ d
     | Φ Γ eb γ eb' Heval_e
     | Φ Γ Γ' x eb ea eb' Heval_b
-    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | Φ Γ ef ea ef' er Hnotwhnf Hnoarrow Heval_f Heval_app2
     | Φ Γ b
     | Φ Γ ef ea p eargs eargs' Hunspool Harity Hargs
     | Φ Γ x eb
@@ -2080,7 +2179,7 @@ Proof.
     | Φ Γ d
     | Φ Γ e γ e' Heval_e
     | Φ Γ Γ' x eb ea eb' Heval_b
-    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | Φ Γ ef ea ef' er Hnotwhnf Hnoarrow Heval_f Heval_app2
     | Φ Γ b
     | Φ Γ ef ea p args args' Hunspool Harity Hargs
     | Φ Γ x e
@@ -3092,18 +3191,24 @@ Section CastedApplication.
 Variable closure_cast_erased :
   forall Γ0 x body γ, cast_expr (EClos Γ0 x body) γ = EClos Γ0 x body.
 
-(** Rule App-Spine strips the cast first, so the function gets the plain
-    argument. *)
-Lemma casted_application_by_app_spine :
-  · ⊢ᶜ EApp coerced_operator plain_operand
-     ⇓ᶜ EClos (extend_env · "x" · plain_operand) "z" (EVar "x").
+(**
+  Rule App-Spine used to strip the cast first, which handed the function the
+  plain argument and gave the term a second value. It cannot do that any
+  more: its new premise refuses an operator that Rule App-Cast owns, and
+  this operator is one.
+*)
+Lemma app_spine_refuses_the_coerced_operator :
+  cast_arrow_operator coerced_operator = true.
+Proof. reflexivity. Qed.
+
+Lemma no_app_spine_derivation_here : forall ef' er,
+  ~ (~ Whnf · coerced_operator /\
+     cast_arrow_operator coerced_operator = false /\
+     pc_true ; · ⊢ coerced_operator ⇓ ef' /\
+     pc_true ; · ⊢ EApp ef' plain_operand ⇓ er).
 Proof.
-  unfold eval_con.
-  eapply Eval_AppSpine with (ef' := EClos · "x" capture_body).
-  - apply not_whnf_cast_lam.
-  - rewrite <- (closure_cast_erased · "x" capture_body arrow_coercion).
-    apply Eval_Cast. apply Eval_Lam.
-  - apply Eval_AppAbs. apply Eval_Lam.
+  intros ef' er [_ [Hguard _]].
+  rewrite app_spine_refuses_the_coerced_operator in Hguard. discriminate.
 Qed.
 
 (** Rule App-Cast pushes the coercion into the argument first, so the same
@@ -3120,26 +3225,23 @@ Proof.
     apply Eval_Cast.
     eapply Eval_AppSpine with (ef' := EClos · "x" capture_body).
     + apply not_whnf_lam.
+    + reflexivity.
     + apply Eval_Lam.
     + apply Eval_AppAbs. apply Eval_Lam.
 Qed.
 
-(** The two values differ, and no path condition was pruned to get them. *)
-Lemma cast_overlap_breaks_con_determinism : ~ ConEvalDeterministic.
-Proof.
-  intros Hdet.
-  specialize (Hdet _ _ _ _ casted_application_by_app_spine
-                           casted_application_by_app_cast).
-  discriminate.
-Qed.
+(**
+  REMOVED, and this is the point of the repair:
+
+    cast_overlap_breaks_con_determinism : ~ ConEvalDeterministic
+    erased_coercions_break_con_determinism
+
+  Both were proved by pitting the App-Spine value against the App-Cast value
+  of this one term. The App-Spine value is gone, so neither statement can be
+  proved that way any more, and Section 12.5 proves the opposite: this term
+  has exactly one value. Section 12.1 still refutes ConEvalDeterministic, by
+  a dead branch, so the unrestricted statement is still false; what changed
+  is that casts are no longer a second reason for it.
+*)
 
 End CastedApplication.
-
-(** Erasing coercions at run time, which is what GHC does, is enough. *)
-Corollary erased_coercions_break_con_determinism :
-  (forall e γ, cast_expr e γ = e) ->
-  ~ ConEvalDeterministic.
-Proof.
-  intros Herase. apply cast_overlap_breaks_con_determinism.
-  intros Γ0 x body γ. apply Herase.
-Qed.
