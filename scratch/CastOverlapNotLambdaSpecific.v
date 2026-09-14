@@ -9,9 +9,13 @@ Proof. intros Γ e γ H. inversion H; subst; [inversion H0 | assumption]. Qed.
 Lemma not_whnf_cast : forall Γ e γ, ~ Whnf Γ e -> ~ Whnf Γ (ECast e γ).
 Proof. intros Γ e γ Hn H. apply Hn. eapply whnf_cast_inv; eauto. Qed.
 
-(* So Eval_AppSpine's guard is satisfied for a cast over ANY non-WHNF
+(* So Eval_AppSpine's WHNF premise is satisfied for a cast over ANY non-WHNF
    operator -- no lambda need appear under the cast.  An application in
-   the operator position does just as well. *)
+   the operator position does just as well.
+
+   This is why the repair guards Eval_AppSpine on the COERCION instead: what
+   sits under the cast is beside the point, and only the coercion says
+   whether Rule App-Cast owns the application. *)
 Lemma application_under_cast_is_not_whnf : forall Γ f a γ,
   is_op_app (EApp f a) = false ->
   ~ Whnf Γ (ECast (EApp f a) γ).
