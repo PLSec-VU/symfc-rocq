@@ -1072,7 +1072,10 @@ Proof.
   intros Γ γ a v Heval.
   inversion Heval; subst.
   - apply H1. apply Whnf_Coercion.
-  - simpl in H3. discriminate.
+  - match goal with
+    | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
+        simpl in H; discriminate
+    end.
   - rewrite sat_pc_true in H. discriminate.
 Qed.
 
@@ -1082,7 +1085,10 @@ Proof.
   intros Γ τ a v Heval.
   inversion Heval; subst.
   - apply H1. apply Whnf_Type.
-  - simpl in H3. discriminate.
+  - match goal with
+    | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
+        simpl in H; discriminate
+    end.
   - rewrite sat_pc_true in H. discriminate.
 Qed.
 
@@ -1092,7 +1098,10 @@ Proof.
   intros Γ l a v Heval.
   inversion Heval; subst.
   - apply H1. apply Whnf_Solvable. apply Solvable_Lit.
-  - simpl in H3. discriminate.
+  - match goal with
+    | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
+        simpl in H; discriminate
+    end.
   - rewrite sat_pc_true in H. discriminate.
 Qed.
 
@@ -1102,7 +1111,10 @@ Proof.
   intros Γ d a v Heval.
   inversion Heval; subst.
   - apply H1. apply Whnf_Con.
-  - simpl in H3. discriminate.
+  - match goal with
+    | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
+        simpl in H; discriminate
+    end.
   - rewrite sat_pc_true in H. discriminate.
 Qed.
 
@@ -1219,7 +1231,7 @@ Proof.
       * exfalso.
         eapply eval_app_primop_head in Heval_f as [p [args' Heq]]; [| exact sat_pc_true | exact Hwhnf_c | exact Hop].
         subst v_f.
-        eapply solvable_app_eval_false; [exact sat_pc_true | apply reduce_prim_solvable | apply reduce_prim_concore_not_op | exact Heval_app2].
+        eapply reduce_prim_app_false; exact Heval_app2.
     + eapply eval_con_app_whnf; eassumption.
   - eapply Eval_AppSpine; [exact Hnot_whnf_c | exact Heval_f | exact Heval_app2].
 Qed.

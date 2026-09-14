@@ -15,6 +15,7 @@ From Stdlib Require Import Lists.List.
 From Stdlib Require Import ZArith.ZArith.
 From Stdlib Require Import Bool.Bool.
 From Stdlib Require Import Arith.PeanoNat.
+From Stdlib Require Import Lia.
 Import ListNotations.
 Open Scope string_scope.
 Open Scope Z_scope.
@@ -741,6 +742,19 @@ Axiom cast_expr_whnf : forall Γ e γ,
 Axiom reduce_prim_solvable : forall Γ p args,
   Solvable Γ (reduce_prim p args).
 
+(**
+  SMT terms are always fully-formed application trees: an SMT solver has no
+  notion of a "partially applied" or "over-applied" operator, so whenever
+  reduce_prim's result unspools to an operator head, that operator is
+  applied to exactly as many arguments as its arity demands (§3.1, SMT
+  contract - Axiom 3). This is what makes over-application of an
+  already-saturated primitive (Rule App-Prim never fires on it) get stuck
+  rather than silently re-reducing with the wrong number of arguments.
+*)
+Axiom reduce_prim_saturated : forall p args p0 args0,
+  unspool_app (reduce_prim p args) [] = (EPrimOp p0, args0) ->
+  length args0 = primop_arity p0.
+
 (** WHNF follows directly from being solvable *)
 Lemma reduce_prim_whnf : forall Γ p args,
   Whnf Γ (reduce_prim p args).
@@ -756,6 +770,29 @@ Proof.
   induction e; intros args op args0 H; simpl in *; try discriminate.
   - injection H as ? ?; subst. reflexivity.
   - apply IHe1 in H. exact H.
+Qed.
+
+(** Unspooling with an extra accumulator only ever appends to the argument
+    list already found for the empty accumulator; the head is unchanged *)
+Lemma unspool_app_shift : forall (e : expr) (L acc : list expr) (head : expr) (args : list expr),
+  unspool_app e L = (head, args) ->
+  unspool_app e (L ++ acc)%list = (head, (args ++ acc)%list).
+Proof.
+  induction e; intros L acc head args H; simpl in *;
+  try (injection H as ? ?; subst; reflexivity).
+  apply IHe1 with (L := e2 :: L). exact H.
+Qed.
+
+(** An operator-headed application spine always unspools to a primitive head *)
+Lemma is_op_app_unspool : forall e,
+  is_op_app e = true ->
+  exists p args, unspool_app e [] = (EPrimOp p, args).
+Proof.
+  induction e; intros H; simpl in H; try discriminate.
+  - exists p, []. reflexivity.
+  - destruct (IHe1 H) as [p [args Heq]].
+    apply (unspool_app_shift e1 [] [e2] (EPrimOp p) args) in Heq.
+    simpl in Heq. exists p, (args ++ [e2])%list. exact Heq.
 Qed.
 
 (** Solvable expressions that are not operators cannot be applied as functions *)
@@ -786,6 +823,48 @@ Proof.
     | [ H : sat Φ = false |- _ ] =>
         rewrite Hsat in H; discriminate
     end.
+Qed.
+
+(**
+  A saturated (arity-matching) primitive-operator result can never itself be
+  applied to a further argument: Rule App-Prim demands the combined spine's
+  argument count match the operator's arity exactly (§3.1, arity), so one
+  argument too many gets stuck, and no other rule can fire on an already-WHNF
+  operator application.
+*)
+Lemma reduce_prim_app_false : forall Γ p args ac v,
+  eval pc_true Γ (EApp (reduce_prim p args) ac) v -> False.
+Proof.
+  intros Γ p args ac v Heval.
+  remember (reduce_prim p args) as v_f eqn:Heqvf.
+  assert (Hsolv : Solvable Γ v_f) by (subst v_f; apply reduce_prim_solvable).
+  assert (Hwhnf : Whnf Γ v_f) by (apply Whnf_Solvable; exact Hsolv).
+  destruct (is_op_app v_f) eqn:Hop.
+  - destruct (is_op_app_unspool v_f Hop) as [p0 [args0 Hunspool]].
+    assert (Hsat : length args0 = primop_arity p0)
+      by (subst v_f; eapply reduce_prim_saturated; exact Hunspool).
+    inversion Heval; subst.
+    + (* Eval_AppAbs: v_f cannot be a closure *)
+      rewrite <- H in Hsolv. inversion Hsolv.
+    + (* Eval_AppSpine: v_f is already Whnf *)
+      contradiction.
+    + (* Eval_AppPrim: the combined spine's arity no longer matches *)
+      simpl in H1.
+      apply (unspool_app_shift (reduce_prim p args) [] [ac] (EPrimOp p0) args0) in Hunspool.
+      simpl in Hunspool.
+      rewrite Hunspool in H1.
+      inversion H1; subst.
+      rewrite length_app in H4.
+      simpl in H4.
+      lia.
+    + (* Eval_AppCast: v_f cannot be a cast *)
+      rewrite <- H in Hsolv. inversion Hsolv.
+    + (* Eval_AppBot: v_f cannot be a bottom *)
+      rewrite <- H2 in Hsolv. inversion Hsolv.
+    + (* Eval_Prune: pc_true is always satisfiable *)
+      rewrite sat_pc_true in H. discriminate.
+  - eapply solvable_app_eval_false;
+      [apply sat_pc_true | exact Hsolv | exact Hop | exact Heval].
 Qed.
 
 (** ------------------------------------------------------------------------- *)
