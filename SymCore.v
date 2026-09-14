@@ -730,6 +730,17 @@ Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
 Axiom merge_preserves_whnf : forall Γ e,
   Whnf Γ e -> Whnf Γ (merge e).
 
+(**
+  Grisette state merging never buries a branch below a resolved head: a
+  scrutinee fold_alts is actually able to fold over either IS the branch
+  (§3.3 - the case a match still needs to choose between alternatives) or
+  its top-level application spine contains no further branch at all. This
+  rules out the ill-formed shape "EApp (EIf ..) a" appearing as a scrutinee.
+*)
+Axiom fold_alts_no_nested_if : forall Φ Γ e alts er,
+  fold_alts Φ Γ e alts er ->
+  forall head args, unspool_app e [] = (head, args) -> is_if head = true -> head = e.
+
 (** ------------------------------------------------------------------------- *)
 (** 10.3 Normal Form / WHNF Guarantee (§3.2)                                   *)
 (** ------------------------------------------------------------------------- *)

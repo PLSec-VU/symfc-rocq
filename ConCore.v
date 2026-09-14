@@ -632,6 +632,13 @@ Axiom models_not_cond_pc : forall σ Γ e pc,
   expr_to_pc Γ e = Some pc ->
   (models_not_cond σ e <-> models σ (¬ pc)).
 
+(** Whenever the SMT solver can judge a condition's truth value at all, that
+    condition is expressible as a path-condition formula: expr_to_pc never
+    fails on a judgeable condition. *)
+Axiom models_cond_total : forall σ Γ e,
+  models_cond σ e \/ models_not_cond σ e ->
+  exists pc, expr_to_pc Γ e = Some pc.
+
 (**
   The Boolean relation `contains` from the rebuttal:
   Takes valuation σ, path condition Φ, symbolic expression e_sym, and concrete expression e_con,
@@ -743,29 +750,14 @@ Axiom subst_type_contains_env : forall σ Γs Γc τ,
   contains_env σ Γs Γc ->
   contains σ (EType (subst_type Γs τ)) (EType (subst_type Γc τ)).
 
-(** SMT primitive evaluation: evaluating arguments in a primitive application
-    yields concrete values instantiating the evaluated arguments *)
-Axiom eval_prim_args_sound : forall Φ Γs Γc σ ef ea p args args' e_con,
-  models σ Φ ->
-  contains_env σ Γs Γc ->
-  contains σ (EApp ef ea) e_con ->
-  unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
-  Forall2 (eval Φ Γs) args args' ->
-  exists args_c',
-    eval_con Γc e_con (reduce_prim p args_c') /\
-    Forall2 (contains σ) args' args_c'.
-
-(** Grisette state-merging simulation: folding alternatives along path condition Φ
-    simulates pattern match evaluation on the active concrete constructor instance *)
-Axiom fold_alts_contains : forall Φ Γs Γc σ es alts es' er esc altsc,
-  models σ Φ ->
-  contains_env σ Γs Γc ->
-  contains σ es esc ->
-  Forall2 (contains_alt σ) alts altsc ->
-  (exists vc_s, Γc ⊢ᶜ esc ⇓ᶜ vc_s /\ contains σ es' vc_s) ->
-  fold_alts Φ Γs (merge es') alts er ->
-  exists v_con,
-    Γc ⊢ᶜ ECase esc altsc ⇓ᶜ v_con /\ contains σ er v_con.
+(**
+  eval_prim_args_sound and fold_alts_contains used to be axioms here. Both are
+  now proved (see concore_soundness_fix / concore_soundness_fold_fix below):
+  the missing ingredient was not an external SMT/Grisette fact but a
+  strengthened induction principle that threads soundness through the
+  Forall2 argument list of Eval_AppPrim and the mutual eval/fold_alts
+  recursion, which Coq's auto-derived scheme does not provide on its own.
+*)
 
 (** ------------------------------------------------------------------------- *)
 (** 9.1 Proven Lemmas on SMT Models, Inversion, and Contexts                 *)
@@ -946,52 +938,6 @@ Proof.
   split; [| exact Hcont_v].
   unfold eval_con in *.
   eapply Eval_AppCast; eassumption.
-Qed.
-
-(** SMT primitive evaluation simulation (Proven Lemma using eval_prim_args_sound and reduce_prim_contains) *)
-Lemma eval_app_prim_sound : forall Φ Γs Γc σ ef ea p args args' e_con,
-  models σ Φ ->
-  contains_env σ Γs Γc ->
-  contains σ (EApp ef ea) e_con ->
-  concore_expr e_con ->
-  unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
-  Forall2 (eval Φ Γs) args args' ->
-  exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ (reduce_prim p args') v_con.
-Proof.
-  intros Φ Γs Γc σ ef ea p args args' e_con Hmod Henv Hcont Hcon Hunspool Heval_args.
-  destruct (eval_prim_args_sound Φ Γs Γc σ ef ea p args args' e_con Hmod Henv Hcont Hunspool Heval_args)
-    as [args_c' [Heval_c Hcont_args]].
-  exists (reduce_prim p args_c').
-  split; [exact Heval_c |].
-  apply reduce_prim_contains.
-  exact Hcont_args.
-Qed.
-
-(** Case evaluation simulation (Proven Lemma using fold_alts_contains) *)
-Lemma fold_alts_sound : forall Φ Γs Γc σ es alts es' er e_con,
-  models σ Φ ->
-  contains_env σ Γs Γc ->
-  contains σ (ECase es alts) e_con ->
-  concore_expr e_con ->
-  Φ ; Γs ⊢ es ⇓ es' ->
-  fold_alts Φ Γs (merge es') alts er ->
-  (forall (Γc : environment) (σ : valuation) (e_con : expr),
-    models σ Φ ->
-    contains_env σ Γs Γc ->
-    contains σ es e_con ->
-    concore_expr e_con ->
-    exists v_con : expr,
-      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ es' v_con) ->
-  exists v_con,
-    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ er v_con.
-Proof.
-  intros Φ Γs Γc σ es alts es' er e_con Hmod Henv Hcont Hcon Heval_es Hfold IH.
-  apply contains_case_inv in Hcont as [esc [altsc [Heq [Hcont_es Hcont_alts]]]]; subst e_con.
-  inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
-  destruct (IH Γc σ esc Hmod Henv Hcont_es Hcon_es) as [vc_s [Heval_esc Hcont_vs]].
-  eapply fold_alts_contains; try eassumption.
-  exists vc_s. split; assumption.
 Qed.
 
 Lemma eval_lit_con : forall Γ l v,
@@ -1245,7 +1191,422 @@ Qed.
   For any concrete expression e_con that is contained in a symbolic expression
   e_sym under valuation σ ⊨ Φ, its concrete reduction is contained in the
   symbolic reduction of e_sym.
+
+  Proved as a pair of mutually recursive fixpoints rather than by plain
+  induction on the `eval`/`fold_alts` derivation: the Eval_AppPrim case
+  needs soundness for every argument in its Forall2 (eval Φ Γ) args args',
+  and Eval_Case/FoldAlts_Con need it for the nested eval buried inside
+  fold_alts - neither is covered by Coq's auto-derived induction principle
+  for a mutually-recursive family, which only strengthens direct recursive
+  occurrences, not ones nested inside a Forall2 or the sibling relation.
+  Recursing through those manually (via `induction` on the embedded Forall2
+  / fold_alts proof, calling back into the very fixpoint being defined) is
+  what used to be papered over by the eval_prim_args_sound and
+  fold_alts_contains axioms.
 *)
+
+(** `contains` commutes with `unspool_app`, threading an existing pointwise
+    correspondence on the accumulator through the same accumulator on both
+    sides. This is what earlier let eval_app_spine_sound derive an arity
+    contradiction, and is the structural core of eval_prim_args_sound. *)
+Lemma contains_unspool_primop : forall σ e_sym e_con,
+  contains σ e_sym e_con ->
+  forall L_s L_c,
+    Forall2 (contains σ) L_s L_c ->
+    forall p args,
+      unspool_app e_sym L_s = (EPrimOp p, args) ->
+      exists args_c,
+        unspool_app e_con L_c = (EPrimOp p, args_c) /\
+        Forall2 (contains σ) args args_c.
+Proof.
+  induction 1; intros L_s L_c HL p0 args0 Hunspool; simpl in Hunspool;
+    try discriminate.
+  - injection Hunspool as ? ?; subst.
+    exists L_c. split; [reflexivity | exact HL].
+  - apply IHcontains1 with (L_s := a_s :: L_s) (L_c := a_c :: L_c).
+    + constructor; assumption.
+    + exact Hunspool.
+Qed.
+
+(** Same fact, specialized to a data-constructor head instead of a primitive
+    operator - needed for FoldAlts_Con's "the pattern matched" case. *)
+Lemma contains_unspool_con : forall σ e_sym e_con,
+  contains σ e_sym e_con ->
+  forall L_s L_c,
+    Forall2 (contains σ) L_s L_c ->
+    forall d args,
+      unspool_app e_sym L_s = (ECon d, args) ->
+      exists args_c,
+        unspool_app e_con L_c = (ECon d, args_c) /\
+        Forall2 (contains σ) args args_c.
+Proof.
+  induction 1; intros L_s L_c HL d0 args0 Hunspool; simpl in Hunspool;
+    try discriminate.
+  - injection Hunspool as ? ?; subst.
+    exists L_c. split; [reflexivity | exact HL].
+  - apply IHcontains1 with (L_s := a_s :: L_s) (L_c := a_c :: L_c).
+    + constructor; assumption.
+    + exact Hunspool.
+Qed.
+
+(** Fully general version: whatever head the spine settles on (as long as
+    it is not itself an unresolved branch), `contains` relates it to the
+    matching head on the concrete side. Needed for FoldAlts_Otherwise's
+    "the scrutinee is not this constructor" (negative) case, where the
+    target head isn't known in advance. *)
+Lemma contains_unspool_general : forall σ e_sym e_con,
+  contains σ e_sym e_con ->
+  forall L_s L_c,
+    Forall2 (contains σ) L_s L_c ->
+    forall head args,
+      unspool_app e_sym L_s = (head, args) ->
+      is_if head = false ->
+      exists head_c args_c,
+        unspool_app e_con L_c = (head_c, args_c) /\
+        contains σ head head_c /\
+        Forall2 (contains σ) args args_c.
+Proof.
+  induction 1; intros L_s L_c HL head args Hunspool Hif; simpl in Hunspool.
+  - (* Cont_Var_Bound *) injection Hunspool as ? ?; subst.
+    exists (EVar x), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_Lit *) injection Hunspool as ? ?; subst.
+    exists (ELit l), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_PrimOp *) injection Hunspool as ? ?; subst.
+    exists (EPrimOp p), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_Con *) injection Hunspool as ? ?; subst.
+    exists (ECon d), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_Coercion *) injection Hunspool as ? ?; subst.
+    exists (ECoercion γ), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_Type *) injection Hunspool as ? ?; subst.
+    exists (EType τ), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_Bot *) injection Hunspool as ? ?; subst.
+    exists (EBot b), L_c. split; [reflexivity | split; [constructor | exact HL]].
+  - (* Cont_App *)
+    apply IHcontains1 with (L_s := a_s :: L_s) (L_c := a_c :: L_c).
+    + constructor; assumption.
+    + exact Hunspool.
+    + exact Hif.
+  - (* Cont_Lam *) injection Hunspool as ? ?; subst.
+    exists (ELam x bodyc), L_c. split; [reflexivity | split; [constructor; assumption | exact HL]].
+  - (* Cont_Clos *) injection Hunspool as ? ?; subst.
+    exists (EClos Γc x bodyc), L_c. split; [reflexivity | split; [constructor; assumption | exact HL]].
+  - (* Cont_Cast *) injection Hunspool as ? ?; subst.
+    exists (ECast ec γ), L_c. split; [reflexivity | split; [constructor; assumption | exact HL]].
+  - (* Cont_Case *) injection Hunspool as ? ?; subst.
+    exists (ECase esc altsc), L_c. split; [reflexivity | split; [constructor; assumption | exact HL]].
+  - (* Cont_If_True *) injection Hunspool as ? ?; subst. simpl in Hif. discriminate.
+  - (* Cont_If_False *) injection Hunspool as ? ?; subst. simpl in Hif. discriminate.
+Qed.
+
+(** `find_alt` looks up alternatives by tag only, and `contains_alt`
+    preserves tags exactly, so a symbolic match hit corresponds to a
+    concrete match hit on the same tag. *)
+Lemma find_alt_contains_alt : forall σ alts altsc d xs ep,
+  Forall2 (contains_alt σ) alts altsc ->
+  find_alt d alts = Some (xs, ep) ->
+  exists epc, find_alt d altsc = Some (xs, epc) /\ contains σ ep epc.
+Proof.
+  induction 1 as [| a ac alts' altsc' Ha Hrest IH]; intros Hfind.
+  - simpl in Hfind; discriminate.
+  - simpl in Hfind. destruct a as [d' xs' ep']. inversion Ha as [d'' xs'' eps epc Hcont_ep]; subst.
+    simpl. destruct (string_dec d d').
+    + inversion Hfind; subst. exists epc. split; [reflexivity | assumption].
+    + apply IH; assumption.
+Qed.
+
+(** Dually, a symbolic match miss is also a concrete match miss. *)
+Lemma find_alt_none_contains_alt : forall σ alts altsc d,
+  Forall2 (contains_alt σ) alts altsc ->
+  find_alt d alts = None ->
+  find_alt d altsc = None.
+Proof.
+  induction 1 as [| a ac alts' altsc' Ha Hrest IH]; intros Hfind.
+  - reflexivity.
+  - simpl in Hfind. destruct a as [d' xs' ep']. inversion Ha as [d'' xs'' eps epc Hcont_ep]; subst.
+    simpl. destruct (string_dec d d'); [discriminate | apply IH; assumption].
+Qed.
+
+(** extend_env_multi extended pointwise by contains, argument list by
+    argument list, preserves contains_env - needed for FoldAlts_Con's
+    pattern body evaluation under the bound constructor arguments. *)
+Lemma contains_env_extend_multi : forall σ xs args_s args_c Γs Γc Γarg_s Γarg_c,
+  contains_env σ Γs Γc ->
+  contains_env σ Γarg_s Γarg_c ->
+  Forall2 (contains σ) args_s args_c ->
+  Forall concore_expr args_c ->
+  contains_env σ (extend_env_multi Γs xs args_s Γarg_s) (extend_env_multi Γc xs args_c Γarg_c).
+Proof.
+  induction xs as [| x xs' IH]; intros args_s args_c Γs Γc Γarg_s Γarg_c Henv Hargenv Hargs Hconcore.
+  - simpl. exact Henv.
+  - destruct args_s as [| a args_s']; destruct args_c as [| ac args_c'];
+      try (inversion Hargs; fail).
+    + simpl. exact Henv.
+    + simpl. inversion Hargs as [| a0 ac0 args_s'0 args_c'0 Hcont_a Hargs' Heq1 Heq2]; subst.
+      inversion Hconcore as [| ac1 args_c'1 Hcon_a Hconcore' ]; subst.
+      apply Cont_Env_Extend.
+      * exact Hargenv.
+      * exact Hcont_a.
+      * exact Hcon_a.
+      * apply IH; assumption.
+Qed.
+
+Fixpoint concore_soundness_fix (Φ : path_condition) (Γs : environment) (e_sym v_sym : expr)
+  (Heval : Φ ; Γs ⊢ e_sym ⇓ v_sym) {struct Heval} :
+  forall Γc σ e_con,
+    models σ Φ ->
+    contains_env σ Γs Γc ->
+    contains σ e_sym e_con ->
+    concore_expr e_con ->
+    exists v_con,
+      Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
+      contains σ v_sym v_con
+with concore_soundness_fold_fix (Φ : path_condition) (Γs : environment) (escrut : expr) (alts : list alt) (er : expr)
+  (Hfold : fold_alts Φ Γs escrut alts er) {struct Hfold} :
+  forall Γc σ esc altsc,
+    models σ Φ ->
+    contains_env σ Γs Γc ->
+    concore_expr esc ->
+    Forall concore_alt altsc ->
+    (exists vc_s, Γc ⊢ᶜ esc ⇓ᶜ vc_s /\ contains σ escrut vc_s) ->
+    Forall2 (contains_alt σ) alts altsc ->
+    exists v_con,
+      Γc ⊢ᶜ ECase esc altsc ⇓ᶜ v_con /\ contains σ er v_con.
+Proof.
+{
+  destruct Heval as
+    [ Φ Γ x Γ' e e' Hlookup Heval_x
+    | Φ Γ l
+    | Φ Γ d
+    | Φ Γ e γ e' Heval_e
+    | Φ Γ Γ' x eb ea eb' Heval_b
+    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | Φ Γ b
+    | Φ Γ ef ea p args args' Hunspool Harity Hargs
+    | Φ Γ x e
+    | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | Φ Γ b ea
+    | Φ Γ es alts es' er Heval_es Hfold
+    | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
+    | Φ Γ γ
+    | Φ Γ e Hsat
+    | Φ Γ τ
+    ]; intros Γc σ e_con Hmod Henv Hcont Hcon.
+  - (* Eval_Var *)
+    assert (Heq : e_con = EVar x) by (eapply contains_var_bound; eassumption).
+    subst e_con.
+    destruct (contains_lookup_env σ Γ Γc x Γ' e Henv Hlookup) as [Γ'c [ec [Hlookc [Henv' Hcont']]]].
+    assert (Hcon' : concore_expr ec) by (apply (lookup_env_concore σ Γ Γc x Γ' e Γ'c ec Henv Hlookup Hlookc)).
+    destruct (concore_soundness_fix Φ Γ' e e' Heval_x Γ'c σ ec Hmod Henv' Hcont' Hcon') as [v_con [Hevalc Hcont_v]].
+    exists v_con. split; [| exact Hcont_v].
+    unfold eval_con. eapply Eval_Var; eassumption.
+  - (* Eval_Lit *)
+    apply contains_lit_inv in Hcont; subst.
+    exists (ELit l). split; [apply Eval_Lit | apply Cont_Lit].
+  - (* Eval_Con *)
+    apply contains_con_inv in Hcont; subst.
+    exists (ECon d). split; [apply Eval_Con | apply Cont_Con].
+  - (* Eval_Cast *)
+    apply contains_cast_inv in Hcont as [ec [Heq Hcont_e]]; subst.
+    inversion Hcon as [| | | | | | | | ec0 γ0 Hcon_e | | | | | ]; subst.
+    destruct (concore_soundness_fix Φ Γ e e' Heval_e Γc σ ec Hmod Henv Hcont_e Hcon_e) as [vc [Hevalc Hcont_v]].
+    exists (cast_expr vc γ). split; [unfold eval_con; apply Eval_Cast; exact Hevalc | apply cast_expr_contains; exact Hcont_v].
+  - (* Eval_AppAbs *)
+    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
+    apply contains_clos_inv in Hcont_f as [Γ'c [ebc [Heq_f [Henv_clos Hcont_b]]]]; subst.
+    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
+    inversion Hf as [| | | | | | Γ0 x0 body Henv_clos_c Hcon_b | | | | | | | ]; subst.
+    assert (Henv_ext : contains_env σ (ExtendEnv x (MkClosure Γ ea) Γ') (ExtendEnv x (MkClosure Γc ac) Γ'c)).
+    { apply Cont_Env_Extend; assumption. }
+    destruct (concore_soundness_fix Φ (extend_env Γ' x Γ ea) eb eb' Heval_b (ExtendEnv x (MkClosure Γc ac) Γ'c) σ ebc Hmod Henv_ext Hcont_b Hcon_b) as [v_con [Heval_b' Hcont_v]].
+    exists v_con. split; [| exact Hcont_v].
+    unfold eval_con. apply Eval_AppAbs. exact Heval_b'.
+  - (* Eval_AppSpine *)
+    eapply eval_app_spine_sound; try eassumption.
+    + intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
+      exact (concore_soundness_fix Φ Γ ef ef' Heval_f Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0).
+    + intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
+      exact (concore_soundness_fix Φ Γ (EApp ef' ea) er Heval_app2 Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0).
+  - (* Eval_Bot *)
+    inversion Hcont; subst.
+    exists (EBot b). split; [apply Eval_Bot | apply Cont_Bot].
+  - (* Eval_AppPrim *)
+    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst e_con.
+    assert (Hcont_full : contains σ (EApp ef ea) (EApp fc ac)) by (constructor; assumption).
+    inversion Hcon as [| | | | fc0 ac0 Hcon_f Hcon_a | | | | | | | | | ]; subst.
+    assert (Hunspool_c : exists args_c, unspool_app (EApp fc ac) [] = (EPrimOp p, args_c) /\ Forall2 (contains σ) args args_c).
+    { apply (contains_unspool_primop σ (EApp ef ea) (EApp fc ac) Hcont_full [] [] (Forall2_nil _) p args Hunspool). }
+    destruct Hunspool_c as [args_c [Hunspool_c Hcont_args]].
+    assert (Hconcore_args_c : Forall concore_expr args_c).
+    { eapply unspool_app_concore; [exact Hunspool_c | constructor; assumption | constructor]. }
+    assert (Hstep : exists args_c', Forall2 (eval pc_true Γc) args_c args_c' /\ Forall2 (contains σ) args' args_c').
+    { clear Hunspool Harity Hunspool_c Hcont_full.
+      revert args_c Hcont_args Hconcore_args_c.
+      induction Hargs as [| a a' args_tl args'_tl Ha Hargs_tl IHargs];
+        intros args_c Hcont_args Hconcore_args_c.
+      - inversion Hcont_args; subst.
+        exists []. split; constructor.
+      - inversion Hcont_args as [| a0 ac1 args_tl0 args_c_tl Hcont_a1 Hcont_tl Heqa Heqargs]; subst.
+        inversion Hconcore_args_c as [| ac2 args_c_tl2 Hcon_a1 Hcon_tl]; subst.
+        destruct (concore_soundness_fix Φ Γ a a' Ha Γc σ ac1 Hmod Henv Hcont_a1 Hcon_a1)
+          as [v_a [Heval_a Hcont_va]].
+        destruct (IHargs args_c_tl Hcont_tl Hcon_tl) as [args_c'_tl [Heval_tl Hcont_tl']].
+        exists (v_a :: args_c'_tl). split; constructor; assumption.
+    }
+    destruct Hstep as [args_c' [Heval_args_c Hcont_args']].
+    exists (reduce_prim p args_c').
+    split.
+    + unfold eval_con. eapply Eval_AppPrim.
+      * exact Hunspool_c.
+      * assert (Hlen : length args_c = length args) by (symmetry; eapply Forall2_length; exact Hcont_args).
+        rewrite Hlen. exact Harity.
+      * exact Heval_args_c.
+    + apply reduce_prim_contains. exact Hcont_args'.
+  - (* Eval_Lam *)
+    apply contains_lam_inv in Hcont as [bodyc [Heq Hcont_body]]; subst.
+    exists (EClos Γc x bodyc). split; [apply Eval_Lam | constructor; assumption].
+  - (* Eval_AppCast *)
+    eapply eval_app_cast_sound; try eassumption.
+    intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
+    exact (concore_soundness_fix Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er Heval_pushed Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0).
+  - (* Eval_AppBot *)
+    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
+    inversion Hcont_f; subst.
+    exists (EBot b). split; [apply Eval_AppBot | constructor].
+  - (* Eval_Case *)
+    apply contains_case_inv in Hcont as [esc [altsc [Heq [Hcont_es Hcont_alts]]]]; subst.
+    inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
+    destruct (concore_soundness_fix Φ Γ es es' Heval_es Γc σ esc Hmod Henv Hcont_es Hcon_es) as [vc_s [Heval_esc Hcont_vs]].
+    assert (Hcont_merge : contains σ (merge es') vc_s) by (apply merge_contains; exact Hcont_vs).
+    destruct (concore_soundness_fold_fix Φ Γ (merge es') alts er Hfold Γc σ esc altsc Hmod Henv Hcon_es Hcon_alts
+                (ex_intro _ vc_s (conj Heval_esc Hcont_merge)) Hcont_alts) as [v_con [Heval_case Hcont_er]].
+    exists v_con. split; assumption.
+  - (* Eval_If *)
+    inversion Hcont; subst.
+    + assert (Hcond' : models_cond σ ec') by (apply eval_models_cond with (Φ:=Φ)(Γ:=Γ)(ec:=ec); assumption).
+      assert (Hpc_mod : models σ pc_c) by (apply (models_cond_pc σ Γ ec' pc_c Hpc); exact Hcond').
+      assert (Hmod_and : models σ (Φ ∧ pc_c)) by (apply models_and; assumption).
+      destruct (concore_soundness_fix (Φ ∧ pc_c) Γ et et' Heval_t Γc σ e_con Hmod_and Henv H4 Hcon) as [v_con [Hevalc' Hcont_v]].
+      exists v_con. split; [exact Hevalc' |]. apply Cont_If_True; [exact Hcond' | exact Hcont_v].
+    + assert (Hncond' : models_not_cond σ ec') by (apply eval_models_not_cond with (Φ:=Φ)(Γ:=Γ)(ec:=ec); assumption).
+      assert (Hpc_mod : models σ (¬ pc_c)) by (apply (models_not_cond_pc σ Γ ec' pc_c Hpc); exact Hncond').
+      assert (Hmod_and : models σ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
+      destruct (concore_soundness_fix (Φ ∧ ¬ pc_c) Γ ef ef' Heval_f Γc σ e_con Hmod_and Henv H4 Hcon) as [v_con [Hevalc' Hcont_v]].
+      exists v_con. split; [exact Hevalc' |]. apply Cont_If_False; [exact Hncond' | exact Hcont_v].
+  - (* Eval_Coercion *)
+    inversion Hcont; subst.
+    exists (ECoercion (subst_coerc Γc γ)).
+    split; [apply Eval_Coercion | apply subst_coerc_contains_env; assumption].
+  - (* Eval_Prune *)
+    apply models_sat in Hmod. rewrite Hsat in Hmod. discriminate.
+  - (* Eval_Type *)
+    inversion Hcont; subst.
+    exists (EType (subst_type Γc τ)).
+    split; [apply Eval_Type | apply subst_type_contains_env; assumption].
+}
+{
+  destruct Hfold as
+    [ Φ Γ ec et ef alts et' ef' pc_c Hpc Hfold_t Hfold_f
+    | Φ Γ ec et ef alts Hpc_none
+    | Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
+    | Φ Γ b alts
+    | Φ Γ e alts Hnotif Hnoalt Hnotbot
+    ]; intros Γc σ esc altsc Hmod Henv Hcon_esc Hcon_altsc Hvc Halts.
+  - (* FoldAlts_If *)
+    destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
+    inversion Hcont_vs; subst.
+    + assert (Hpc_mod : models σ pc_c) by (apply (models_cond_pc σ Γ ec pc_c Hpc); assumption).
+      assert (Hmod_and : models σ (Φ ∧ pc_c)) by (apply models_and; assumption).
+      destruct (concore_soundness_fold_fix (Φ ∧ pc_c) Γ et alts et' Hfold_t Γc σ esc altsc Hmod_and Henv Hcon_esc Hcon_altsc
+                  (ex_intro _ vc_s (conj Heval_esc H4)) Halts) as [v_con [Heval_case Hcont_er]].
+      exists v_con. split; [exact Heval_case | apply Cont_If_True; assumption].
+    + assert (Hpc_mod : models σ (¬ pc_c)) by (apply (models_not_cond_pc σ Γ ec pc_c Hpc); assumption).
+      assert (Hmod_and : models σ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
+      destruct (concore_soundness_fold_fix (Φ ∧ ¬ pc_c) Γ ef alts ef' Hfold_f Γc σ esc altsc Hmod_and Henv Hcon_esc Hcon_altsc
+                  (ex_intro _ vc_s (conj Heval_esc H4)) Halts) as [v_con [Heval_case Hcont_er]].
+      exists v_con. split; [exact Heval_case | apply Cont_If_False; assumption].
+  - (* FoldAlts_IfFail *)
+    destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
+    inversion Hcont_vs; subst.
+    + exfalso.
+      destruct (models_cond_total σ Γ ec (or_introl H3)) as [pc Hpc_some].
+      rewrite Hpc_none in Hpc_some. discriminate.
+    + exfalso.
+      destruct (models_cond_total σ Γ ec (or_intror H3)) as [pc Hpc_some].
+      rewrite Hpc_none in Hpc_some. discriminate.
+  - (* FoldAlts_Con *)
+    destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
+    assert (Hunspool_e : unspool_app e [] = (ECon d, ea)).
+    { unfold decompose_con_app in Hdec.
+      destruct (unspool_app e []) as [h a0] eqn:Hu.
+      destruct h; try discriminate.
+      inversion Hdec; subst; reflexivity. }
+    assert (Hunspool_vcs : exists ea_c, unspool_app vc_s [] = (ECon d, ea_c) /\ Forall2 (contains σ) ea ea_c).
+    { apply (contains_unspool_con σ e vc_s Hcont_vs [] [] (Forall2_nil _) d ea Hunspool_e). }
+    destruct Hunspool_vcs as [ea_c [Hunspool_vcs Hcont_ea]].
+    assert (Hdec_vcs : decompose_con_app vc_s = Some (d, ea_c)).
+    { unfold decompose_con_app. rewrite Hunspool_vcs. reflexivity. }
+    destruct (find_alt_contains_alt σ alts altsc d xs ep Halts Halt) as [ep_c [Halt_c Hcont_ep]].
+    assert (Henv_concrete : concrete_env Γc) by (eapply contains_env_concrete; exact Henv).
+    assert (Hcon_vcs : concore_expr vc_s) by (eapply concore_eval_closed; [exact Henv_concrete | exact Hcon_esc | exact Heval_esc]).
+    assert (Hconcore_ea_c : Forall concore_expr ea_c).
+    { eapply unspool_app_concore; [exact Hunspool_vcs | exact Hcon_vcs | constructor]. }
+    assert (Hcon_ep_c : concore_expr ep_c) by (eapply find_alt_concore; [exact Halt_c | exact Hcon_altsc]).
+    assert (Henv_ext : contains_env σ (extend_env_multi Γ xs ea Γ) (extend_env_multi Γc xs ea_c Γc)).
+    { apply contains_env_extend_multi; assumption. }
+    destruct (concore_soundness_fix Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep
+                (extend_env_multi Γc xs ea_c Γc) σ ep_c Hmod Henv_ext Hcont_ep Hcon_ep_c)
+      as [v_con [Heval_ep_c Hcont_er]].
+    exists v_con. split; [| exact Hcont_er].
+    unfold eval_con. eapply Eval_Case.
+    + exact Heval_esc.
+    + apply merge_fold_alts_equiv.
+      eapply FoldAlts_Con; [exact Hdec_vcs | exact Halt_c | exact Heval_ep_c].
+  - (* FoldAlts_Bot *)
+    destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
+    inversion Hcont_vs; subst.
+    exists (EBot b). split; [| apply Cont_Bot].
+    unfold eval_con. eapply Eval_Case.
+    + exact Heval_esc.
+    + apply merge_fold_alts_equiv. apply FoldAlts_Bot.
+  - (* FoldAlts_Otherwise *)
+    destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
+    assert (Hrec : fold_alts Φ Γ e alts (EBot BUndefined)) by (eapply FoldAlts_Otherwise; eassumption).
+    assert (Hno_nested := fold_alts_no_nested_if Φ Γ e alts (EBot BUndefined) Hrec).
+    destruct (unspool_app e []) as [head args] eqn:Hunspool_e.
+    assert (Hif_head : is_if head = false).
+    { destruct (is_if head) eqn:Hcase; [| reflexivity].
+      specialize (Hno_nested head args eq_refl Hcase). subst head.
+      rewrite Hnotif in Hcase. discriminate. }
+    destruct (contains_unspool_general σ e vc_s Hcont_vs [] [] (Forall2_nil _) head args Hunspool_e Hif_head)
+      as [head_c [args_c [Hunspool_vcs [Hcont_head Hcont_args]]]].
+    assert (Hnoalt_c : match decompose_con_app vc_s with Some (d,_) => find_alt d altsc = None | None => True end).
+    { unfold decompose_con_app. rewrite Hunspool_vcs.
+      destruct head_c eqn:Hheadc; try exact I.
+      inversion Hcont_head; subst; try (simpl in Hif_head; discriminate).
+      assert (Hdeco_e : decompose_con_app e = Some (d, args)) by (unfold decompose_con_app; rewrite Hunspool_e; reflexivity).
+      rewrite Hdeco_e in Hnoalt.
+      exact (find_alt_none_contains_alt σ alts altsc d Halts Hnoalt).
+    }
+    assert (Hnotbot_c : is_bot vc_s = false).
+    { destruct (is_bot vc_s) eqn:Hbc; [| reflexivity].
+      exfalso.
+      destruct vc_s; simpl in Hbc; try discriminate.
+      inversion Hcont_vs; subst; discriminate.
+    }
+    assert (Hnotif_c : is_if vc_s = false).
+    { destruct (is_if vc_s) eqn:Hic; [| reflexivity].
+      exfalso.
+      destruct vc_s; simpl in Hic; try discriminate.
+      inversion Hcont_vs; subst; discriminate.
+    }
+    exists (EBot BUndefined). split; [| apply Cont_Bot].
+    unfold eval_con. eapply Eval_Case.
+    + exact Heval_esc.
+    + apply merge_fold_alts_equiv.
+      apply FoldAlts_Otherwise; assumption.
+}
+Qed.
+
 Theorem concore_soundness : forall Φ Γs Γc σ e_sym e_con v_sym,
   models σ Φ ->
   contains_env σ Γs Γc ->
@@ -1257,104 +1618,9 @@ Theorem concore_soundness : forall Φ Γs Γc σ e_sym e_con v_sym,
     contains σ v_sym v_con.
 Proof.
   intros Φ Γs Γc σ e_sym e_con v_sym Hmod Henv Hcont Hcon Heval.
-  revert Γc σ e_con Hmod Henv Hcont Hcon.
-  induction Heval.
-  - (* Eval_Var *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    assert (Heq : e_con = EVar x) by (eapply contains_var_bound; eassumption).
-    subst e_con.
-    destruct (contains_lookup_env σ Γ Γc x Γ' e Henv H) as [Γ'c [ec [Hlookc [Henv' Hcont']]]].
-    assert (Hcon' : concore_expr ec) by (apply (lookup_env_concore σ Γ Γc x Γ' e Γ'c ec Henv H Hlookc)).
-    destruct (IHHeval Γ'c σ ec Hmod Henv' Hcont' Hcon') as [v_con [Hevalc Hcont_v]].
-    exists v_con. split; [| exact Hcont_v].
-    unfold eval_con. eapply Eval_Var; eassumption.
-  - (* Eval_Lit *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply contains_lit_inv in Hcont; subst.
-    exists (ELit l). split; [apply Eval_Lit | apply Cont_Lit].
-  - (* Eval_Con *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply contains_con_inv in Hcont; subst.
-    exists (ECon d). split; [apply Eval_Con | apply Cont_Con].
-  - (* Eval_Cast *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply contains_cast_inv in Hcont as [ec [Heq Hcont_e]]; subst.
-    inversion Hcon as [| | | | | | | | ec0 γ0 Hcon_e | | | | | ]; subst.
-    destruct (IHHeval Γc σ ec Hmod Henv Hcont_e Hcon_e) as [vc [Hevalc Hcont_v]].
-    exists (cast_expr vc γ). split; [unfold eval_con; apply Eval_Cast; exact Hevalc | apply cast_expr_contains; exact Hcont_v].
-  - (* Eval_AppAbs *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
-    apply contains_clos_inv in Hcont_f as [Γ'c [ebc [Heq_f [Henv_clos Hcont_b]]]]; subst.
-    inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-    inversion Hf as [| | | | | | Γ0 x0 body Henv_clos_c Hcon_b | | | | | | | ]; subst.
-    assert (Henv_ext : contains_env σ (ExtendEnv x (MkClosure Γ ea) Γ')
-                                      (ExtendEnv x (MkClosure Γc ac) Γ'c)).
-    { apply Cont_Env_Extend; assumption. }
-    destruct (IHHeval (ExtendEnv x (MkClosure Γc ac) Γ'c) σ ebc Hmod Henv_ext Hcont_b Hcon_b) as [v_con [Heval_b Hcont_v]].
-    exists v_con. split; [| exact Hcont_v].
-    unfold eval_con. apply Eval_AppAbs. exact Heval_b.
-  - (* Eval_AppSpine *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    eapply eval_app_spine_sound; eassumption.
-  - (* Eval_Bot *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    inversion Hcont; subst.
-    exists (EBot b). split; [apply Eval_Bot | apply Cont_Bot].
-  - (* Eval_AppPrim *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    eapply eval_app_prim_sound; eassumption.
-  - (* Eval_Lam *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply contains_lam_inv in Hcont as [bodyc [Heq Hcont_body]]; subst.
-    exists (EClos Γc x bodyc). split; [apply Eval_Lam | constructor; assumption].
-  - (* Eval_AppCast *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    eapply eval_app_cast_sound; eassumption.
-  - (* Eval_AppBot *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
-    inversion Hcont_f; subst.
-    exists (EBot b). split; [apply Eval_AppBot | constructor].
-  - (* Eval_Case *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    eapply fold_alts_sound; eassumption.
-  - (* Eval_If *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    inversion Hcont; subst.
-    + assert (Hcond' : models_cond σ ec').
-      { apply eval_models_cond with (Φ := Φ) (Γ := Γ) (ec := ec); assumption. }
-      assert (Hpc_mod : models σ pc_c).
-      { apply (models_cond_pc σ Γ ec' pc_c H). exact Hcond'. }
-      assert (Hmod_and : models σ (Φ ∧ pc_c)).
-      { apply models_and; assumption. }
-      destruct (IHHeval2 Γc σ e_con Hmod_and Henv H5 Hcon) as [v_con [Hevalc' Hcont_v]].
-      exists v_con. split; [exact Hevalc' |].
-      apply Cont_If_True; [exact Hcond' | exact Hcont_v].
-    + assert (Hncond' : models_not_cond σ ec').
-      { apply eval_models_not_cond with (Φ := Φ) (Γ := Γ) (ec := ec); assumption. }
-      assert (Hpc_mod : models σ (¬ pc_c)).
-      { apply (models_not_cond_pc σ Γ ec' pc_c H). exact Hncond'. }
-      assert (Hmod_and : models σ (Φ ∧ ¬ pc_c)).
-      { apply models_and; assumption. }
-      destruct (IHHeval3 Γc σ e_con Hmod_and Henv H5 Hcon) as [v_con [Hevalc' Hcont_v]].
-      exists v_con. split; [exact Hevalc' |].
-      apply Cont_If_False; [exact Hncond' | exact Hcont_v].
-  - (* Eval_Coercion *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    inversion Hcont; subst.
-    exists (ECoercion (subst_coerc Γc γ)).
-    split; [apply Eval_Coercion | apply subst_coerc_contains_env; assumption].
-  - (* Eval_Prune *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    apply models_sat in Hmod.
-    rewrite H in Hmod. discriminate.
-  - (* Eval_Type *)
-    intros Γc σ e_con Hmod Henv Hcont Hcon.
-    inversion Hcont; subst.
-    exists (EType (subst_type Γc τ)).
-    split; [apply Eval_Type | apply subst_type_contains_env; assumption].
+  exact (concore_soundness_fix Φ Γs e_sym v_sym Heval Γc σ e_con Hmod Henv Hcont Hcon).
 Qed.
+
 
 (** Top-level Soundness for whole programs starting from EmptyEnv *)
 Theorem concore_soundness_top : forall Φ σ e_sym e_con v_sym,
