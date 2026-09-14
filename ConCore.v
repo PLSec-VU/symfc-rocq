@@ -1219,7 +1219,7 @@ Proof.
       * exfalso.
         eapply eval_app_primop_head in Heval_f as [p [args' Heq]]; [| exact sat_pc_true | exact Hwhnf_c | exact Hop].
         subst v_f.
-        eapply eval_app_reduce_prim_false; [exact sat_pc_true | exact Heval_app2].
+        eapply solvable_app_eval_false; [exact sat_pc_true | apply reduce_prim_solvable | apply reduce_prim_concore_not_op | exact Heval_app2].
     + eapply eval_con_app_whnf; eassumption.
   - eapply Eval_AppSpine; [exact Hnot_whnf_c | exact Heval_f | exact Heval_app2].
 Qed.
