@@ -3,6 +3,7 @@
 *.vok
 *.glob
 .*.aux
+.*.cache
 .Makefile.d
 Makefile
 Makefile.conf
