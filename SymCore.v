@@ -41,8 +41,30 @@ Axiom primop : Set.
 Axiom op_and : primop.
 Axiom op_not : primop.
 
+(**
+  SMT if-then-else. This is the solver's own three-place term, not the
+  evaluator's branch EIf. Section 3.3's merge turns a branch between two
+  solvable arms into this term, which is the point at which a branch stops
+  being a tree the evaluator walks and becomes a formula the solver reads.
+*)
+Parameter op_ite : primop.
+
 (** Arity of a primitive operation: the number of arguments it is applied to (§3.1) *)
 Axiom primop_arity : primop -> nat.
+
+(** if-then-else takes a condition and two arms *)
+Axiom op_ite_arity : primop_arity op_ite = 3%nat.
+
+(**
+  Literals and primitive operations have decidable equality.
+
+  Merge needs it: Section 3.3 merges two arms only when they are the same
+  shape carrying the same payload, and "the same payload" has to be a test
+  the definition can run. Equality of expressions is built from these two
+  and from tycon_eq_dec below.
+*)
+Parameter lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2}.
+Parameter primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
 
 (** ========================================================================= *)
 (** 3. Types and Coercions in System FC / SymCore (§3.1)                      *)
@@ -50,6 +72,9 @@ Axiom primop_arity : primop -> nat.
 
 (** Type Constructors (e.g. Int, Bool, SMT.BitVec); left abstract *)
 Parameter tycon : Set.
+
+(** Type constructors have decidable equality; merge compares whole types *)
+Parameter tycon_eq_dec : forall (t1 t2 : tycon), {t1 = t2} + {t1 <> t2}.
 
 (** System FC Types with arrow types for higher-order coercions *)
 Inductive type_fc : Set :=
@@ -69,6 +94,21 @@ Proof.
   decide equality.
 Defined.
 
+Definition type_fc_eq_dec : forall (τ1 τ2 : type_fc), {τ1 = τ2} + {τ1 <> τ2}.
+Proof.
+  decide equality; [apply string_dec | apply tycon_eq_dec].
+Defined.
+
+(** A test that runs a decision procedure and reports the verdict as a Boolean *)
+Definition dec_eqb {A : Type} (d : forall x y : A, {x = y} + {x <> y}) (x y : A) : bool :=
+  if d x y then true else false.
+
+Lemma dec_eqb_eq : forall (A : Type) (d : forall x y : A, {x = y} + {x <> y}) x y,
+  dec_eqb d x y = true -> x = y.
+Proof.
+  intros A d x y H. unfold dec_eqb in H. destruct (d x y); [assumption | discriminate].
+Qed.
+
 (** Coercions witnessing type equality with endpoints (Section 3.1: γ : τ1 ~ρ τ2) *)
 Record coercion : Set := MkCoercion {
   coerc_src  : type_fc;     (** τ1 *)
@@ -79,6 +119,11 @@ Record coercion : Set := MkCoercion {
 (** Symmetry of a coercion: sym γ witnesses τ2 ~ρ τ1 (Fig. 3, Rule App-Cast) *)
 Definition sym_coerc (γ : coercion) : coercion :=
   MkCoercion (coerc_dst γ) (coerc_src γ) (coerc_role γ).
+
+Definition coercion_eq_dec : forall (γ1 γ2 : coercion), {γ1 = γ2} + {γ1 <> γ2}.
+Proof.
+  decide equality; [apply role_eq_dec | apply type_fc_eq_dec | apply type_fc_eq_dec].
+Defined.
 
 (** Decomposition of arrow coercion: (γa -> γr) = γ (Fig. 3, Rule App-Cast) *)
 Definition decomp_coerc_arrow (γ : coercion) : option (coercion * coercion) :=
@@ -131,6 +176,126 @@ with environment : Type :=
                                                   (** Γ{x ↦ (Γ', e)}: substitution map *)
 
 Notation "'·'" := EmptyEnv.
+
+(**
+  Syntactic equality of expressions, as a test the merge definition can run.
+
+  Section 3.3 merges two bottoms only when they are the same bottom, and a
+  bottom may carry a whole expression (raise e), so the test has to descend
+  into expressions, alternatives and environments at once. Only the direction
+  "the test says yes, so the two really are equal" is proved below, and only
+  that direction is used: a false answer just leaves the branch unmerged.
+*)
+Fixpoint expr_eqb (e1 e2 : expr) {struct e1} : bool :=
+  match e1, e2 with
+  | EVar x1, EVar x2 => String.eqb x1 x2
+  | ELit l1, ELit l2 => dec_eqb lit_eq_dec l1 l2
+  | EPrimOp p1, EPrimOp p2 => dec_eqb primop_eq_dec p1 p2
+  | ECon d1, ECon d2 => String.eqb d1 d2
+  | EApp f1 a1, EApp f2 a2 => andb (expr_eqb f1 f2) (expr_eqb a1 a2)
+  | ELam x1 b1, ELam x2 b2 => andb (String.eqb x1 x2) (expr_eqb b1 b2)
+  | EClos Γ1 x1 b1, EClos Γ2 x2 b2 =>
+      andb (andb (env_eqb Γ1 Γ2) (String.eqb x1 x2)) (expr_eqb b1 b2)
+  | ECase s1 alts1, ECase s2 alts2 =>
+      andb (expr_eqb s1 s2)
+        ((fix alts_eqb (l1 l2 : list alt) {struct l1} : bool :=
+            match l1, l2 with
+            | nil, nil => true
+            | Alt d1 xs1 p1 :: t1, Alt d2 xs2 p2 :: t2 =>
+                andb (andb (andb (andb
+                  (String.eqb d1 d2)
+                  (forallb (fun p => String.eqb (fst p) (snd p)) (combine xs1 xs2)))
+                  (Nat.eqb (length xs1) (length xs2)))
+                  (expr_eqb p1 p2)) (alts_eqb t1 t2)
+            | _, _ => false
+            end) alts1 alts2)
+  | ECast b1 γ1, ECast b2 γ2 => andb (expr_eqb b1 b2) (dec_eqb coercion_eq_dec γ1 γ2)
+  | ECoercion γ1, ECoercion γ2 => dec_eqb coercion_eq_dec γ1 γ2
+  | EType τ1, EType τ2 => dec_eqb type_fc_eq_dec τ1 τ2
+  | EIf c1 t1 f1, EIf c2 t2 f2 =>
+      andb (andb (expr_eqb c1 c2) (expr_eqb t1 t2)) (expr_eqb f1 f2)
+  | EBot b1, EBot b2 => bottom_eqb b1 b2
+  | _, _ => false
+  end
+with bottom_eqb (b1 b2 : bottom) {struct b1} : bool :=
+  match b1, b2 with
+  | BRaise e1, BRaise e2 => expr_eqb e1 e2
+  | BUnreachable, BUnreachable => true
+  | BUndefined, BUndefined => true
+  | _, _ => false
+  end
+with env_eqb (Γ1 Γ2 : environment) {struct Γ1} : bool :=
+  match Γ1, Γ2 with
+  | EmptyEnv, EmptyEnv => true
+  | ExtendEnv x1 (MkClosure Γ1' e1) r1, ExtendEnv x2 (MkClosure Γ2' e2) r2 =>
+      andb (andb (andb (String.eqb x1 x2) (env_eqb Γ1' Γ2')) (expr_eqb e1 e2))
+           (env_eqb r1 r2)
+  | _, _ => false
+  end.
+
+(** Two binder lists that agree pairwise and in length are the same list *)
+Lemma vars_eqb_eq : forall xs1 xs2,
+  forallb (fun p => String.eqb (fst p) (snd p)) (combine xs1 xs2) = true ->
+  Nat.eqb (length xs1) (length xs2) = true ->
+  xs1 = xs2.
+Proof.
+  induction xs1 as [| x xs IH]; intros xs2 Hall Hlen.
+  - destruct xs2; [reflexivity | discriminate].
+  - destruct xs2 as [| y ys]; [discriminate |].
+    simpl in Hall, Hlen. apply andb_prop in Hall as [Hxy Hrest].
+    apply String.eqb_eq in Hxy. subst y. f_equal. apply IH; assumption.
+Qed.
+
+(** The test only says yes to equal terms *)
+Fixpoint expr_eqb_eq (e1 : expr) {struct e1} :
+  forall e2, expr_eqb e1 e2 = true -> e1 = e2
+with bottom_eqb_eq (b1 : bottom) {struct b1} :
+  forall b2, bottom_eqb b1 b2 = true -> b1 = b2
+with env_eqb_eq (Γ1 : environment) {struct Γ1} :
+  forall Γ2, env_eqb Γ1 Γ2 = true -> Γ1 = Γ2.
+Proof.
+  - destruct e1; intros e2 H; destruct e2; simpl in H; try discriminate.
+    + apply String.eqb_eq in H. subst. reflexivity.
+    + apply dec_eqb_eq in H. subst. reflexivity.
+    + apply dec_eqb_eq in H. subst. reflexivity.
+    + apply String.eqb_eq in H. subst. reflexivity.
+    + apply andb_prop in H as [H1 H2].
+      rewrite (expr_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2). reflexivity.
+    + apply andb_prop in H as [H1 H2]. apply String.eqb_eq in H1. subst.
+      rewrite (expr_eqb_eq _ _ H2). reflexivity.
+    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+      apply String.eqb_eq in H2. subst.
+      rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H3). reflexivity.
+    + apply andb_prop in H as [H1 H2].
+      rewrite (expr_eqb_eq _ _ H1). f_equal.
+      revert l0 H2. induction l as [| [d1 xs1 p1] t1 IH]; intros l0 H2.
+      * destruct l0; [reflexivity | discriminate].
+      * destruct l0 as [| [d2 xs2 p2] t2]; [discriminate |].
+        apply andb_prop in H2 as [H1234 H5]. apply andb_prop in H1234 as [H123 H4].
+        apply andb_prop in H123 as [H12 H3]. apply andb_prop in H12 as [Hd Hxs].
+        apply String.eqb_eq in Hd. subst d2.
+        rewrite (vars_eqb_eq xs1 xs2 Hxs H3).
+        rewrite (expr_eqb_eq _ _ H4). f_equal. apply IH. exact H5.
+    + apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H2. subst.
+      rewrite (expr_eqb_eq _ _ H1). reflexivity.
+    + apply dec_eqb_eq in H. subst. reflexivity.
+    + apply dec_eqb_eq in H. subst. reflexivity.
+    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+      rewrite (expr_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2), (expr_eqb_eq _ _ H3).
+      reflexivity.
+    + rewrite (bottom_eqb_eq _ _ H). reflexivity.
+  - destruct b1; intros b2 H; destruct b2; simpl in H;
+      try discriminate; try reflexivity.
+    rewrite (expr_eqb_eq _ _ H). reflexivity.
+  - destruct Γ1 as [| x1 [Γ1' e1] r1]; intros Γ2 H;
+      destruct Γ2 as [| x2 [Γ2' e2] r2]; simpl in H;
+      try discriminate; try reflexivity.
+    apply andb_prop in H as [H123 H4]. apply andb_prop in H123 as [H12 H3].
+    apply andb_prop in H12 as [H1 H2].
+    apply String.eqb_eq in H1. subst x2.
+    rewrite (env_eqb_eq _ _ H2), (expr_eqb_eq _ _ H3), (env_eqb_eq _ _ H4).
+    reflexivity.
+Qed.
 
 (** Environment lookup: (Γ', e) = Γ(x) (Fig. 3, Rule Var) *)
 Fixpoint lookup_env (Γ : environment) (x : var) : option (environment * expr) :=
@@ -226,8 +391,8 @@ Axiom reduce_prim : primop -> list expr -> expr.
 (** Cast simplification: cast(e, γ) (Fig. 3, Rule Cast) *)
 Parameter cast_expr : expr -> coercion -> expr.
 
-(** Leaf expression merging (Fig. 3, Rule Case & Section 3.3); axiomatized from Grisette *)
-Axiom merge : expr -> expr.
+(** Leaf expression merging is Section 8.1 below, a definition rather than an
+    assumption. It needs Solvable and the spine helpers, which come first. *)
 
 (** Type and Coercion substitution under environment Γ (Fig. 3, Rules Type and Coercion) *)
 Parameter subst_coerc : environment -> coercion -> coercion.
@@ -603,6 +768,143 @@ Qed.
 Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
 
+(** A spine rebuilt from its head and arguments is the spine it came from *)
+Lemma unspool_fold_left : forall e acc h args,
+  unspool_app e acc = (h, args) -> fold_left EApp args h = fold_left EApp acc e.
+Proof.
+  induction e; intros acc h args H; simpl in H;
+    try (injection H as ? ?; subst; reflexivity).
+  apply IHe1 in H. simpl in H. exact H.
+Qed.
+
+Lemma unspool_make_con_app : forall e d args,
+  unspool_app e [] = (ECon d, args) -> make_con_app d args = e.
+Proof.
+  intros e d args H. unfold make_con_app.
+  apply (unspool_fold_left e [] (ECon d) args H).
+Qed.
+
+Lemma decompose_con_app_unspool : forall e d args,
+  decompose_con_app e = Some (d, args) -> unspool_app e [] = (ECon d, args).
+Proof.
+  intros e d args H. unfold decompose_con_app in H.
+  destruct (unspool_app e []) as [h aa]; destruct h; try discriminate.
+  injection H as ? ?; subst; reflexivity.
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 8.1 Merging Common Prefixes of a Branch (§3.3)                            *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  Pair the arguments of two constructor spines under one condition:
+  D e⃗1 and D e⃗2 become D (if ec then e1i else e2i)⃗.
+*)
+Fixpoint zip_if (ec : expr) (l1 l2 : list expr) : list expr :=
+  match l1, l2 with
+  | a1 :: t1, a2 :: t2 => EIf ec a1 a2 :: zip_if ec t1 t2
+  | _, _ => []
+  end.
+
+(**
+  Section 3.3's ite(Γ, ec, et, ef), every clause but the cast.
+
+  Clause 1: a shared constructor head stays put and the branch moves into the
+  arguments, one branch per argument. This is what makes a case expression
+  reduce each alternative once instead of once per path.
+
+  Clause 2: two arms the solver can read become one SMT if-then-else term.
+  op_ite is the solver's own three-place operation; reduce_prim is the
+  solver's reducer. This is the clause that hands a branch to the SMT solver
+  and stops the evaluator from walking it. The guard needs Γ, because whether
+  a variable is solvable depends on whether Γ binds it - which is why merge
+  takes an environment.
+
+  Clauses 3, 5, 6 and 7: a lambda merges when the binders agree; a bottom, a
+  type and a coercion merge only when the two arms are the same term.
+
+  Clause 8: anything else stays a branch.
+
+  The clauses cannot overlap. A constructor spine is not solvable
+  (solvable_not_con_app), and no lambda, bottom, type or coercion is solvable
+  either, so testing the constructor clause first and the solvable clause
+  second changes nothing.
+*)
+Definition ite_leaf (Γ : environment) (ec et ef : expr) : expr :=
+  match decompose_con_app et, decompose_con_app ef with
+  | Some (d1, a1), Some (d2, a2) =>
+      if andb (String.eqb d1 d2) (Nat.eqb (length a1) (length a2))
+      then make_con_app d1 (zip_if ec a1 a2)
+      else EIf ec et ef
+  | _, _ =>
+      if solvable_dec Γ et then
+        if solvable_dec Γ ef then reduce_prim op_ite (ec :: et :: ef :: nil)
+        else EIf ec et ef
+      else
+        match et, ef with
+        | ELam x1 b1, ELam x2 b2 =>
+            if String.eqb x1 x2 then ELam x1 (EIf ec b1 b2) else EIf ec et ef
+        | EBot b1, EBot b2 =>
+            if bottom_eqb b1 b2 then EBot b1 else EIf ec et ef
+        | EType τ1, EType τ2 =>
+            if dec_eqb type_fc_eq_dec τ1 τ2 then EType τ1 else EIf ec et ef
+        | ECoercion γ1, ECoercion γ2 =>
+            if dec_eqb coercion_eq_dec γ1 γ2 then ECoercion γ1 else EIf ec et ef
+        | _, _ => EIf ec et ef
+        end
+  end.
+
+(**
+  Clause 4, the cast, is the one clause that recurses: two arms under the
+  same coercion keep the coercion outside and merge their bodies.
+
+  The recursive argument if ec then e1 else e2 is built here, not taken apart
+  from the input, so the recursion is not on the branch. It is on the true
+  arm et, which loses its cast at each step. Writing the cast clause at the
+  top of the definition, and everything else in ite_leaf, is what makes that
+  visible to the termination check. No clause is lost by the split: a cast is
+  neither a constructor spine nor solvable nor any of the other merged
+  shapes, so ite_leaf would have left it a branch anyway.
+*)
+Fixpoint ite (Γ : environment) (ec et ef : expr) {struct et} : expr :=
+  match et, ef with
+  | ECast e1 γ1, ECast e2 γ2 =>
+      if dec_eqb coercion_eq_dec γ1 γ2 then ECast (ite Γ ec e1 e2) γ1
+      else EIf ec et ef
+  | _, _ => ite_leaf Γ ec et ef
+  end.
+
+(**
+  Leaf expression merging (Fig. 3, Rule Case & §3.3).
+
+  Merging is about branches, so merge reads a branch at the head and hands it
+  to ite; on any other expression there is nothing to merge and merge returns
+  its argument.
+*)
+Definition merge (Γ : environment) (e : expr) : expr :=
+  match e with
+  | EIf ec et ef => ite Γ ec et ef
+  | _ => e
+  end.
+
+(** An expression that is not a branch survives merging unchanged *)
+Lemma merge_not_if : forall Γ e, is_if e = false -> merge Γ e = e.
+Proof. intros Γ e H. destruct e; simpl in *; try reflexivity. discriminate. Qed.
+
+(** Every shape but two casts under one coercion reaches ite_leaf *)
+Lemma ite_leaf_of : forall Γ ec et ef,
+  is_cast et = false \/ is_cast ef = false -> ite Γ ec et ef = ite_leaf Γ ec et ef.
+Proof.
+  intros Γ ec et ef H. destruct et; destruct ef; simpl; try reflexivity;
+    destruct H as [H|H]; discriminate.
+Qed.
+
+Lemma ite_cast : forall Γ ec e1 γ1 e2 γ2,
+  ite Γ ec (ECast e1 γ1) (ECast e2 γ2) =
+  (if dec_eqb coercion_eq_dec γ1 γ2 then ECast (ite Γ ec e1 e2) γ1
+   else EIf ec (ECast e1 γ1) (ECast e2 γ2)).
+Proof. reflexivity. Qed.
+
 (** ------------------------------------------------------------------------- *)
 (** Fuel: a step budget carried by the reduction judgement                     *)
 (** ------------------------------------------------------------------------- *)
@@ -731,7 +1033,7 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   (** Rule Case: Evaluate scrutinee, merge common prefixes, and fold alternatives *)
   | Eval_Case : forall f Φ Γ es alts es' er,
       eval (dec f) Φ Γ es es' ->
-      fold_alts (dec f) Φ Γ (merge es') alts er ->
+      fold_alts (dec f) Φ Γ (merge Γ es') alts er ->
       eval f Φ Γ (ECase es alts) er
 
   (** Rule If: Evaluate condition, convert to path condition, and branch *)
@@ -940,12 +1242,32 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 10.2 Semantic Contract for Merge (§3.3)                                    *)
+(** 10.2 Merge and Alternative Folding (§3.3)                                  *)
 (** ------------------------------------------------------------------------- *)
 
-(** Leaf merging preserves alternative folding in case expressions *)
-Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
-  fold_alts Inf Φ Γ (merge e) alts r <-> fold_alts Inf Φ Γ e alts r.
+(**
+  There is no contract here any more, because merge is now a definition.
+
+  What used to sit here was an assumption saying that folding a merged
+  scrutinee and folding the raw one reach the same result. That assumption is
+  false of the definition in Section 8.1, and so is the one-sided repair that
+  asks only for the merged fold to answer SOMETHING:
+
+    fold_alts f Φ Γ e alts r ->
+    exists r', fold_alts f Φ Γ (merge Γ e) alts r' and r' covers r.
+
+  scratch/MergeIsNotThePapersIte.v proves both false and shows why. Rule
+  FoldAlts_If reads its guard with expr_to_pc BEFORE the guard is evaluated,
+  while Rule If reads the guard's VALUE. Merging a constructor spine moves
+  the guard from the first position to the second, so a guard fold-alts
+  accepts can be a guard evaluation is stuck on, and the merged fold then has
+  no derivation at all.
+
+  What IS true of merge, and what the development uses, is merge_not_if
+  above - merge leaves a non-branch alone, so it is the identity on every
+  ConCore term - and merge_contains in ConCore.v: merging never loses an
+  instance.
+*)
 
 (**
   No branch is ever buried below a resolved head: a scrutinee fold_alts can
@@ -1430,7 +1752,7 @@ Lemma eval_case_inv : forall Φ Γ es alts v,
   Φ ; Γ ⊢ ECase es alts ⇓ v ->
   exists es',
     Φ ; Γ ⊢ es ⇓ es' /\
-    fold_alts Inf Φ Γ (merge es') alts v.
+    fold_alts Inf Φ Γ (merge Γ es') alts v.
 Proof.
   intros Φ Γ es alts v Hsat Heval.
   inversion Heval; subst.
@@ -1686,7 +2008,7 @@ Proof.
     exists 0%nat. intros n _. apply Eval_AppBot.
   - (* Eval_Case *)
     destruct (eval_fin_of_inf_fix Inf Φ Γ es es' Heval_es eq_refl) as [h1 Hh1].
-    destruct (fold_alts_fin_of_inf_fix Inf Φ Γ (merge es') alts er Hfold eq_refl) as [h2 Hh2].
+    destruct (fold_alts_fin_of_inf_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl) as [h2 Hh2].
     exists (S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
     eapply Eval_Case.
     + simpl. apply Hh1. lia.

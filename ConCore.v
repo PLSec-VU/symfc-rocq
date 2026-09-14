@@ -14,6 +14,7 @@ From SymCoreTheory Require Import SymCore.
 From Stdlib Require Import Strings.String.
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import Lia.
+From Stdlib Require Import Arith.PeanoNat.
 Import ListNotations.
 
 (** ========================================================================= *)
@@ -346,9 +347,30 @@ Axiom reduce_prim_concore : forall p args,
   Forall concore_expr args ->
   concore_expr (reduce_prim p args).
 
-Axiom merge_concore : forall e,
+(**
+  State merging does nothing to a concrete term.
+
+  This used to be an assumption about Grisette. It is now a one-line
+  consequence of the definition: merge only ever changes a branch, and
+  concore_expr has no branch, so merge hands a ConCore term straight back.
+*)
+Lemma concore_not_if : forall e, concore_expr e -> is_if e = false.
+Proof.
+  intros e H. destruct e; try reflexivity.
+  exfalso. exact (not_concore_if _ _ _ H).
+Qed.
+
+Lemma merge_concore_id : forall Γ e, concore_expr e -> merge Γ e = e.
+Proof.
+  intros Γ e H. apply merge_not_if. apply concore_not_if. exact H.
+Qed.
+
+Lemma merge_concore : forall Γ e,
   concore_expr e ->
-  concore_expr (merge e).
+  concore_expr (merge Γ e).
+Proof.
+  intros Γ e H. rewrite (merge_concore_id Γ e H). exact H.
+Qed.
 
 Axiom cast_expr_concore : forall e γ,
   concore_expr e ->
@@ -539,7 +561,7 @@ Proof.
     inversion Hcon; subst. assumption.
   - (* Eval_Case *)
     inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
-    apply (concore_fold_closed_fix (dec k) Φ Γ (merge es') alts er Hfold Hsat Henv);
+    apply (concore_fold_closed_fix (dec k) Φ Γ (merge Γ es') alts er Hfold Hsat Henv);
       [| assumption].
     apply merge_concore.
     exact (concore_eval_closed_fix (dec k) Φ Γ es es' Heval_es Hsat Henv Hcon_es).
@@ -1084,10 +1106,32 @@ Axiom reduce_prim_ground_value : forall p args,
   smt_ground (reduce_prim p args) = true ->
   exists l, reduce_prim p args = ELit l.
 
-(** Grisette state merging soundness (Lemma A.4 in the paper) *)
-Axiom merge_contains : forall σ S es ec,
-  contains σ S es ec ->
-  contains σ S (merge es) ec.
+(**
+  SMT solver behaviour: the solver's if-then-else term has the instances the
+  evaluator's branch has.
+
+  READ THIS ONE CAREFULLY - it is the only assumption merge adds.
+
+  Section 3.3's second merge clause replaces a branch between two solvable
+  arms by reduce_prim op_ite [ec; et; ef], an SMT term. From that point the
+  branch is the solver's to resolve, and nothing else in this development can
+  say what the solver does with it: reduce_prim is opaque, and neither
+  reduce_prim_contains (which relates a reduced term to the reduction of its
+  concrete arguments) nor reduce_prim_denote (which is about SMT values) says
+  anything about a term the model must resolve to one arm.
+
+  So this is a statement about reduce_prim at op_ite, not a statement about
+  merge: whatever the reducer builds from a condition and two arms, a model
+  reads it the way it reads a branch. A solver whose ite disagreed with the
+  evaluator's branch would be a wrong solver. Merge is what makes the
+  question come up; it is not what the assumption is about.
+*)
+Axiom reduce_prim_ite_contains : forall σ S ec et ef e_c,
+  contains σ S (EIf ec et ef) e_c ->
+  contains σ S (reduce_prim op_ite (ec :: et :: ef :: nil)) e_c.
+
+(** Grisette state merging soundness (Lemma A.4 in the paper) is now the
+    lemma merge_contains in Section 9.3, proved from the definition of merge. *)
 
 (** Coercion cast simplification preserves concretion (Lemma A.5 in the paper) *)
 Axiom cast_expr_contains : forall σ S es ec γ,
@@ -2046,6 +2090,174 @@ Proof.
     end.
 Qed.
 
+(** ------------------------------------------------------------------------- *)
+(** 9.3 Merging Never Loses an Instance (§3.3)                                *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  Every concrete term the unmerged branch stands for, the merged term stands
+  for too. This is the paper's Lemma A.4, and it is now proved from Section
+  8.1's definition of merge instead of assumed.
+
+  The proof is one case per clause of the merge table. The shape is always
+  the same: the model picks an arm, the clause's result agrees with that arm
+  on the head, and the branch that is left inside the result is resolved by
+  the same model the same way.
+*)
+
+(** A branch is related to a concrete term by resolving it, never by
+    denotation: a branch is not a primitive application. *)
+Lemma contains_if_inv : forall σ S ec et ef e_c,
+  contains σ S (EIf ec et ef) e_c ->
+  (models_cond σ S ec /\ contains σ S et e_c) \/
+  (models_not_cond σ S ec /\ contains σ S ef e_c).
+Proof.
+  intros σ S ec et ef e_c H. inversion H; subst.
+  - left; split; assumption.
+  - right; split; assumption.
+  - simpl in *. discriminate.
+Qed.
+
+(** Concretion is a congruence for application spines *)
+Lemma contains_fold_left_app : forall σ S l1 l2 h1 h2,
+  Forall2 (contains σ S) l1 l2 ->
+  contains σ S h1 h2 ->
+  contains σ S (fold_left EApp l1 h1) (fold_left EApp l2 h2).
+Proof.
+  intros σ S l1 l2 h1 h2 HF. revert h1 h2.
+  induction HF as [| x y l l' Hxy HF IH]; intros h1 h2 Hh; simpl.
+  - exact Hh.
+  - apply IH. apply Cont_App; assumption.
+Qed.
+
+(** Pushing one condition into matching argument lists keeps every argument
+    related to the concrete argument the model chose *)
+Lemma zip_if_contains_true : forall σ S ec a1 a2 args_c,
+  models_cond σ S ec ->
+  length a1 = length a2 ->
+  Forall2 (contains σ S) a1 args_c ->
+  Forall2 (contains σ S) (zip_if ec a1 a2) args_c.
+Proof.
+  intros σ S ec a1 a2 args_c Hmc Hlen HF. revert a2 Hlen.
+  induction HF as [| x y l l' Hxy HF IH]; intros a2 Hlen.
+  - destruct a2; simpl; constructor.
+  - destruct a2 as [| z zs]; [discriminate |]. simpl.
+    constructor; [apply Cont_If_True; assumption | apply IH; simpl in Hlen; auto].
+Qed.
+
+Lemma zip_if_contains_false : forall σ S ec a1 a2 args_c,
+  models_not_cond σ S ec ->
+  length a1 = length a2 ->
+  Forall2 (contains σ S) a2 args_c ->
+  Forall2 (contains σ S) (zip_if ec a1 a2) args_c.
+Proof.
+  intros σ S ec a1 a2 args_c Hmc Hlen HF. revert a1 Hlen.
+  induction HF as [| x y l l' Hxy HF IH]; intros a1 Hlen.
+  - destruct a1; simpl; constructor.
+  - destruct a1 as [| z zs]; [discriminate |]. simpl.
+    constructor; [apply Cont_If_False; assumption | apply IH; simpl in Hlen; auto].
+Qed.
+
+(** Closes the Cont_Denote case of an inversion on a term whose spine head is
+    visibly not a primitive operation *)
+Ltac kill_den :=
+  match goal with
+  | [ H : unspool_app _ _ = (EPrimOp _, _) |- _ ] => simpl in H; discriminate H
+  end.
+
+(** The four clauses that merge two identical or matching value forms *)
+Ltac merge_leaf_rest et ef Hc Hcases :=
+  destruct et; destruct ef; simpl; try exact Hc;
+  [ destruct (String.eqb _ _) eqn:Hx; [| exact Hc];
+    apply String.eqb_eq in Hx; subst;
+    destruct Hcases as [[Hmc Hct]|[Hmc Hcf]];
+    [ inversion Hct; subst; [| kill_den];
+      apply Cont_Lam; [assumption | apply Cont_If_True; assumption]
+    | inversion Hcf; subst; [| kill_den];
+      apply Cont_Lam; [assumption | apply Cont_If_False; assumption] ]
+  | destruct (dec_eqb coercion_eq_dec _ _) eqn:Hx; [| exact Hc];
+    apply dec_eqb_eq in Hx; subst;
+    destruct Hcases as [[Hmc Hct]|[Hmc Hcf]];
+    [ inversion Hct; subst; [| kill_den] | inversion Hcf; subst; [| kill_den] ];
+    apply Cont_Coercion
+  | destruct (dec_eqb type_fc_eq_dec _ _) eqn:Hx; [| exact Hc];
+    apply dec_eqb_eq in Hx; subst;
+    destruct Hcases as [[Hmc Hct]|[Hmc Hcf]];
+    [ inversion Hct; subst; [| kill_den] | inversion Hcf; subst; [| kill_den] ];
+    apply Cont_Type
+  | destruct (bottom_eqb _ _) eqn:Hx; [| exact Hc];
+    apply bottom_eqb_eq in Hx; subst;
+    destruct Hcases as [[Hmc Hct]|[Hmc Hcf]];
+    [ inversion Hct; subst; [| kill_den] | inversion Hcf; subst; [| kill_den] ];
+    apply Cont_Bot ].
+
+Lemma ite_leaf_contains : forall σ S Γ ec et ef e_c,
+  contains σ S (EIf ec et ef) e_c -> contains σ S (ite_leaf Γ ec et ef) e_c.
+Proof.
+  intros σ S Γ ec et ef e_c Hc.
+  assert (Hcases := contains_if_inv σ S ec et ef e_c Hc).
+  unfold ite_leaf.
+  destruct (decompose_con_app et) as [[d1 a1]|] eqn:E1;
+  destruct (decompose_con_app ef) as [[d2 a2]|] eqn:E2.
+  - (* both arms are constructor spines *)
+    destruct (andb (String.eqb d1 d2) (Nat.eqb (length a1) (length a2))) eqn:Hg;
+      [| exact Hc].
+    apply andb_prop in Hg as [Hd Hl].
+    apply String.eqb_eq in Hd. apply Nat.eqb_eq in Hl. subst d2.
+    assert (Hu1 := decompose_con_app_unspool et d1 a1 E1).
+    assert (Hu2 := decompose_con_app_unspool ef d1 a2 E2).
+    destruct Hcases as [[Hmc Hct] | [Hmc Hcf]].
+    + destruct (contains_unspool_con σ S et e_c Hct [] [] (Forall2_nil _) d1 a1 Hu1)
+        as [args_c [Huc HFa]].
+      rewrite <- (unspool_make_con_app e_c d1 args_c Huc).
+      unfold make_con_app. apply contains_fold_left_app; [| apply Cont_Con].
+      apply zip_if_contains_true; assumption.
+    + destruct (contains_unspool_con σ S ef e_c Hcf [] [] (Forall2_nil _) d1 a2 Hu2)
+        as [args_c [Huc HFa]].
+      rewrite <- (unspool_make_con_app e_c d1 args_c Huc).
+      unfold make_con_app. apply contains_fold_left_app; [| apply Cont_Con].
+      apply zip_if_contains_false; assumption.
+  - destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
+    + apply reduce_prim_ite_contains. exact Hc.
+    + exact Hc.
+    + merge_leaf_rest et ef Hc Hcases.
+  - destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
+    + apply reduce_prim_ite_contains. exact Hc.
+    + exact Hc.
+    + merge_leaf_rest et ef Hc Hcases.
+  - destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
+    + apply reduce_prim_ite_contains. exact Hc.
+    + exact Hc.
+    + merge_leaf_rest et ef Hc Hcases.
+Qed.
+
+Lemma ite_contains : forall σ S Γ et ec ef e_c,
+  contains σ S (EIf ec et ef) e_c -> contains σ S (ite Γ ec et ef) e_c.
+Proof.
+  intros σ S Γ et. induction et; intros ec ef e_c Hc;
+    try (rewrite ite_leaf_of by (left; reflexivity);
+         apply ite_leaf_contains; exact Hc).
+  destruct ef; try (rewrite ite_leaf_of by (right; reflexivity);
+                    apply ite_leaf_contains; exact Hc).
+  rewrite ite_cast.
+  destruct (dec_eqb coercion_eq_dec c c0) eqn:Hx; [| exact Hc].
+  apply dec_eqb_eq in Hx. subst c0.
+  destruct (contains_if_inv σ S ec (ECast et c) (ECast ef c) e_c Hc)
+    as [[Hmc Hct]|[Hmc Hcf]].
+  - inversion Hct; subst; [| kill_den].
+    apply Cont_Cast. apply IHet. apply Cont_If_True; assumption.
+  - inversion Hcf; subst; [| kill_den].
+    apply Cont_Cast. apply IHet. apply Cont_If_False; assumption.
+Qed.
+
+Lemma merge_contains : forall σ S Γ es ec,
+  contains σ S es ec ->
+  contains σ S (merge Γ es) ec.
+Proof.
+  intros σ S Γ es ec H. destruct es; simpl; try exact H.
+  apply ite_contains. exact H.
+Qed.
+
 (** Fully general version: whatever head the spine settles on (as long as
     it is not itself an unresolved branch), `contains` relates it to the
     matching head on the concrete side. Needed for FoldAlts_Otherwise's
@@ -2349,8 +2561,8 @@ Proof.
     apply contains_case_inv in Hcont as [esc [altsc [Heq [Hcont_es Hcont_alts]]]]; subst.
     inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
     destruct (concore_soundness_fix Inf Φ Γ es es' Heval_es eq_refl Γc σ S esc Hmod Henv Hcont_es Hcon_es) as [vc_s [Heval_esc Hcont_vs]].
-    assert (Hcont_merge : contains σ S (merge es') vc_s) by (apply merge_contains; exact Hcont_vs).
-    destruct (concore_soundness_fold_fix Inf Φ Γ (merge es') alts er Hfold eq_refl Γc σ S esc altsc Hmod Henv Hcon_es Hcon_alts
+    assert (Hcont_merge : contains σ S (merge Γ es') vc_s) by (apply merge_contains; exact Hcont_vs).
+    destruct (concore_soundness_fold_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl Γc σ S esc altsc Hmod Henv Hcon_es Hcon_alts
                 (ex_intro _ vc_s (conj Heval_esc Hcont_merge)) Hcont_alts) as [v_con [Heval_case Hcont_er]].
     exists v_con. split; assumption.
   - (* Eval_If *)
@@ -2441,7 +2653,9 @@ Proof.
     exists v_con. split; [| exact Hcont_er].
     unfold eval_con. eapply Eval_Case.
     + exact Heval_esc.
-    + apply merge_fold_alts_equiv.
+    + (* The concrete scrutinee value is a ConCore term, so it carries no
+         branch and merge returns it unchanged. *)
+      rewrite (merge_concore_id Γc vc_s Hcon_vcs).
       eapply FoldAlts_Con; [exact Hdec_vcs | exact Halt_c | exact Heval_ep_c].
   - (* FoldAlts_Bot *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
@@ -2449,7 +2663,7 @@ Proof.
     exists (EBot b). split; [| apply Cont_Bot].
     unfold eval_con. eapply Eval_Case.
     + exact Heval_esc.
-    + apply merge_fold_alts_equiv. apply FoldAlts_Bot.
+    + rewrite (merge_not_if Γc (EBot b) eq_refl). apply FoldAlts_Bot.
   - (* FoldAlts_Otherwise *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
     destruct (unspool_app e []) as [head args] eqn:Hunspool_e.
@@ -2491,7 +2705,9 @@ Proof.
     exists (EBot BUndefined). split; [| apply Cont_Bot].
     unfold eval_con. eapply Eval_Case.
     + exact Heval_esc.
-    + apply merge_fold_alts_equiv.
+    + (* The spine head of the concrete scrutinee value is not a branch, so
+         neither is the value, and merge returns it unchanged. *)
+      rewrite (merge_not_if Γc vc_s (is_if_false_of_spine_head vc_s Hnothead_c)).
       apply FoldAlts_Otherwise; assumption.
 }
 Qed.
@@ -3354,7 +3570,7 @@ Qed.
 Lemma eval_case_inv : forall Φ Γ es alts v,
   sat Φ = true ->
   Φ ; Γ ⊢ ECase es alts ⇓ v ->
-  exists es', Φ ; Γ ⊢ es ⇓ es' /\ fold_alts Inf Φ Γ (merge es') alts v.
+  exists es', Φ ; Γ ⊢ es ⇓ es' /\ fold_alts Inf Φ Γ (merge Γ es') alts v.
 Proof.
   intros Φ Γ es alts v Hsat Heval.
   inversion Heval; subst; try prune_absurd; try no_con_head.
@@ -3667,8 +3883,8 @@ Proof.
     assert (Heq : es' = es2)
       by exact (eval_det_fix Inf Φ Γ es es' Heval_es eq_refl es2 Hsat Henv Hces Hes2).
     subst es2.
-    exact (fold_alts_det_fix Inf Φ Γ (merge es') alts er Hfold eq_refl v2 Hsat Henv
-             (merge_concore es' (concore_eval_closed_fix Inf Φ Γ es es' Heval_es Hsat Henv Hces))
+    exact (fold_alts_det_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl v2 Hsat Henv
+             (merge_concore Γ es' (concore_eval_closed_fix Inf Φ Γ es es' Heval_es Hsat Henv Hces))
              Halts Hfold2).
   - (* Rule If: a ConCore expression is never a branch *)
     exfalso. exact (not_concore_if ec et ef Hcon).
@@ -3889,7 +4105,7 @@ Section AppliedConstructorMatches.
   Proof.
     intros Γ.
     eapply Eval_Case; [apply just_evaluates |].
-    apply merge_fold_alts_equiv.
+    rewrite (merge_not_if Γ just eq_refl).
     eapply FoldAlts_Con with (d := "Just") (ea := [ELit l]) (xs := ["y"]) (ep := EVar "y").
     - unfold decompose_con_app. rewrite just_unspools. reflexivity.
     - simpl. destruct (string_dec "Just" "Just"); [reflexivity | congruence].

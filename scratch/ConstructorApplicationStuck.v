@@ -7,7 +7,7 @@ Lemma nullary_case_works : forall Γ l,
   pc_true ; Γ ⊢ ECase (ECon "D") [Alt "D" [] (ELit l)] ⇓ ELit l.
 Proof.
   intros. eapply Eval_Case; [eapply Eval_Con; reflexivity |].
-  apply merge_fold_alts_equiv.
+  rewrite (merge_not_if Γ (ECon "D") eq_refl).
   eapply FoldAlts_Con with (d := "D") (ea := []) (xs := []) (ep := ELit l).
   - reflexivity.
   - simpl. destruct (string_dec "D" "D"); [reflexivity | congruence].
@@ -33,7 +33,7 @@ Lemma case_on_applied_constructor_binds_the_field : forall Γ l,
 Proof.
   intros Γ l.
   eapply Eval_Case; [apply applied_constructor_evaluates |].
-  apply merge_fold_alts_equiv.
+  rewrite (merge_not_if Γ (EApp (ECon "D") (ELit l)) eq_refl).
   eapply FoldAlts_Con with (d := "D") (ea := [ELit l]) (xs := ["y"]) (ep := EVar "y").
   - reflexivity.
   - simpl. destruct (string_dec "D" "D"); [reflexivity | congruence].

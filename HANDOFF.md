@@ -47,6 +47,15 @@ it binds them into the environment as thunks. See §4.4.
 was mid-revision. The mechanisation now makes that shape deliberately stuck; say
 so explicitly rather than leaving it as an omission. See §4.3.
 
+**1.5 `fold-alts` and Rule If read a branch guard at different times.**
+`fold-alts` accepts a branch when `expr_to_pc` can read the *written* guard.
+Rule If demands that `expr_to_pc` can read the guard's *value*. The two tests do
+not agree, and merge moves guards from the first position to the second, so a
+`case` that folds before merging can be stuck after it. `⊗ᵢₜₑ x` — a
+three-argument operation applied to one argument — passes the first test and
+fails the second. This is what makes every relation between merged and unmerged
+folding false; see §7. Fix it by making both rules read the same thing.
+
 ---
 
 ## 2. The two theorems
@@ -122,8 +131,9 @@ budget it answers *something*". A looping arm satisfies it. A stuck arm does not
 That is exactly the line the predicate must draw.
 
 `solver_free` excludes `EIf`, `ECase`, `ECast` and `EPrimOp` — the four shapes
-whose value comes from an axiomatised function (`merge`, `cast_expr`,
-`reduce_prim`) or from branch resolution.
+whose value comes from an axiomatised function (`cast_expr`, `reduce_prim`), from
+branch resolution, or from `merge`, which is defined but bottoms out in
+`reduce_prim` when both arms are solvable.
 
 **Do not call this a stand-in for a type system.** It bundles three different
 things, and only the first is typing:
@@ -259,28 +269,36 @@ at any budget. Any lemma phrased "branch-free at the root" is false.
 
 ## 6. Assumptions
 
-Thirty-one. Group them this way in the paper; the grouping is the justification.
+Thirty-three. Group them this way in the paper; the grouping is the
+justification.
 
 **Abstract sorts and signatures (14)** — `lit`, `lit_true`, `primop`, `tycon`,
-`op_and`, `op_not`, `primop_arity`, `sat`, `pc_true`, `reduce_prim`, `merge`,
+`op_and`, `op_not`, `op_ite`, `primop_arity`, `sat`, `pc_true`, `reduce_prim`,
 `cast_expr`, `subst_coerc`, `subst_type`. These assert nothing; they say the
-things exist.
+things exist. `op_ite` is the solver's own three-place if-then-else term, the
+thing merge builds when both arms of a branch are solvable. It is not `EIf`:
+`EIf` is the branch tree the evaluator walks, `op_ite` is a formula the solver
+reads.
 
-**Solver facts (3)** — `sat_pc_true`, `models_sat`, `prim_value_and`. True of any
-solver and any Boolean semantics. `prim_value_and` says the solver reads its own
-`op_and` as conjunction against the true literal:
+**Decidable equality (3)** — `lit_eq_dec`, `primop_eq_dec`, `tycon_eq_dec`.
+Merge keeps two arms only when they are the same shape carrying the same
+payload, and that test has to run. Everything else — types, coercions, whole
+expressions, alternatives, environments — is built from these three and from
+string equality.
+
+**Solver facts (4)** — `sat_pc_true`, `models_sat`, `prim_value_and`,
+`op_ite_arity`. True of any solver and any Boolean semantics. `prim_value_and`
+says the solver reads its own `op_and` as conjunction against the true literal:
 `prim_value op_and [l₁; l₂] = lit_true ↔ l₁ = lit_true ∧ l₂ = lit_true`.
+`op_ite_arity` says if-then-else takes three arguments.
 
-**Syntactic preservation (5)** — `reduce_prim_solvable`, `reduce_prim_saturated`,
-`reduce_prim_concore`, `merge_concore`, `cast_expr_concore`. The first and third
+**Syntactic preservation (4)** — `reduce_prim_solvable`, `reduce_prim_saturated`,
+`reduce_prim_concore`, `cast_expr_concore`. The first and third
 are **conditional on their arguments being well-formed**; unconditional versions
 caused the collapse in §5.1.
 
-**Grisette behaviour (1)** — `merge_fold_alts_equiv`. This is now the single
-largest thing taken on faith, and §7 records that it is **false** of the paper's
-own definition of merge.
-
-Two assumptions that used to sit here are now lemmas, and both stories are worth
+Three assumptions that used to sit here are now lemmas, and all three stories are
+worth
 telling in the paper. `fold_alts_no_nested_if` was not merely unproven, it was
 **false**: Rule FoldAlts_Otherwise accepted the very scrutinee shape
 `EApp (EIf ..) a` that the assumption denied, so the two together proved `False`
@@ -289,10 +307,18 @@ of the scrutinee's application spine is not a branch — which is what the
 assumption was reaching for — and the statement follows from the five rules.
 `eval_models_cond` and `eval_models_not_cond` became derivable once `⊨` was
 defined from `pc_value` rather than left opaque; see the `models` note above.
+`merge_concore` and `merge_contains` became derivable once `merge` stopped being
+an oracle and became the paper's own definition; see §7.
 
-**Simulation (8)** — `merge_contains`, `cast_expr_contains`,
-`subst_coerc_contains_env`, `subst_type_contains_env`, `reduce_prim_contains`,
-`prim_value`, `reduce_prim_denote`, `reduce_prim_ground_value`.
+**Simulation (8)** — `cast_expr_contains`, `subst_coerc_contains_env`,
+`subst_type_contains_env`, `reduce_prim_contains`, `prim_value`,
+`reduce_prim_denote`, `reduce_prim_ground_value`, `reduce_prim_ite_contains`.
+
+`reduce_prim_ite_contains` is the one assumption defining merge added. It says a
+model reads the solver's `op_ite` term the way it reads the evaluator's branch.
+It has to be assumed because `reduce_prim` is opaque, and it is a claim about the
+solver, not about merge: a solver whose if-then-else disagreed with the
+evaluator's branch would be a wrong solver.
 
 `models_cond` and `models_not_cond` are **definitions**, not assumptions —
 `models_cond σ S e := ∃pc, denotes S e pc ∧ σ ⊨ pc`. Deriving them rather than
@@ -325,12 +351,32 @@ assumptions hold. Defining `⊨` from `pc_value` makes that job smaller: `models
 no longer has to be supplied and checked separately, and `prim_value_and`
 falls out of the Boolean `andb`.
 
-**`merge_fold_alts_equiv` is false of the paper's merge.** `scratch/MergeIsNotThePapersIte.v`
-shows why: merging a branch scrutinee changes what the fold returns, by design —
-that is what merging is *for* — so an `iff` claiming both sides reach the same
-result cannot hold. It survives only for a merge that is the identity on
-branches. The correct statement relates the two results by a semantic
-equivalence, not by identity, and writing that down is outstanding work.
+**Merging and folding cannot be related at all, and this is a defect in the
+rules.** `merge` is now the paper's definition (`SymCore.v` §8.1), so
+`merge_concore` and `merge_contains` are proved. What is *not* proved, and is
+refuted in `scratch/MergeIsNotThePapersIte.v`, is any relation between
+`fold-alts` on a scrutinee and `fold-alts` on the merged scrutinee. Three
+statements are refuted there:
+
+- the old `merge_fold_alts_equiv`, an `iff`;
+- the one-sided repair "if the raw scrutinee folds to `r`, the merged one folds
+  to some `r′` that covers `r`";
+- the same `iff` again, from a scrutinee whose merged form has **no** fold.
+
+The reason is one line, and it is a defect the paper should fix. Rule FoldAlts-If
+tests its guard with `expr_to_pc` **before** the guard is evaluated. Rule If
+tests the guard's **value**. Merging a constructor spine pushes the guard out of
+fold-alts and into the environment, where the next rule to read it is Rule If.
+So a guard fold-alts accepts can be one evaluation is stuck on, and the merged
+scrutinee then has no fold at any budget. The counterexample guard is
+`⊗ᵢₜₑ x` — one argument to a three-argument operation: `expr_to_pc` never
+checks arity, Rule App-Prim does.
+
+Nothing in the two theorems needs such a relation, because the concrete side has
+no branches: `merge Γ e = e` for every ConCore `e`, which is `merge_concore_id`.
+That is what the four former uses of `merge_fold_alts_equiv` now appeal to.
+Relating merged and unmerged folds on the *symbolic* side is outstanding work,
+and it needs the guard test made consistent first.
 
 **`reduce_prim` is still a term-builder, not a computing reducer**, outside the
 `Cont_Denote` fragment. This is the largest remaining semantic gap.
@@ -341,11 +387,11 @@ an application needs arms that terminate, because the leaf clause requires the
 solver-free disjunct or convergence.
 
 **The leaf clause cannot currently be weakened further.** Rule Case is the
-blocker: the concrete fold runs on `merge e𝚌′` while concretion relates
-`merge eₛ′` to `e𝚌′`. Closing it needs a fact saying concretion survives `merge`
-on the concrete side — a new assumption, deliberately not added. Well-founded
-recursion on derivation height does not help, because the converted derivation
-carries no height.
+blocker: the concrete fold runs on `merge Γ𝚌 e𝚌′` while concretion relates
+`merge Γₛ eₛ′` to `e𝚌′`. The concrete half is no longer a gap — `merge Γ𝚌 e𝚌′`
+is `e𝚌′`, because a ConCore term has no branch — but the symbolic half still is,
+for the reason in the merge note above. Well-founded recursion on derivation
+height does not help, because the converted derivation carries no height.
 
 **Symbolic evaluation is not deterministic** (Rule Prune). Only concrete
 evaluation is, and only on ConCore programs in a concrete environment.

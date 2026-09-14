@@ -210,16 +210,20 @@ Qed.
 
 Section AbstractSolverContracts.
 
-(* The three contracts ConCore.v already assumes, read against the stricter
-   predicate. No fourth contract is used anywhere below - in particular,
-   nothing is assumed about the SHAPE of cast_expr's result. *)
+(* The contracts ConCore.v uses, read against the stricter predicate. No
+   further contract is used anywhere below - in particular, nothing is
+   assumed about the SHAPE of cast_expr's result.
+
+   merge_concore is no longer one of ConCore.v's assumptions: merge is a
+   definition now, so ConCore.v proves it. It is restated here as a
+   hypothesis only to keep this section self-contained. *)
 Hypothesis reduce_prim_concore : forall p args,
   Forall concore_expr args ->
   concore_expr (reduce_prim p args).
 
-Hypothesis merge_concore : forall e,
+Hypothesis merge_concore : forall Γ e,
   concore_expr e ->
-  concore_expr (merge e).
+  concore_expr (merge Γ e).
 
 Hypothesis cast_expr_concore : forall e γ,
   concore_expr e ->
@@ -314,7 +318,7 @@ Proof.
   - (* Eval_Case *)
     pose proof (relaxed_plain (ECase es alts) Hcon) as Hc.
     inversion Hc as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
-    apply (concore_fold_closed_fix (dec k) Φ Γ (merge es') alts er Hfold Hsat Henv);
+    apply (concore_fold_closed_fix (dec k) Φ Γ (merge Γ es') alts er Hfold Hsat Henv);
       [| assumption].
     apply merge_concore.
     exact (concore_eval_closed_fix (dec k) Φ Γ es es' Heval_es Hsat Henv (Rel_Exact es Hcon_es)).
