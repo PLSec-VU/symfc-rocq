@@ -1673,6 +1673,9 @@ Proof.
   - rewrite Hsat in H. discriminate.
 Qed.
 
+Lemma eval_nullary_con : forall f Φ Γ d, eval f Φ Γ (ECon d) (ECon d).
+Proof. intros f Φ Γ d. exact (Eval_Con f Φ Γ (ECon d) d [] eq_refl). Qed.
+
 (** Evaluation of constructors under a satisfiable path condition *)
 Lemma eval_con_same : forall Φ Γ d v,
   sat Φ = true ->

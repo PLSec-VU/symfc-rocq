@@ -4234,6 +4234,89 @@ Section AppliedConstructorMatches.
 
 End AppliedConstructorMatches.
 
+(** ------------------------------------------------------------------------- *)
+(** 12.7 Constructor fields are read in the scope they were written in        *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  The program case (λy. D y) A of D z -> z builds D y under the binding
+  y = A and reads the field back through z, outside the scope of y. Rule Con
+  pairs the field y with the environment that binds it, so the program reads
+  A. Wrapping it in an outer binding y = B changes nothing, because the
+  field never looks at the environment of the case.
+
+  Before Rule Con kept the environment, the first program returned the free
+  variable y and the second returned B.
+*)
+Section FieldsAreLexical.
+
+  Definition field_builder : expr := ELam "y" (EApp (ECon "D") (EVar "y")).
+  Definition field_reader : expr :=
+    ECase (EApp field_builder (ECon "A")) (Alt "D" ("z" :: nil) (EVar "z") :: nil).
+  Definition shadowed_field_reader : expr := EApp (ELam "y" field_reader) (ECon "B").
+
+  Lemma field_reader_concore : concore_expr field_reader.
+  Proof. repeat constructor. Qed.
+
+  Lemma shadowed_field_reader_concore : concore_expr shadowed_field_reader.
+  Proof. repeat constructor. Qed.
+
+  Lemma field_reader_in : forall Γ,
+    Γ ⊢ᶜ field_reader ⇓ᶜ ECon "A".
+  Proof.
+    intros Γ. unfold eval_con, field_reader.
+    eapply Eval_Case.
+    - eapply Eval_AppSpine; [apply not_whnf_lam | reflexivity | apply Eval_Lam |].
+      apply Eval_AppAbs. eapply Eval_Con. reflexivity.
+    - simpl. eapply FoldAlts_Con; [reflexivity | reflexivity |].
+      simpl. eapply Eval_Var; [reflexivity |].
+      apply Eval_Thunk. eapply Eval_Var; [reflexivity |].
+      apply eval_nullary_con.
+  Qed.
+
+  Theorem field_reader_reads_lexically : ⊢ᶜ field_reader ⇓ᶜ ECon "A".
+  Proof. apply field_reader_in. Qed.
+
+  Theorem shadowed_field_reader_reads_lexically :
+    ⊢ᶜ shadowed_field_reader ⇓ᶜ ECon "A".
+  Proof.
+    unfold eval_con, shadowed_field_reader.
+    eapply Eval_AppSpine; [apply not_whnf_lam | reflexivity | apply Eval_Lam |].
+    apply Eval_AppAbs. apply field_reader_in.
+  Qed.
+
+  Corollary field_reader_value_is_A : forall v,
+    ⊢ᶜ field_reader ⇓ᶜ v -> v = ECon "A".
+  Proof.
+    intros v Hv.
+    exact (concore_eval_deterministic_top field_reader v (ECon "A")
+             field_reader_concore Hv field_reader_reads_lexically).
+  Qed.
+
+  Corollary shadowed_field_reader_value_is_A : forall v,
+    ⊢ᶜ shadowed_field_reader ⇓ᶜ v -> v = ECon "A".
+  Proof.
+    intros v Hv.
+    exact (concore_eval_deterministic_top shadowed_field_reader v (ECon "A")
+             shadowed_field_reader_concore Hv shadowed_field_reader_reads_lexically).
+  Qed.
+
+  Corollary field_reader_no_free_variable : forall x,
+    ~ (⊢ᶜ field_reader ⇓ᶜ EVar x).
+  Proof. intros x Hv. discriminate (field_reader_value_is_A _ Hv). Qed.
+
+  Corollary field_reader_not_B : ~ (⊢ᶜ field_reader ⇓ᶜ ECon "B").
+  Proof. intros Hv. discriminate (field_reader_value_is_A _ Hv). Qed.
+
+  Corollary shadowed_field_reader_no_free_variable : forall x,
+    ~ (⊢ᶜ shadowed_field_reader ⇓ᶜ EVar x).
+  Proof. intros x Hv. discriminate (shadowed_field_reader_value_is_A _ Hv). Qed.
+
+  Corollary shadowed_field_reader_not_B : ~ (⊢ᶜ shadowed_field_reader ⇓ᶜ ECon "B").
+  Proof. intros Hv. discriminate (shadowed_field_reader_value_is_A _ Hv). Qed.
+
+End FieldsAreLexical.
+
 (** ========================================================================= *)
 (** 13. Completeness of Symbolic Execution                                    *)
 (** ========================================================================= *)
