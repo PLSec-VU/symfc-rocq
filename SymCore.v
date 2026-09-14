@@ -245,12 +245,6 @@ Fixpoint is_op_app (e : expr) : bool :=
   | _ => false
   end.
 
-(**
-  Solvable Γ e in Prop (§3.2):
-    - Literals: e ≡ l
-    - Symbolic variables: e ≡ x ∧ x ∉ Γ
-    - Primitive operations: e ≡ ⊗ e⃗ where all arguments are solvable
-*)
 Inductive Solvable (Γ : environment) : expr -> Prop :=
   | Solvable_Lit : forall l,
       Solvable Γ (ELit l)
@@ -265,15 +259,8 @@ Inductive Solvable (Γ : environment) : expr -> Prop :=
       Solvable Γ a ->
       Solvable Γ (EApp f a).
 
-(**
-  Whnf Γ e in Prop (§3.2):
-    - Solvable(Γ, e)
-    - e ≡ D
-    - e ≡ b
-    - e ≡ λx. e (or closure (Γ', λx. e))
-    - e ≡ eb ⊲ γ ∧ Whnf(Γ, eb)
-    - e ≡ if ec then et else ef ∧ Solvable(Γ, ec) ∧ Whnf(Γ, et) ∧ Whnf(Γ, ef)
-*)
+(** Fig. 3's WHNF also lists a bare λx.e; here only the closure form is a
+    value, because Rule App-Abs applies to a closure. *)
 Inductive Whnf (Γ : environment) : expr -> Prop :=
   | Whnf_Solvable : forall e,
       Solvable Γ e ->
