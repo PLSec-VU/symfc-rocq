@@ -807,9 +807,10 @@ Axiom fold_alts_no_nested_if : forall Φ Γ e alts er,
   branch. Worse, it is stated for EVERY Γ, and Solvable_Var demands the
   variable be unbound in Γ, so an unconditional version would force the result
   to mention no variable at all: reduce-prim's range would be ground terms.
-  Combined with reduce_prim_contains that collapses concretion on a primitive
-  result into syntactic equality, which forces reduce_prim to be a CONSTANT
-  function on literals as soon as any condition is resolvable (1+1 = 1+2).
+  ConCore.v's unconditional_solvable_forces_constancy turns that into the
+  collapse it is: with reduce_prim_contains, an unconditional version forces
+  reduce_prim to be a CONSTANT function on literals as soon as any condition
+  is resolvable (1+1 = 1+2).
 
   With the hypothesis, a primitive applied to plain SMT arguments still yields
   a plain SMT term, while a primitive applied to an argument that still

@@ -13,6 +13,7 @@
 From SymCoreTheory Require Import SymCore.
 From Stdlib Require Import Strings.String.
 From Stdlib Require Import Lists.List.
+From Stdlib Require Import Lia.
 Import ListNotations.
 
 (** ========================================================================= *)
@@ -808,6 +809,116 @@ Proof.
   eapply expr_to_pc_solvable. exact Hpc.
 Qed.
 
+(** ------------------------------------------------------------------------- *)
+(** 9.0 The SMT Value of a Term                                               *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  The SMT theory's own reading of a primitive operation: the literal the
+  solver gives to that operation applied to literal arguments. It is external
+  to this development in exactly the way lit and primop already are, and it
+  is the only new opaque constant the repair needs.
+*)
+Parameter prim_value : primop -> list lit -> lit.
+
+(** The value a model gives to a path-condition formula. *)
+Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
+  match pc with
+  | PCVar x => σ x
+  | PCLit l => l
+  | PCPrim p args => prim_value p (map (pc_value σ) args)
+  end.
+
+(**
+  e has SMT value l under σ: e reads off a formula in every scope that does
+  not capture it, and the model gives that formula the value l. Reusing
+  `denotes` rather than introducing a second evaluator keeps the scoping
+  discipline of S, and keeps the new notion tied to the formulas the solver
+  is actually asked about.
+*)
+Definition denote (σ : valuation) (S : symvars) (e : expr) (l : lit) : Prop :=
+  exists pc, denotes S e pc /\ pc_value σ pc = l.
+
+Lemma denote_functional : forall σ S e l1 l2,
+  denote σ S e l1 -> denote σ S e l2 -> l1 = l2.
+Proof.
+  intros σ S e l1 l2 [pc1 [Hd1 Hv1]] [pc2 [Hd2 Hv2]].
+  rewrite <- Hv1, <- Hv2.
+  rewrite (expr_to_pc_functional e · · pc1 pc2
+             (Hd1 · (sym_free_env_empty S)) (Hd2 · (sym_free_env_empty S))).
+  reflexivity.
+Qed.
+
+Lemma denote_lit : forall σ S l, denote σ S (ELit l) l.
+Proof. intros σ S l. exists (PCLit l). split; [intros Γ _; reflexivity | reflexivity]. Qed.
+
+Lemma denote_lit_inv : forall σ S l m, denote σ S (ELit l) m -> l = m.
+Proof.
+  intros σ S l m H. symmetry.
+  exact (denote_functional σ S (ELit l) m l H (denote_lit σ S l)).
+Qed.
+
+Lemma denote_symvar : forall σ S x, S x = true -> denote σ S (EVar x) (σ x).
+Proof.
+  intros σ S x Hx. exists (PCVar x). split; [| reflexivity].
+  intros Γ Hfree. simpl. rewrite (Hfree x Hx). reflexivity.
+Qed.
+
+Lemma denote_var_inv : forall σ S x l, denote σ S (EVar x) l -> S x = true /\ l = σ x.
+Proof.
+  intros σ S x l [pc [Hden Hval]].
+  assert (Hpc : expr_to_pc · (EVar x) = Some pc) by (apply Hden; apply sym_free_env_empty).
+  simpl in Hpc. injection Hpc as Hpc. subst pc.
+  simpl in Hval. split; [| symmetry; exact Hval].
+  destruct (S x) eqn:Hsx; [reflexivity | exfalso].
+  assert (Hcapture : expr_to_pc (ExtendEnv x (MkClosure · (EBot BUndefined)) ·) (EVar x)
+                     = Some (PCVar x)).
+  { apply Hden. intros y Hy. simpl.
+    destruct (string_dec y x) as [Heq | Hne]; [subst; congruence | reflexivity]. }
+  simpl in Hcapture. destruct (string_dec x x); [discriminate | congruence].
+Qed.
+
+(**
+  A closed SMT term: built from literals and saturated-or-not primitive
+  applications, with no variable anywhere. Instantiation by a model does
+  nothing to such a term, which is why the semantic rule below excludes it.
+*)
+Fixpoint smt_ground (e : expr) : bool :=
+  match e with
+  | ELit _ => true
+  | EPrimOp _ => true
+  | EApp f a => is_op_app f && smt_ground f && smt_ground a
+  | _ => false
+  end.
+
+Lemma smt_ground_solvable : forall e Γ, smt_ground e = true -> Solvable Γ e.
+Proof.
+  induction e; intros Γ H; simpl in H; try discriminate.
+  - apply Solvable_Lit.
+  - apply Solvable_PrimOp.
+  - apply andb_prop in H as [H12 H2]. apply andb_prop in H12 as [Hop H1].
+    apply Solvable_AppPrim; [exact Hop | apply IHe1; exact H1 | apply IHe2; exact H2].
+Qed.
+
+Lemma solvable_everywhere_smt_ground : forall e,
+  (forall Γ, Solvable Γ e) -> smt_ground e = true.
+Proof.
+  induction e; intros Hall;
+    try (exfalso; specialize (Hall ·); inversion Hall; fail).
+  - exfalso. specialize (Hall (ExtendEnv v (MkClosure · (EBot BUndefined)) ·)).
+    inversion Hall as [| y Hnone | |]; subst. simpl in Hnone.
+    destruct (string_dec v v); [discriminate | congruence].
+  - reflexivity.
+  - reflexivity.
+  - assert (Hop : is_op_app e1 = true)
+      by (specialize (Hall ·); inversion Hall as [| | | f a Hop Hf Ha]; exact Hop).
+    assert (H1 : forall Γ, Solvable Γ e1)
+      by (intros Γ; specialize (Hall Γ); inversion Hall; assumption).
+    assert (H2 : forall Γ, Solvable Γ e2)
+      by (intros Γ; specialize (Hall Γ); inversion Hall; assumption).
+    simpl. rewrite Hop. rewrite (IHe1 H1), (IHe2 H2). reflexivity.
+Qed.
+
 (**
   Concretion: contains σ S e_sym e_con says that, under the SMT model σ and
   with S as the symbolic variables, the concrete term e_con is the instance
@@ -875,6 +986,30 @@ Inductive contains (σ : valuation) (S : symvars) : expr -> expr -> Prop :=
       contains σ S ef efc ->
       contains σ S (EIf ec et ef) efc
 
+  (**
+    The SMT fragment is related semantically, not syntactically: a residual
+    symbolic SMT term is concretized by the literal it denotes under σ.
+
+    The premises say exactly when the semantic rule is needed. The term must
+    be a SATURATED application of a primitive operation, because that is the
+    only shape whose concrete instance is not already fixed by the syntax: a
+    literal is its own instance, a symbolic variable goes to its value under
+    σ by Cont_Var_Sym, and a bare primitive operation is a function, not a
+    value of SMT sort. The term must also NOT be closed (smt_ground es =
+    false): a closed SMT term mentions no variable, so instantiation does
+    nothing to it and the structural rules already relate it to itself.
+
+    The concrete side is a literal because the concrete run has no symbolic
+    variables left: every SMT term it holds is closed, and the solver's
+    reducer delivers its value.
+  *)
+  | Cont_Denote : forall es p args l,
+      unspool_app es [] = (EPrimOp p, args) ->
+      length args = primop_arity p ->
+      smt_ground es = false ->
+      denote σ S es l ->
+      contains σ S es (ELit l)
+
 with contains_alt (σ : valuation) (S : symvars) : alt -> alt -> Prop :=
   | Cont_Alt : forall d xs eps epc,
       Forall (fun x => S x = false) xs ->
@@ -892,6 +1027,25 @@ with contains_env (σ : valuation) (S : symvars) : environment -> environment ->
       contains_env σ S rest_s rest_c ->
       contains_env σ S (ExtendEnv x (MkClosure Γs es) rest_s)
                        (ExtendEnv x (MkClosure Γc ec) rest_c).
+
+(** Cont_Denote only ever fires on an application: its head must be a
+    primitive operation, and a bare primitive operation is closed. *)
+Lemma cont_denote_is_app : forall es p args,
+  unspool_app es [] = (EPrimOp p, args) ->
+  smt_ground es = false ->
+  exists f a, es = EApp f a.
+Proof.
+  intros es p args Hun Hg. destruct es; simpl in Hun; try discriminate Hun.
+  - simpl in Hg. discriminate Hg.
+  - exists es1, es2. reflexivity.
+Qed.
+
+Ltac kill_denote :=
+  match goal with
+  | [ Hun : unspool_app ?e (@nil expr) = (EPrimOp _, _),
+      Hg : smt_ground ?e = false |- _ ] =>
+      destruct (cont_denote_is_app e _ _ Hun Hg) as [? [? ?]]; discriminate
+  end.
 
 (** Aliases for compatibility *)
 Notation instantiates := contains.
@@ -934,6 +1088,29 @@ Qed.
 Axiom reduce_prim_contains : forall σ S p args_s args_c,
   Forall2 (contains σ S) args_s args_c ->
   contains σ S (reduce_prim p args_s) (reduce_prim p args_c).
+
+(**
+  SMT solver behavior: reducing a primitive application preserves its SMT
+  value. This is the correctness statement for the external reducer, and it
+  is what lets the reducer COMPUTE. The old development had no such contract,
+  so the only way a reduced term could stay related to its concrete
+  counterpart was to be syntactically the same term, which is why
+  reduce_prim was forced never to compute.
+*)
+Axiom reduce_prim_denote : forall σ S p args ls,
+  Forall2 (denote σ S) args ls ->
+  denote σ S (reduce_prim p args) (prim_value p ls).
+
+(**
+  SMT solver behavior: when the reducer's answer mentions no variable, it is
+  a value. A closed SMT term is a number the solver already knows, and a
+  reducer that returned an unevaluated closed application would simply have
+  stopped early. This is the one direction in which "reduce_prim computes" is
+  an assumption rather than a permission.
+*)
+Axiom reduce_prim_ground_value : forall p args,
+  smt_ground (reduce_prim p args) = true ->
+  exists l, reduce_prim p args = ELit l.
 
 (** Grisette state merging soundness (Lemma A.4 in the paper) *)
 Axiom merge_contains : forall σ S es ec,
@@ -1065,7 +1242,7 @@ Lemma contains_var_bound : forall σ S Γs x Γ's es ec,
   ec = EVar x.
 Proof.
   intros σ S Γs x Γ's es ec Hfree Hlook Hcont.
-  inversion Hcont; subst; [reflexivity |].
+  inversion Hcont; subst; [reflexivity | | kill_denote].
   match goal with
   | [ HS : S x = true |- _ ] =>
       specialize (Hfree x HS); rewrite Hlook in Hfree; discriminate
@@ -1081,7 +1258,7 @@ Lemma contains_var_sym : forall σ S x ec,
   ec = ELit (σ x).
 Proof.
   intros σ S x ec Hsym Hcont.
-  inversion Hcont; subst; congruence.
+  inversion Hcont; subst; [congruence | congruence | kill_denote].
 Qed.
 
 (** Environment lookup preserves concore_expr *)
@@ -1127,26 +1304,26 @@ Qed.
 Lemma contains_lit_inv : forall σ S l ec,
   contains σ S (ELit l) ec -> ec = ELit l.
 Proof.
-  intros σ S l ec H. inversion H; subst; reflexivity.
+  intros σ S l ec H. inversion H; subst; [reflexivity | kill_denote].
 Qed.
 
 Lemma contains_con_inv : forall σ S d ec,
   contains σ S (ECon d) ec -> ec = ECon d.
 Proof.
-  intros σ S d ec H. inversion H; subst; reflexivity.
+  intros σ S d ec H. inversion H; subst; [reflexivity | kill_denote].
 Qed.
 
 Lemma contains_primop_inv : forall σ S p ec,
   contains σ S (EPrimOp p) ec -> ec = EPrimOp p.
 Proof.
-  intros σ S p ec H. inversion H; subst; reflexivity.
+  intros σ S p ec H. inversion H; subst; [reflexivity | kill_denote].
 Qed.
 
 Lemma contains_lam_inv : forall σ S x body ec,
   contains σ S (ELam x body) ec ->
   exists bodyc, ec = ELam x bodyc /\ S x = false /\ contains σ S body bodyc.
 Proof.
-  intros σ S x body ec H. inversion H; subst.
+  intros σ S x body ec H. inversion H; subst; [| kill_denote].
   exists bodyc. split; [reflexivity | split; assumption].
 Qed.
 
@@ -1156,23 +1333,50 @@ Lemma contains_clos_inv : forall σ S Γs x body ec,
     contains_env σ S Γs Γc /\
     contains σ S body bodyc.
 Proof.
-  intros σ S Γs x body ec H. inversion H; subst.
+  intros σ S Γs x body ec H. inversion H; subst; [| kill_denote].
   exists Γc, bodyc. split; [reflexivity | auto].
 Qed.
 
-Lemma contains_app_inv : forall σ S fs as_ ec,
+(**
+  An application is the one shape the semantic rule can also produce, so the
+  inversion is now a disjunction. The second alternative carries Solvable Γ fs,
+  which is what every caller uses to rule it out: a cast, a closure or a
+  bottom in function position is not solvable, and neither is a function that
+  Rule App-Spine has just declared not to be in WHNF.
+*)
+Lemma contains_app_inv : forall σ S Γ fs as_ ec,
+  sym_free_env S Γ ->
   contains σ S (EApp fs as_) ec ->
-  exists fc ac, ec = EApp fc ac /\ contains σ S fs fc /\ contains σ S as_ ac.
+  (exists fc ac, ec = EApp fc ac /\ contains σ S fs fc /\ contains σ S as_ ac)
+  \/ (Solvable Γ fs /\ exists p args l,
+        unspool_app (EApp fs as_) [] = (EPrimOp p, args) /\
+        length args = primop_arity p /\
+        smt_ground (EApp fs as_) = false /\
+        denote σ S (EApp fs as_) l /\
+        ec = ELit l).
 Proof.
-  intros σ S fs as_ ec H. inversion H; subst.
-  exists f_c, a_c. split; [reflexivity | auto].
+  intros σ S Γ fs as_ ec Hfree H. inversion H; subst.
+  - left. exists f_c, a_c. split; [reflexivity | auto].
+  - right.
+    match goal with
+    | [ Hden : denote σ S (EApp fs as_) ?l |- _ ] =>
+        assert (Hsolv : Solvable Γ (EApp fs as_));
+          [ destruct Hden as [pc [Hd _]];
+            exact (expr_to_pc_solvable Γ (EApp fs as_) pc (Hd Γ Hfree))
+          | ]
+    end.
+    inversion Hsolv as [| | | f a Hop Hf Ha]; subst.
+    split; [exact Hf |].
+    eexists; eexists; eexists.
+    split; [eassumption |]. split; [eassumption |]. split; [eassumption |].
+    split; [eassumption | reflexivity].
 Qed.
 
 Lemma contains_cast_inv : forall σ S es γ ec,
   contains σ S (ECast es γ) ec ->
   exists ec', ec = ECast ec' γ /\ contains σ S es ec'.
 Proof.
-  intros σ S es γ ec H. inversion H; subst.
+  intros σ S es γ ec H. inversion H; subst; [| kill_denote].
   exists ec0. split; [reflexivity | assumption].
 Qed.
 
@@ -1181,7 +1385,7 @@ Lemma contains_case_inv : forall σ S ess altss ec,
   exists esc altsc, ec = ECase esc altsc /\ contains σ S ess esc
     /\ Forall2 (contains_alt σ S) altss altsc.
 Proof.
-  intros σ S ess altss ec H. inversion H; subst.
+  intros σ S ess altss ec H. inversion H; subst; [| kill_denote].
   exists esc, altsc. split; [reflexivity | auto].
 Qed.
 
@@ -1206,7 +1410,11 @@ Lemma eval_app_cast_sound : forall Φ Γs Γc σ S ef γ ea γ_a γ_r er e_con,
     Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S er v_con.
 Proof.
   intros Φ Γs Γc σ S ef γ ea γ_a γ_r er e_con Hmod Henv Hcont Hcon Hdecomp Heval_pushed_s IH.
-  apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst e_con.
+  assert (Hfree : sym_free_env S Γs)
+    by (destruct (contains_env_sym_free σ S Γs Γc Henv) as [Hf _]; exact Hf).
+  destruct (contains_app_inv σ S Γs (ECast ef γ) ea e_con Hfree Hcont) as
+    [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
+    [subst e_con | exfalso; exact (solvable_not_cast Γs ef γ Hsolv)].
   apply contains_cast_inv in Hcont_f as [efc [Heq_fc Hcont_ef]]; subst fc.
   inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
   inversion Hf as [| | | | | | | | efc0 γ0 Hcon_ef | | | | | ]; subst.
@@ -1474,7 +1682,11 @@ Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
     Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S er v_con.
 Proof.
   intros Φ Γs Γc σ S ef ea ef' er e_con Hmod Henv Hcont Hcon Hnotwhnf Heval1 Heval2 IH1 IH2.
-  apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst e_con.
+  assert (Hfree : sym_free_env S Γs)
+    by (destruct (contains_env_sym_free σ S Γs Γc Henv) as [Hf _]; exact Hf).
+  destruct (contains_app_inv σ S Γs ef ea e_con Hfree Hcont) as
+    [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
+    [subst e_con | exfalso; exact (Hnotwhnf (Whnf_Solvable Γs ef Hsolv))].
   inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
   destruct (IH1 Γc σ fc Hmod Henv Hcont_f Hf) as [v_f [Heval_f Hcont_vf]].
   assert (Henv_c : concrete_env Γc) by (eapply contains_env_concrete; eassumption).
@@ -1494,6 +1706,157 @@ Proof.
         eapply reduce_prim_app_false; [exact Hsargs | exact Heval_app2].
     + eapply eval_con_app_whnf; eassumption.
   - eapply Eval_AppSpine; [exact Hnot_whnf_c | exact Heval_f | exact Heval_app2].
+Qed.
+
+(** ------------------------------------------------------------------------- *)
+(** 9.2 Symbolic Evaluation Preserves the SMT Value                           *)
+(** ------------------------------------------------------------------------- *)
+
+(** The formula of an application splits into the formula of the operator
+    spine and the formula of the last argument, in every scope at once. *)
+Lemma denotes_app_inv : forall S e1 e2 pc,
+  denotes S (EApp e1 e2) pc ->
+  exists p pcs pa,
+    pc = PCPrim p (pcs ++ [pa]) /\ denotes S e1 (PCPrim p pcs) /\ denotes S e2 pa.
+Proof.
+  intros S e1 e2 pc Hden.
+  pose proof (Hden · (sym_free_env_empty S)) as H0. simpl in H0.
+  destruct (expr_to_pc · e1) as [pc1 |] eqn:E1; [| discriminate].
+  destruct pc1 as [x | l | p q1];
+    try (destruct (expr_to_pc · e2); discriminate).
+  destruct (expr_to_pc · e2) as [pa |] eqn:E2; [| discriminate].
+  injection H0 as H0. subst pc.
+  exists p, q1, pa. split; [reflexivity | split];
+    intros Γ Hfree; specialize (Hden Γ Hfree); simpl in Hden;
+    destruct (expr_to_pc Γ e1) as [pc1' |] eqn:E1'; try discriminate;
+    destruct pc1' as [x' | l' | p' q'];
+      try (destruct (expr_to_pc Γ e2); discriminate);
+    destruct (expr_to_pc Γ e2) as [pa' |] eqn:E2'; try discriminate.
+  - rewrite (expr_to_pc_functional e1 Γ · (PCPrim p' q') (PCPrim p q1) E1' E1).
+    reflexivity.
+  - rewrite (expr_to_pc_functional e2 Γ · pa' pa E2' E2). reflexivity.
+Qed.
+
+(** A term whose formula is a primitive application is an operator spine, and
+    its arguments carry the formula's arguments pointwise. *)
+Lemma denotes_unspool : forall e S pop pcs qop eargs,
+  denotes S e (PCPrim pop pcs) ->
+  unspool_app e [] = (EPrimOp qop, eargs) ->
+  pop = qop /\ Forall2 (denotes S) eargs pcs.
+Proof.
+  induction e; intros S pop pcs qop eargs Hden Hun;
+    try (pose proof (Hden · (sym_free_env_empty S)) as H0; simpl in H0;
+         discriminate H0).
+  - pose proof (Hden · (sym_free_env_empty S)) as H0. simpl in H0.
+    injection H0 as H0. subst pcs. simpl in Hun. injection Hun as Hq Hargs.
+    subst. split; [reflexivity | constructor].
+  - destruct (denotes_app_inv S e1 e2 (PCPrim pop pcs) Hden)
+      as [p1 [pcs1 [pa [Heq [Hden1 Hden2]]]]].
+    injection Heq as Hp Hpcs. subst p1 pcs.
+    assert (Hop : is_op_app e1 = true).
+    { pose proof (Hden1 · (sym_free_env_empty S)) as H1.
+      exact (expr_to_pc_prim_is_op_app · e1 pop pcs1 H1). }
+    destruct (is_op_app_unspool e1 Hop) as [p2 [args2 Hun2]].
+    pose proof (unspool_app_shift e1 [] [e2] (EPrimOp p2) args2 Hun2) as Hun2'.
+    simpl in Hun2'. simpl in Hun. rewrite Hun2' in Hun.
+    injection Hun as Hq Hargs. subst qop eargs.
+    destruct (IHe1 S pop pcs1 p2 args2 Hden1 Hun2) as [Hpp Hall].
+    split; [exact Hpp |].
+    apply Forall2_app; [exact Hall | constructor; [exact Hden2 | constructor]].
+Qed.
+
+Ltac denote_absurd :=
+  exfalso;
+  match goal with
+  | [ H : denote _ ?S _ _ |- _ ] =>
+      let pc := fresh "pc" in let Hd := fresh "Hd" in
+      destruct H as [pc [Hd _]];
+      specialize (Hd · (sym_free_env_empty S)); simpl in Hd; discriminate Hd
+  end.
+
+(**
+  Symbolic evaluation of an SMT term preserves its SMT value. This is PROVED,
+  not assumed: every evaluation rule except App-Prim is excluded by the shape
+  of a denoting term (or, for Rule Prune, by the model of the path
+  condition), and App-Prim is exactly reduce_prim_denote applied to arguments
+  the recursion has already handled.
+
+  It is a Fixpoint rather than an induction because App-Prim needs the result
+  for every argument in its Forall2, which Coq's derived induction principle
+  does not strengthen.
+*)
+Fixpoint eval_denote_fix (Φ : path_condition) (Γ : environment) (e e' : expr)
+  (Heval : Φ ; Γ ⊢ e ⇓ e') {struct Heval} :
+  forall σ S l,
+    σ ⊨ Φ ->
+    sym_free_env S Γ ->
+    denote σ S e l ->
+    denote σ S e' l.
+Proof.
+  destruct Heval as
+    [ Φ Γ x Γ' eb eb' Hlookup Heval_x
+    | Φ Γ x Hnone
+    | Φ Γ l0
+    | Φ Γ d
+    | Φ Γ eb γ eb' Heval_e
+    | Φ Γ Γ' x eb ea eb' Heval_b
+    | Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | Φ Γ b
+    | Φ Γ ef ea p eargs eargs' Hunspool Harity Hargs
+    | Φ Γ x eb
+    | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | Φ Γ b ea
+    | Φ Γ es alts es' er Heval_es Hfold
+    | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
+    | Φ Γ γ
+    | Φ Γ eb Hunsat
+    | Φ Γ τ
+    ]; intros σ S l Hmod Hfree Hden;
+    try denote_absurd.
+  - (* Eval_Var: a denoting variable is symbolic, so Γ cannot bind it *)
+    exfalso. destruct (denote_var_inv σ S x l Hden) as [Hsx _].
+    specialize (Hfree x Hsx). rewrite Hlookup in Hfree. discriminate.
+  - (* Eval_SymVar *) exact Hden.
+  - (* Eval_Lit *) exact Hden.
+  - (* Eval_AppSpine: a denoting spine has a solvable, hence WHNF, operator *)
+    exfalso. apply Hnotwhnf. apply Whnf_Solvable.
+    destruct Hden as [pc [Hd _]].
+    pose proof (expr_to_pc_solvable Γ (EApp ef ea) pc (Hd Γ Hfree)) as Hsolv.
+    inversion Hsolv as [| | | f a Hop Hf Ha]; subst. exact Hf.
+  - (* Eval_AppPrim *)
+    destruct Hden as [pc [Hdenotes Hval]].
+    assert (Hop : is_op_app (EApp ef ea) = true)
+      by (eapply unspool_is_op_app; exact Hunspool).
+    destruct (expr_to_pc_op_app (EApp ef ea) · pc Hop
+                (Hdenotes · (sym_free_env_empty S))) as [p1 [pcs Hpc]].
+    subst pc.
+    destruct (denotes_unspool (EApp ef ea) S p1 pcs p eargs Hdenotes Hunspool)
+      as [Hp1 Hpcs]. subst p1.
+    assert (Hres : Forall2 (denote σ S) eargs' (map (pc_value σ) pcs)).
+    { clear Hunspool Harity Hval Hop Hdenotes.
+      revert pcs Hpcs.
+      induction Hargs as [| a a' atl atl' Ha Htl IHtl]; intros pcs Hpcs.
+      - inversion Hpcs; subst. constructor.
+      - inversion Hpcs as [| a0 pc0 atl0 pctl Hden_a Hden_tl]; subst.
+        simpl. constructor.
+        + exact (eval_denote_fix Φ Γ a a' Ha σ S (pc_value σ pc0) Hmod Hfree
+                   (ex_intro _ pc0 (conj Hden_a eq_refl))).
+        + exact (IHtl pctl Hden_tl). }
+    rewrite <- Hval. simpl.
+    exact (reduce_prim_denote σ S p eargs' (map (pc_value σ) pcs) Hres).
+  - (* Eval_Prune: unreachable under a model of the path condition *)
+    exfalso. apply models_sat in Hmod. rewrite Hunsat in Hmod. discriminate.
+Qed.
+
+Lemma eval_denote : forall Φ Γ σ S e e' l,
+  σ ⊨ Φ ->
+  sym_free_env S Γ ->
+  Φ ; Γ ⊢ e ⇓ e' ->
+  denote σ S e l ->
+  denote σ S e' l.
+Proof.
+  intros Φ Γ σ S e e' l Hmod Hfree Heval Hden.
+  exact (eval_denote_fix Φ Γ e e' Heval σ S l Hmod Hfree Hden).
 Qed.
 
 (** ========================================================================= *)
@@ -1523,23 +1886,40 @@ Qed.
     correspondence on the accumulator through the same accumulator on both
     sides. This is what earlier let eval_app_spine_sound derive an arity
     contradiction, and is the structural core of eval_prim_args_sound. *)
+(**
+  The accumulator must be non-empty and the spine saturated. Both premises
+  say the same thing: the term being unspooled is a PROPER SUB-SPINE of a
+  saturated application, hence under-applied, hence not itself a value of
+  SMT sort, hence not something Cont_Denote could have collapsed to a
+  literal. Rule App-Prim, the only caller, supplies both.
+*)
 Lemma contains_unspool_primop : forall σ S e_sym e_con,
   contains σ S e_sym e_con ->
   forall L_s L_c,
     Forall2 (contains σ S) L_s L_c ->
+    L_s <> [] ->
     forall p args,
       unspool_app e_sym L_s = (EPrimOp p, args) ->
+      length args = primop_arity p ->
       exists args_c,
         unspool_app e_con L_c = (EPrimOp p, args_c) /\
         Forall2 (contains σ S) args args_c.
 Proof.
-  induction 1; intros L_s L_c HL p0 args0 Hunspool; simpl in Hunspool;
+  induction 1; intros L_s L_c HL Hne p0 args0 Hunspool Harity; simpl in Hunspool;
     try discriminate.
   - injection Hunspool as ? ?; subst.
     exists L_c. split; [reflexivity | exact HL].
-  - apply IHcontains1 with (L_s := a_s :: L_s) (L_c := a_c :: L_c).
-    + constructor; assumption.
-    + exact Hunspool.
+  - apply IHcontains1 with (L_s := a_s :: L_s) (L_c := a_c :: L_c);
+      [constructor; assumption | discriminate | exact Hunspool | exact Harity].
+  - exfalso.
+    match goal with
+    | [ Hun0 : unspool_app ?e (@nil expr) = (EPrimOp ?q, ?qargs),
+        Har0 : length ?qargs = primop_arity ?q |- _ ] =>
+        apply (unspool_app_shift e [] L_s) in Hun0; simpl in Hun0;
+        rewrite Hun0 in Hunspool; inversion Hunspool; subst;
+        rewrite length_app, Har0 in Harity;
+        destruct L_s as [| z zs]; [apply Hne; reflexivity | simpl in Harity; lia]
+    end.
 Qed.
 
 (** Same fact, specialized to a data-constructor head instead of a primitive
@@ -1561,6 +1941,12 @@ Proof.
   - apply IHcontains1 with (L_s := a_s :: L_s) (L_c := a_c :: L_c).
     + constructor; assumption.
     + exact Hunspool.
+  - exfalso.
+    match goal with
+    | [ Hun0 : unspool_app ?e (@nil expr) = (EPrimOp ?q, ?qargs) |- _ ] =>
+        apply (unspool_app_shift e [] L_s) in Hun0; simpl in Hun0;
+        rewrite Hun0 in Hunspool; discriminate Hunspool
+    end.
 Qed.
 
 (** Fully general version: whatever head the spine settles on (as long as
@@ -1579,16 +1965,17 @@ Lemma contains_unspool_general : forall σ S e_sym e_con,
   contains σ S e_sym e_con ->
   forall L_s L_c,
     Forall2 (contains σ S) L_s L_c ->
-    forall head args,
-      unspool_app e_sym L_s = (head, args) ->
-      is_if head = false ->
-      exists head_c args_c,
-        unspool_app e_con L_c = (head_c, args_c) /\
-        contains σ S head head_c /\
-        Forall2 (contains σ S) args args_c.
+    forall hd hargs,
+      unspool_app e_sym L_s = (hd, hargs) ->
+      is_if hd = false ->
+      (exists head_c args_c,
+         unspool_app e_con L_c = (head_c, args_c) /\
+         contains σ S hd head_c /\
+         Forall2 (contains σ S) hargs args_c)
+      \/ (exists l args_c, unspool_app e_con L_c = (ELit l, args_c)).
 Proof.
-  induction 1; intros L_s L_c HL head args Hunspool Hif; simpl in Hunspool;
-    try (injection Hunspool as ? ?; subst;
+  induction 1; intros L_s L_c HL hd hargs Hunspool Hif; simpl in Hunspool;
+    try (left; injection Hunspool as ? ?; subst;
          eexists; exists L_c;
          split; [reflexivity | split; [solve [constructor; assumption] | exact HL]]).
   - (* Cont_App *)
@@ -1598,6 +1985,7 @@ Proof.
     + exact Hif.
   - (* Cont_If_True *) injection Hunspool as ? ?; subst. simpl in Hif. discriminate.
   - (* Cont_If_False *) injection Hunspool as ? ?; subst. simpl in Hif. discriminate.
+  - (* Cont_Denote *) right. exists l, L_c. reflexivity.
 Qed.
 
 (** `find_alt` looks up alternatives by tag only, and `contains_alt`
@@ -1725,7 +2113,7 @@ Proof.
       * unfold eval_con. apply Eval_Lit.
       * apply Cont_Var_Sym. exact Hsx.
     + assert (Heq : e_con = EVar x).
-      { inversion Hcont; subst; congruence. }
+      { inversion Hcont; subst; [congruence | congruence | kill_denote]. }
       subst e_con.
       exists (EVar x). split.
       * unfold eval_con. apply Eval_SymVar.
@@ -1743,7 +2131,11 @@ Proof.
     destruct (concore_soundness_fix Φ Γ e e' Heval_e Γc σ S ec Hmod Henv Hcont_e Hcon_e) as [vc [Hevalc Hcont_v]].
     exists (cast_expr vc γ). split; [unfold eval_con; apply Eval_Cast; exact Hevalc | apply cast_expr_contains; exact Hcont_v].
   - (* Eval_AppAbs *)
-    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
+    assert (Hfree : sym_free_env S Γ)
+      by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
+    destruct (contains_app_inv σ S Γ (EClos Γ' x eb) ea e_con Hfree Hcont) as
+      [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
+      [subst e_con | exfalso; inversion Hsolv].
     apply contains_clos_inv in Hcont_f as [Γ'c [ebc [Heq_f [Hsx [Henv_clos Hcont_b]]]]]; subst.
     inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
     inversion Hf as [| | | | | | Γ0 x0 body Henv_clos_c Hcon_b | | | | | | | ]; subst.
@@ -1761,14 +2153,54 @@ Proof.
     + intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
       exact (concore_soundness_fix Φ Γ (EApp ef' ea) er Heval_app2 Γc0 σ0 S e_con0 Hmod0 Henv0 Hcont0 Hcon0).
   - (* Eval_Bot *)
-    inversion Hcont; subst.
+    inversion Hcont; subst; [| kill_denote].
     exists (EBot b). split; [apply Eval_Bot | apply Cont_Bot].
   - (* Eval_AppPrim *)
-    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst e_con.
+    assert (Hfree : sym_free_env S Γ)
+      by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
+    assert (Hfree_c : sym_free_env S Γc)
+      by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [_ Hf]; exact Hf).
+    destruct (contains_app_inv σ S Γ ef ea e_con Hfree Hcont) as
+      [[fc [ac [Heq [Hcont_f Hcont_a]]]] |
+       [Hsolv_f [p0 [args0 [lv [Hun0 [Har0 [Hg0 [Hden0 Heq]]]]]]]]];
+      subst e_con;
+      [| (* the concrete side is the literal the symbolic spine denotes *)
+         rewrite Hunspool in Hun0; injection Hun0 as Hp0 Hargs0; subst p0 args0;
+         exists (ELit lv); split; [unfold eval_con; apply Eval_Lit |];
+         assert (Hden' : denote σ S (reduce_prim p args') lv)
+           by (eapply eval_denote;
+               [ exact Hmod | exact Hfree
+               | eapply Eval_AppPrim; [exact Hunspool | exact Harity | exact Hargs]
+               | exact Hden0 ]);
+         assert (Hsolv_r : Solvable Γc (reduce_prim p args'))
+           by (destruct Hden' as [pcr [Hdr _]];
+               exact (expr_to_pc_solvable Γc _ pcr (Hdr Γc Hfree_c)));
+         remember (reduce_prim p args') as rt eqn:Hrt;
+         destruct Hsolv_r as [l0 | y Hy | q | f a Hop Hf Ha];
+         [ rewrite <- (denote_lit_inv σ S l0 lv Hden'); apply Cont_Lit
+         | destruct (denote_var_inv σ S y lv Hden') as [Hsy Hlv];
+           rewrite Hlv; apply Cont_Var_Sym; exact Hsy
+         | exfalso;
+           destruct (reduce_prim_ground_value p args'
+                       (ltac:(rewrite <- Hrt; reflexivity))) as [l1 Hl1];
+           rewrite <- Hrt in Hl1; discriminate Hl1
+         | destruct (smt_ground (EApp f a)) eqn:Hg;
+           [ exfalso;
+             destruct (reduce_prim_ground_value p args'
+                         (ltac:(rewrite <- Hrt; exact Hg))) as [l1 Hl1];
+             rewrite <- Hrt in Hl1; discriminate Hl1
+           | destruct (is_op_app_unspool (EApp f a) Hop) as [q [qargs Hunq]];
+             apply (Cont_Denote σ S (EApp f a) q qargs lv Hunq);
+             [ eapply reduce_prim_saturated; rewrite Hrt in Hunq; exact Hunq
+             | exact Hg | exact Hden' ] ] ] ].
     assert (Hcont_full : contains σ S (EApp ef ea) (EApp fc ac)) by (constructor; assumption).
     inversion Hcon as [| | | | fc0 ac0 Hcon_f Hcon_a | | | | | | | | | ]; subst.
+    assert (HL : Forall2 (contains σ S) [ea] [ac])
+      by (constructor; [exact Hcont_a | constructor]).
+    assert (Hne : [ea] <> (@nil expr)) by discriminate.
     assert (Hunspool_c : exists args_c, unspool_app (EApp fc ac) [] = (EPrimOp p, args_c) /\ Forall2 (contains σ S) args args_c).
-    { apply (contains_unspool_primop σ S (EApp ef ea) (EApp fc ac) Hcont_full [] [] (Forall2_nil _) p args Hunspool). }
+    { apply (contains_unspool_primop σ S ef fc Hcont_f [ea] [ac] HL Hne p args
+               Hunspool Harity). }
     destruct Hunspool_c as [args_c [Hunspool_c Hcont_args]].
     assert (Hconcore_args_c : Forall concore_expr args_c).
     { eapply unspool_app_concore; [exact Hunspool_c | constructor; assumption | constructor]. }
@@ -1803,8 +2235,12 @@ Proof.
     intros Γc0 σ0 e_con0 Hmod0 Henv0 Hcont0 Hcon0.
     exact (concore_soundness_fix Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er Heval_pushed Γc0 σ0 S e_con0 Hmod0 Henv0 Hcont0 Hcon0).
   - (* Eval_AppBot *)
-    apply contains_app_inv in Hcont as [fc [ac [Heq [Hcont_f Hcont_a]]]]; subst.
-    inversion Hcont_f; subst.
+    assert (Hfree : sym_free_env S Γ)
+      by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
+    destruct (contains_app_inv σ S Γ (EBot b) ea e_con Hfree Hcont) as
+      [[fc [ac [Heq [Hcont_f Hcont_a]]]] | [Hsolv _]];
+      [subst e_con | exfalso; inversion Hsolv].
+    inversion Hcont_f; subst; [| kill_denote].
     exists (EBot b). split; [apply Eval_AppBot | constructor].
   - (* Eval_Case *)
     apply contains_case_inv in Hcont as [esc [altsc [Heq [Hcont_es Hcont_alts]]]]; subst.
@@ -1830,14 +2266,15 @@ Proof.
       assert (Hmod_and : σ ⊨ (Φ ∧ ¬ pc_c)) by (apply models_and; assumption).
       destruct (concore_soundness_fix (Φ ∧ ¬ pc_c) Γ ef ef' Heval_f Γc σ S e_con Hmod_and Henv H4 Hcon) as [v_con [Hevalc' Hcont_v]].
       exists v_con. split; [exact Hevalc' |]. apply Cont_If_False; [exact Hncond' | exact Hcont_v].
+    + kill_denote.
   - (* Eval_Coercion *)
-    inversion Hcont; subst.
+    inversion Hcont; subst; [| kill_denote].
     exists (ECoercion (subst_coerc Γc γ)).
     split; [apply Eval_Coercion | apply subst_coerc_contains_env; assumption].
   - (* Eval_Prune *)
     apply models_sat in Hmod. rewrite Hunsat in Hmod. discriminate.
   - (* Eval_Type *)
-    inversion Hcont; subst.
+    inversion Hcont; subst; [| kill_denote].
     exists (EType (subst_type Γc τ)).
     split; [apply Eval_Type | apply subst_type_contains_env; assumption].
 }
@@ -1862,6 +2299,7 @@ Proof.
       destruct (concore_soundness_fold_fix (Φ ∧ ¬ pc_c) Γ ef alts ef' Hfold_f Γc σ S esc altsc Hmod_and Henv Hcon_esc Hcon_altsc
                   (ex_intro _ vc_s (conj Heval_esc H4)) Halts) as [v_con [Heval_case Hcont_er]].
       exists v_con. split; [exact Heval_case | apply Cont_If_False; assumption].
+    + kill_denote.
   - (* FoldAlts_IfFail *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
     assert (Hfree : sym_free_env S Γ)
@@ -1873,6 +2311,7 @@ Proof.
     + exfalso.
       destruct (models_cond_total σ S Γ ec Hfree (or_intror H3)) as [pc Hpc_some].
       rewrite Hpc_none in Hpc_some. discriminate.
+    + kill_denote.
   - (* FoldAlts_Con *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
     assert (Hunspool_e : unspool_app e [] = (ECon d, ea)).
@@ -1903,7 +2342,7 @@ Proof.
       eapply FoldAlts_Con; [exact Hdec_vcs | exact Halt_c | exact Heval_ep_c].
   - (* FoldAlts_Bot *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
-    inversion Hcont_vs; subst.
+    inversion Hcont_vs; subst; [| kill_denote].
     exists (EBot b). split; [| apply Cont_Bot].
     unfold eval_con. eapply Eval_Case.
     + exact Heval_esc.
@@ -1917,28 +2356,38 @@ Proof.
     { destruct (is_if head) eqn:Hcase; [| reflexivity].
       specialize (Hno_nested head args eq_refl Hcase). subst head.
       rewrite Hnotif in Hcase. discriminate. }
-    destruct (contains_unspool_general σ S e vc_s Hcont_vs [] [] (Forall2_nil _) head args Hunspool_e Hif_head)
-      as [head_c [args_c [Hunspool_vcs [Hcont_head Hcont_args]]]].
-    assert (Hnoalt_c : match decompose_con_app vc_s with Some (d,_) => find_alt d altsc = None | None => True end).
-    { unfold decompose_con_app. rewrite Hunspool_vcs.
-      destruct head_c eqn:Hheadc; try exact I.
-      inversion Hcont_head; subst; try (simpl in Hif_head; discriminate).
-      assert (Hdeco_e : decompose_con_app e = Some (d, args)) by (unfold decompose_con_app; rewrite Hunspool_e; reflexivity).
-      rewrite Hdeco_e in Hnoalt.
-      exact (find_alt_none_contains_alt σ S alts altsc d Halts Hnoalt).
+    assert (Hfacts :
+      (match decompose_con_app vc_s with
+       | Some (d, _) => find_alt d altsc = None
+       | None => True
+       end)
+      /\ is_bot vc_s = false /\ is_if vc_s = false).
+    { destruct (contains_unspool_general σ S e vc_s Hcont_vs [] [] (Forall2_nil _) head args Hunspool_e Hif_head)
+        as [[head_c [args_c [Hunspool_vcs [Hcont_head Hcont_args]]]]
+           | [lv [args_c Hunspool_vcs]]].
+      - split; [| split].
+        + unfold decompose_con_app. rewrite Hunspool_vcs.
+          destruct head_c eqn:Hheadc; try exact I.
+          inversion Hcont_head; subst; try (simpl in Hif_head; discriminate).
+          assert (Hdeco_e : decompose_con_app e = Some (d, args)) by (unfold decompose_con_app; rewrite Hunspool_e; reflexivity).
+          rewrite Hdeco_e in Hnoalt.
+          exact (find_alt_none_contains_alt σ S alts altsc d Halts Hnoalt).
+        + destruct (is_bot vc_s) eqn:Hbc; [| reflexivity].
+          exfalso. destruct vc_s; simpl in Hbc; try discriminate.
+          inversion Hcont_vs; subst; discriminate.
+        + destruct (is_if vc_s) eqn:Hic; [| reflexivity].
+          exfalso. destruct vc_s; simpl in Hic; try discriminate.
+          inversion Hcont_vs; subst; discriminate.
+      - (* the scrutinee concretised to an SMT value, which matches no
+           constructor alternative, exactly as the symbolic side did *)
+        split; [| split].
+        + unfold decompose_con_app. rewrite Hunspool_vcs. exact I.
+        + destruct (is_bot vc_s) eqn:Hbc; [| reflexivity].
+          exfalso. destruct vc_s; simpl in Hbc; discriminate.
+        + destruct (is_if vc_s) eqn:Hic; [| reflexivity].
+          exfalso. destruct vc_s; simpl in Hic; discriminate.
     }
-    assert (Hnotbot_c : is_bot vc_s = false).
-    { destruct (is_bot vc_s) eqn:Hbc; [| reflexivity].
-      exfalso.
-      destruct vc_s; simpl in Hbc; try discriminate.
-      inversion Hcont_vs; subst; discriminate.
-    }
-    assert (Hnotif_c : is_if vc_s = false).
-    { destruct (is_if vc_s) eqn:Hic; [| reflexivity].
-      exfalso.
-      destruct vc_s; simpl in Hic; try discriminate.
-      inversion Hcont_vs; subst; discriminate.
-    }
+    destruct Hfacts as [Hnoalt_c [Hnotbot_c Hnotif_c]].
     exists (EBot BUndefined). split; [| apply Cont_Bot].
     unfold eval_con. eapply Eval_Case.
     + exact Heval_esc.
@@ -1997,7 +2446,7 @@ Qed.
 (** ========================================================================= *)
 
 (**
-  Four facts that the pre-repair development could not prove, and in three
+  Six facts that the pre-repair development could not prove, and in three
   cases actively refuted (see scratch/Audit.v, scratch/prim.v,
   scratch/prim2.v):
 
@@ -2007,9 +2456,20 @@ Qed.
       concretion - the exact negation of soundness_vacuous_on_symbolic_branch;
   (c) Rule Prune no longer kills every branch;
   (d) reduce_prim is not forced to be a constant function on literals, and
-      the collapse is attributable exactly to the axiom that was weakened.
+      the collapse is attributable exactly to the axiom that was weakened;
+  (e) the relation is still DISCRIMINATING: different literals, different
+      constructors and different shapes stay unrelated, a symbolic SMT term
+      has exactly one literal concretion, and a closed SMT term is related to
+      nothing but itself - so the repair did not buy non-vacuity with
+      triviality;
+  (f) a primitive that really computes a function which is neither constant
+      nor the identity now lives inside the axiom set, and the soundness
+      theorem applies to a program that uses it.
 
-  No new axiom is introduced by any of this.
+  No new axiom is introduced by any of this: (e) and (f) use only the three
+  declared in Sections 9.0 and 9.1 (prim_value, reduce_prim_denote and
+  reduce_prim_ground_value), and (f) keeps its computing primitive in Section
+  variables so that nothing is assumed globally.
 *)
 
 Section NonVacuity.
@@ -2170,6 +2630,12 @@ Proof.
     assert (Ha : forall Γ, Solvable Γ a_s)
       by (intros Γ; specialize (Hall Γ); inversion Hall; assumption).
     rewrite (IHcontains1 Hf), (IHcontains2 Ha). reflexivity.
+  - (* Cont_Denote: excluded, the semantic rule never fires on a closed term *)
+    exfalso.
+    match goal with
+    | [ Hg : smt_ground ?t = false |- _ ] =>
+        rewrite (solvable_everywhere_smt_ground t Hall) in Hg; discriminate Hg
+    end.
 Qed.
 
 (** The collapse is attributable exactly to the UNCONDITIONAL form of
@@ -2233,4 +2699,209 @@ Section ReducePrimNotConstant.
     eapply unconditional_solvable_forces_constancy; eassumption.
   Qed.
 End ReducePrimNotConstant.
+
+(* ============ (e) the relation is still discriminating ================= *)
+
+(**
+  The mirror-image failure of vacuity is triviality. A relation that held of
+  every pair would make the soundness theorem say nothing, exactly as a
+  relation that held of no pair did. The facts below are what stop that.
+*)
+
+(** Two different literals are NOT related. *)
+Corollary distinct_literals_not_contained : forall σ S l1 l2,
+  l1 <> l2 -> ~ contains σ S (ELit l1) (ELit l2).
+Proof.
+  intros σ S l1 l2 Hne Hcont.
+  apply contains_lit_inv in Hcont. injection Hcont as Hcont. congruence.
+Qed.
+
+(** Two different data constructors are NOT related. *)
+Corollary distinct_constructors_not_contained : forall σ S d1 d2,
+  d1 <> d2 -> ~ contains σ S (ECon d1) (ECon d2).
+Proof.
+  intros σ S d1 d2 Hne Hcont.
+  apply contains_con_inv in Hcont. injection Hcont as Hcont. congruence.
+Qed.
+
+(** Shapes are not mixed. A function, a constructor and a bottom are none of
+    them concretised by a literal, and a literal is not concretised by a
+    function. *)
+Corollary lambda_not_contained_by_literal : forall σ S x body l,
+  ~ contains σ S (ELam x body) (ELit l).
+Proof.
+  intros σ S x body l Hcont.
+  apply contains_lam_inv in Hcont as [bodyc [Heq _]]. discriminate.
+Qed.
+
+Corollary constructor_not_contained_by_literal : forall σ S d l,
+  ~ contains σ S (ECon d) (ELit l).
+Proof.
+  intros σ S d l Hcont. apply contains_con_inv in Hcont. discriminate.
+Qed.
+
+Corollary bottom_not_contained_by_literal : forall σ S b l,
+  ~ contains σ S (EBot b) (ELit l).
+Proof.
+  intros σ S b l Hcont. inversion Hcont; subst; kill_denote.
+Qed.
+
+Corollary literal_not_contained_by_lambda : forall σ S l x body,
+  ~ contains σ S (ELit l) (ELam x body).
+Proof.
+  intros σ S l x body Hcont. apply contains_lit_inv in Hcont. discriminate.
+Qed.
+
+(** The semantic rule relates a symbolic SMT term to ONE literal, the one it
+    denotes. This is the exact sense in which `contains` became semantic
+    rather than permissive: it is still a function on the SMT fragment. *)
+Corollary smt_concretion_determined : forall σ S es l1 l2,
+  denote σ S es l1 -> contains σ S es (ELit l2) -> l1 = l2.
+Proof.
+  intros σ S es l1 l2 Hden Hcont.
+  inversion Hcont; subst.
+  - destruct (denote_var_inv σ S x l1 Hden) as [_ Hl1]. congruence.
+  - symmetry. exact (denote_lit_inv σ S l2 l1 Hden).
+  - destruct Hden as [pc [Hd _]].
+    specialize (Hd · (sym_free_env_empty S)). simpl in Hd. discriminate.
+  - destruct Hden as [pc [Hd _]].
+    specialize (Hd · (sym_free_env_empty S)). simpl in Hd. discriminate.
+  - match goal with
+    | [ Hden2 : denote σ S es l2 |- _ ] =>
+        exact (denote_functional σ S es l1 l2 Hden Hden2)
+    end.
+Qed.
+
+Corollary wrong_value_not_contained : forall σ S es l1 l2,
+  denote σ S es l1 -> l1 <> l2 -> ~ contains σ S es (ELit l2).
+Proof.
+  intros σ S es l1 l2 Hden Hne Hcont.
+  exact (Hne (smt_concretion_determined σ S es l1 l2 Hden Hcont)).
+Qed.
+
+(** On CLOSED SMT terms the relation is still plain syntactic equality: the
+    semantic rule never fires where there is no symbolic variable to
+    instantiate. *)
+Corollary closed_smt_term_is_rigid : forall σ S es ec,
+  smt_ground es = true -> contains σ S es ec -> es = ec.
+Proof.
+  intros σ S es ec Hg Hcont.
+  exact (ground_solvable_contains_eq σ S es ec Hcont
+           (fun Γ => smt_ground_solvable es Γ Hg)).
+Qed.
+
+(* ======= (f) a primitive that computes, and soundness applied to it ===== *)
+
+(**
+  The positive counterpart of reduce_prim_cannot_compute. Everything below is
+  hypothetical in the Section's variables, so it adds no assumption to the
+  development; what it shows is that a reducer which really computes a
+  function that is NEITHER constant NOR the identity now sits inside the
+  axiom set instead of contradicting it.
+
+  The load-bearing step is computing_primitive_concretion: the instance of
+  reduce_prim_contains that used to force reduce_prim to be constant or the
+  identity is now DERIVED from Cont_Denote, without appealing to
+  reduce_prim_contains at all.
+*)
+Section ComputingPrimitive.
+  Variable psucc : primop.
+  Variable succ : lit -> lit.
+
+  Hypothesis Hsucc_arity : primop_arity psucc = 1%nat.
+  Hypothesis Hsucc_value : forall l, prim_value psucc [l] = succ l.
+  Hypothesis Hsucc_computes : forall l, reduce_prim psucc [ELit l] = ELit (succ l).
+  Hypothesis Hsucc_residual : forall x,
+    reduce_prim psucc [EVar x] = EApp (EPrimOp psucc) (EVar x).
+
+  Variables lc1 lc2 lid : lit.
+  Hypothesis Hsucc_not_constant : succ lc1 <> succ lc2.
+  Hypothesis Hsucc_not_identity : succ lid <> lid.
+
+  Definition symsucc (x : var) : expr := EApp (EPrimOp psucc) (EVar x).
+
+  Lemma symsucc_denotes : forall σ x,
+    denote σ (only x) (symsucc x) (succ (σ x)).
+  Proof.
+    intros σ x. exists (PCPrim psucc [PCVar x]). split.
+    - intros Γ Hfree. unfold symsucc. simpl.
+      rewrite (Hfree x (only_self x)). reflexivity.
+    - simpl. apply Hsucc_value.
+  Qed.
+
+  (** The concretion the old axiom demanded, now available as a theorem of
+      the repaired relation. *)
+  Corollary computing_primitive_concretion : forall σ x,
+    contains σ (only x) (reduce_prim psucc [EVar x])
+                        (reduce_prim psucc [ELit (σ x)]).
+  Proof.
+    intros σ x. rewrite Hsucc_residual, Hsucc_computes.
+    apply (Cont_Denote σ (only x) (symsucc x) psucc [EVar x] (succ (σ x))).
+    - reflexivity.
+    - simpl. rewrite Hsucc_arity. reflexivity.
+    - reflexivity.
+    - apply symsucc_denotes.
+  Qed.
+
+  (** The symbolic run leaves a residual application; the concrete run
+      computes. *)
+  Lemma symsucc_symbolic_run : forall x,
+    pc_true ; · ⊢ symsucc x ⇓ EApp (EPrimOp psucc) (EVar x).
+  Proof.
+    intros x. rewrite <- Hsucc_residual. unfold symsucc.
+    eapply Eval_AppPrim.
+    - reflexivity.
+    - simpl. rewrite Hsucc_arity. reflexivity.
+    - constructor; [apply Eval_SymVar; reflexivity | constructor].
+  Qed.
+
+  Lemma symsucc_concrete_run : forall l,
+    · ⊢ᶜ EApp (EPrimOp psucc) (ELit l) ⇓ᶜ ELit (succ l).
+  Proof.
+    intros l. unfold eval_con. rewrite <- Hsucc_computes.
+    eapply Eval_AppPrim.
+    - reflexivity.
+    - simpl. rewrite Hsucc_arity. reflexivity.
+    - constructor; [apply Eval_Lit | constructor].
+  Qed.
+
+  (** Soundness applies to a whole program that uses the computing
+      primitive on a symbolic input. *)
+  Corollary soundness_on_computing_primitive : forall σ x,
+    σ ⊨ pc_true ->
+    exists v_con,
+      · ⊢ᶜ EApp (EPrimOp psucc) (ELit (σ x)) ⇓ᶜ v_con /\
+      contains σ (only x) (reduce_prim psucc [EVar x]) v_con.
+  Proof.
+    intros σ x Hmod.
+    apply (concore_soundness pc_true · · σ (only x)
+             (symsucc x) (EApp (EPrimOp psucc) (ELit (σ x)))
+             (reduce_prim psucc [EVar x])).
+    - exact Hmod.
+    - apply Cont_Env_Empty.
+    - apply Cont_App; [apply Cont_PrimOp | apply Cont_Var_Sym; apply only_self].
+    - apply Con_App; [apply Con_PrimOp | apply Con_Lit].
+    - rewrite Hsucc_residual. apply symsucc_symbolic_run.
+  Qed.
+
+  (** And the value it is related to is the computed one, not some frozen
+      term: reduce_prim psucc [EVar x] is related to ELit (succ (σ x)). *)
+  Corollary computing_primitive_value : forall σ x,
+    contains σ (only x) (reduce_prim psucc [EVar x]) (ELit (succ (σ x))).
+  Proof.
+    intros σ x. rewrite <- Hsucc_computes.
+    exact (computing_primitive_concretion σ x).
+  Qed.
+
+  (** succ is neither constant nor the identity, which is exactly the
+      conclusion the pre-repair development could force on it. *)
+  Corollary computing_primitive_refutes_old_verdict :
+    ~ ((exists l0, forall l, succ l = l0) \/ (forall l, succ l = l)).
+  Proof.
+    intros [[l0 Hconst] | Hid].
+    - apply Hsucc_not_constant. rewrite (Hconst lc1), (Hconst lc2). reflexivity.
+    - apply Hsucc_not_identity. apply Hid.
+  Qed.
+End ComputingPrimitive.
+
 End NonVacuity.
