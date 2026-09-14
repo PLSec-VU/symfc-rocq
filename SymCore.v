@@ -1905,12 +1905,13 @@ Qed.
 
 (**
   This file carries two judgements: eval Inf, the unlimited budget, and
-  eval (Fin n), a budget of n steps. This section says how the two relate.
+  eval (Fin n), a bound of n levels of rules. This section says how the two
+  relate, and closes with what the bound rules out.
 
   The bridge, first. Every derivation at the unlimited budget is reproduced
   at some finite budget. The budget that works is the height of the
-  derivation, because every rule spends one unit on each recursive premise
-  and nothing else spends anything.
+  derivation: every rule of eval needs a live fuel for itself, its premises
+  run one level lower, and fold_alts spends nothing.
 
   The proof below carries more than the bridge asks for. It produces a
   threshold h and shows that EVERY budget at or above h reproduces the
@@ -2398,6 +2399,109 @@ Proof.
   intros Hconv.
   destruct (bounded_evaluation_is_not_unbounded pc_true · sat_pc_true) as [Hfin [_ Hinf]].
   apply (Hinf (EBot BUndefined)). apply (Hconv 0%nat). exact Hfin.
+Qed.
+
+(**
+  What the bound rules out. Fin 0 is Spent, where only Rule Out-Of-Fuel
+  fires, and a rule at Fin (S n) has its premises at Fin n. So a derivation
+  at Fin n nests at most n rules of eval. The chain of variables below makes
+  that visible: reading the chain costs one level per link, and a bound one
+  level short of the chain has no derivation of its end at all.
+*)
+Lemma fin_succ_is_live : forall n, Fin (S n) = Live (Remaining n).
+Proof. reflexivity. Qed.
+
+Lemma dec_remaining : forall n, dec (Remaining n) = Fin n.
+Proof. reflexivity. Qed.
+
+Lemma eval_fin_zero_inv : forall Φ Γ e v,
+  eval (Fin 0) Φ Γ e v -> v = EBot BUndefined.
+Proof. intros Φ Γ e v H. inversion H. reflexivity. Qed.
+
+Lemma eval_fin_zero_iff : forall Φ Γ e v,
+  eval (Fin 0) Φ Γ e v <-> v = EBot BUndefined.
+Proof.
+  intros Φ Γ e v. split; [apply eval_fin_zero_inv |].
+  intros Hv. subst v. apply Eval_OutOfFuel.
+Qed.
+
+Definition chain_var : var := "x".
+Definition chain_end : expr := ELam chain_var (EVar chain_var).
+Definition chain_value : expr := EClos EmptyEnv chain_var (EVar chain_var).
+
+Fixpoint var_chain (k : nat) : environment :=
+  match k with
+  | O => extend_env EmptyEnv chain_var EmptyEnv chain_end
+  | S k => extend_env EmptyEnv chain_var (var_chain k) (EVar chain_var)
+  end.
+
+Lemma var_chain_lookup_end :
+  lookup_env (var_chain 0) chain_var = Some (EmptyEnv, chain_end).
+Proof. reflexivity. Qed.
+
+Lemma var_chain_lookup_link : forall k,
+  lookup_env (var_chain (S k)) chain_var = Some (var_chain k, EVar chain_var).
+Proof. reflexivity. Qed.
+
+Lemma var_chain_unbounded : forall k Φ,
+  Φ ; var_chain k ⊢ EVar chain_var ⇓ chain_value.
+Proof.
+  induction k as [| k IH]; intros Φ.
+  - eapply Eval_Var; [exact var_chain_lookup_end | apply Eval_Lam].
+  - eapply Eval_Var; [exact (var_chain_lookup_link k) | apply IH].
+Qed.
+
+Lemma var_chain_within_bound : forall k n Φ,
+  (k + 2 <= n)%nat -> eval (Fin n) Φ (var_chain k) (EVar chain_var) chain_value.
+Proof.
+  induction k as [| k IH]; intros n Φ Hn; destruct n as [| m]; try lia.
+  - destruct m as [| m]; [lia |].
+    eapply Eval_Var; [exact var_chain_lookup_end | apply Eval_Lam].
+  - eapply Eval_Var; [exact (var_chain_lookup_link k) |].
+    rewrite dec_remaining. apply IH. lia.
+Qed.
+
+Lemma var_chain_needs_bound : forall k n Φ,
+  eval (Fin n) Φ (var_chain k) (EVar chain_var) chain_value -> (k + 2 <= n)%nat.
+Proof.
+  induction k as [| k IH]; intros n Φ H; destruct n as [| m];
+    try (apply eval_fin_zero_inv in H; discriminate H).
+  - inversion H; subst.
+    match goal with
+    | [ Hl : lookup_env _ _ = Some _, Hv : eval _ _ _ _ _ |- _ ] =>
+        rewrite var_chain_lookup_end in Hl; injection Hl as <- <-;
+        rewrite dec_remaining in Hv
+    end.
+    destruct m as [| m]; [| lia].
+    match goal with
+    | [ Hv : eval (Fin 0) _ _ _ _ |- _ ] => apply eval_fin_zero_inv in Hv; discriminate Hv
+    end.
+  - inversion H; subst.
+    match goal with
+    | [ Hl : lookup_env _ _ = Some _, Hv : eval _ _ _ _ _ |- _ ] =>
+        rewrite var_chain_lookup_link in Hl; injection Hl as <- <-;
+        rewrite dec_remaining in Hv; apply IH in Hv
+    end.
+    lia.
+Qed.
+
+(** Lowering the bound loses derivations: the index is not antitone. *)
+Corollary lowering_the_bound_loses_derivations :
+  ~ (forall n Φ Γ e v, eval (Fin (S n)) Φ Γ e v -> eval (Fin n) Φ Γ e v).
+Proof.
+  intros Hanti.
+  pose proof (var_chain_within_bound 0 2 pc_true ltac:(lia)) as H2.
+  apply Hanti in H2. apply var_chain_needs_bound in H2. lia.
+Qed.
+
+(** No finite bound carries every unbounded derivation. *)
+Corollary eval_inf_is_not_within_any_bound : forall n,
+  ~ (forall Φ Γ e v, Φ ; Γ ⊢ e ⇓ v -> eval (Fin n) Φ Γ e v).
+Proof.
+  intros n Hwithin.
+  pose proof (Hwithin pc_true (var_chain n) (EVar chain_var) chain_value
+                (var_chain_unbounded n pc_true)) as Hn.
+  apply var_chain_needs_bound in Hn. lia.
 Qed.
 
 

@@ -1142,14 +1142,15 @@ Axiom cast_expr_contains : forall σ S es ec γ,
   Taking apart a derivation that is fixed at the unlimited budget.
 
   `inversion` on a hypothesis of the form eval Inf ... already drops Rule
-  Out-Of-Fuel, because that rule writes Fin 0 in its conclusion and Fin 0
+  Out-Of-Fuel, because that rule writes Spent in its conclusion and Spent
   cannot unify with Inf. `destruct` and `induction` do not: they first
   generalise the fuel index into a variable, so Rule Out-Of-Fuel comes back as
   a case and every recursive premise arrives at dec f instead of Inf.
 
   The two tactics below keep the index. They name it, remember the equation
-  that says the name is Inf, and use that equation to kill the out-of-fuel
-  case. Use them for any lemma that is true only at the unlimited budget.
+  that says the name is Inf, use that equation to kill the out-of-fuel case,
+  and inject it to fix f at Unlimited in every other case. Use them for any
+  lemma that is true only at the unlimited budget.
 *)
 Ltac inf_induction H :=
   let k := fresh "kf" in
@@ -3782,9 +3783,11 @@ Qed.
   The recursion runs on the FIRST derivation. The second one is taken apart
   by the inversion lemmas above, so nothing depends on its shape.
 
-  Unlimited budget only, hence the k0 = Inf premise. Determinism is what a
-  finite budget costs: at Fin 0 the literal ELit l reduces both to itself by
-  Rule Lit and to EBot BUndefined by Rule Out-Of-Fuel.
+  Unlimited budget only, hence the k0 = Inf premise. A finite budget breaks
+  one step of the argument: Section 12.2 separates Rule App-Spine from Rule
+  App-Prim because the operator of a saturated primitive spine has no value,
+  and at Fin 0 Rule Out-Of-Fuel gives it one.
+  bounded_determinism_decides_reduce_prim below is the consequence.
 *)
 Fixpoint eval_det_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v1 : expr)
   (Heval : eval k0 Φ Γ e v1) {struct Heval} :
@@ -3938,6 +3941,62 @@ Corollary concore_eval_deterministic_top : forall e v1 v2,
 Proof.
   intros e v1 v2 Hcon H1 H2.
   exact (concore_eval_deterministic · e v1 v2 CEnv_Empty Hcon H1 H2).
+Qed.
+
+(**
+  Determinism at every finite budget is not provable here. The operator of
+  the saturated spine below is not a value, because its first argument is a
+  lambda. At Fin 1 Rule App-Spine runs the operator at Fin 0, gets the
+  undefined value, and answers undefined. Rule App-Prim runs the arguments at
+  Fin 0 instead and answers reduce_prim of three undefined values. So
+  determinism at every budget would fix what the solver returns for those
+  arguments, which no axiom here says.
+*)
+Definition prim_spine_arg : expr := ELam "y" (EVar "y").
+Definition prim_spine_operator : expr :=
+  EApp (EApp (EPrimOp op_ite) prim_spine_arg) prim_spine_arg.
+Definition prim_spine : expr := EApp prim_spine_operator prim_spine_arg.
+Definition undefined_args : list expr :=
+  EBot BUndefined :: EBot BUndefined :: EBot BUndefined :: nil.
+
+Lemma prim_spine_concore : concore_expr prim_spine.
+Proof. unfold prim_spine, prim_spine_operator, prim_spine_arg. repeat constructor. Qed.
+
+Lemma prim_spine_operator_not_whnf : forall Γ, ~ Whnf Γ prim_spine_operator.
+Proof.
+  intros Γ Hw. unfold prim_spine_operator, prim_spine_arg in Hw.
+  inversion Hw; subst; [| no_con_head].
+  match goal with [ Hs : Solvable _ _ |- _ ] => inversion Hs; subst end.
+  match goal with [ Hs : Solvable _ (ELam _ _) |- _ ] => inversion Hs end.
+Qed.
+
+Lemma prim_spine_by_app_spine :
+  eval (Fin 1) pc_true · prim_spine (EBot BUndefined).
+Proof.
+  unfold prim_spine. eapply Eval_AppSpine with (ef' := EBot BUndefined).
+  - apply prim_spine_operator_not_whnf.
+  - reflexivity.
+  - apply Eval_OutOfFuel.
+  - apply Eval_OutOfFuel.
+Qed.
+
+Lemma prim_spine_by_app_prim :
+  eval (Fin 1) pc_true · prim_spine (reduce_prim op_ite undefined_args).
+Proof.
+  unfold prim_spine, prim_spine_operator. eapply Eval_AppPrim.
+  - reflexivity.
+  - rewrite op_ite_arity. reflexivity.
+  - unfold undefined_args. repeat constructor.
+Qed.
+
+Lemma bounded_determinism_decides_reduce_prim :
+  (forall n Γ e v1 v2, concrete_env Γ -> concore_expr e ->
+     eval (Fin n) pc_true Γ e v1 -> eval (Fin n) pc_true Γ e v2 -> v1 = v2) ->
+  reduce_prim op_ite undefined_args = EBot BUndefined.
+Proof.
+  intros Hdet.
+  exact (Hdet 1%nat · prim_spine _ _ CEnv_Empty prim_spine_concore
+           prim_spine_by_app_prim prim_spine_by_app_spine).
 Qed.
 
 (** The term of Section 12.3 has exactly one value, the one Rule App-Cast
@@ -4873,8 +4932,9 @@ Qed.
   survive the induction, for the same reason it did not survive the induction
   in eval_fin_of_inf_fix: a bigger budget is not always safe, so the only
   claim a branch can pass up to the branch above is "every budget from here
-  on works". Rule If then combines the two budgets its premises report with
-  max and spends one more on itself.
+  on works". Rule If then combines the three budgets its premises report -
+  the guard, the taken arm and the untaken arm - with max and spends one more
+  on itself.
 
   The value found at budget n is allowed to depend on n. It has to be: the
   arm the model skips answers something different at every budget, and that
