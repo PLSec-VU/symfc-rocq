@@ -33,11 +33,9 @@ Definition dcon : Set := string.
 
 (** Literals mirror those found in SMT solvers; axiomatized from external SMT (§3.1) *)
 Axiom lit : Set.
-Axiom lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2}.
 
 (** Primitive operations mirror SMT solver primitives; axiomatized from external SMT (§3.1) *)
 Axiom primop : Set.
-Axiom primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
 
 (** SMT boolean primitives for path condition connectives *)
 Axiom op_and : primop.
@@ -52,7 +50,6 @@ Axiom primop_arity : primop -> nat.
 
 (** Type Constructors (e.g. Int, Bool, SMT.BitVec); left abstract *)
 Parameter tycon : Set.
-Parameter tycon_eq_dec : forall (tc1 tc2 : tycon), {tc1 = tc2} + {tc1 <> tc2}.
 
 (** System FC Types with arrow types for higher-order coercions *)
 Inductive type_fc : Set :=
@@ -60,13 +57,6 @@ Inductive type_fc : Set :=
   | TyCon   : tycon -> type_fc
   | TyArrow : type_fc -> type_fc -> type_fc
   | TyApp   : type_fc -> type_fc -> type_fc.
-
-Fixpoint type_fc_eq_dec (t1 t2 : type_fc) : {t1 = t2} + {t1 <> t2}.
-Proof.
-  decide equality.
-  - apply string_dec.
-  - apply tycon_eq_dec.
-Defined.
 
 (** Roles in System FC / SymCore (§3.1, [Breitner et al. 2016]) *)
 Inductive role : Set :=
@@ -85,15 +75,6 @@ Record coercion : Set := MkCoercion {
   coerc_dst  : type_fc;     (** τ2 *)
   coerc_role : role         (** ρ *)
 }.
-
-Definition coercion_eq_dec : forall (c1 c2 : coercion), {c1 = c2} + {c1 <> c2}.
-Proof.
-  intros [s1 d1 r1] [s2 d2 r2].
-  destruct (type_fc_eq_dec s1 s2); [subst | right; intros H; inversion H; contradiction].
-  destruct (type_fc_eq_dec d1 d2); [subst | right; intros H; inversion H; contradiction].
-  destruct (role_eq_dec r1 r2); [subst | right; intros H; inversion H; contradiction].
-  left; reflexivity.
-Defined.
 
 (** Symmetry of a coercion: sym γ witnesses τ2 ~ρ τ1 (Fig. 3, Rule App-Cast) *)
 Definition sym_coerc (γ : coercion) : coercion :=
@@ -737,10 +718,6 @@ Qed.
 Axiom merge_fold_alts_equiv : forall Φ Γ e alts r,
   fold_alts Φ Γ (merge e) alts r <-> fold_alts Φ Γ e alts r.
 
-(** Leaf merging preserves WHNF *)
-Axiom merge_preserves_whnf : forall Γ e,
-  Whnf Γ e -> Whnf Γ (merge e).
-
 (**
   Grisette state merging never buries a branch below a resolved head: a
   scrutinee fold_alts is actually able to fold over either IS the branch
@@ -755,10 +732,6 @@ Axiom fold_alts_no_nested_if : forall Φ Γ e alts er,
 (** ------------------------------------------------------------------------- *)
 (** 10.3 Normal Form / WHNF Guarantee (§3.2)                                   *)
 (** ------------------------------------------------------------------------- *)
-
-(** Cast simplification preserves WHNF (System FC contract - Axiom 1) *)
-Axiom cast_expr_whnf : forall Γ e γ,
-  Whnf Γ e -> Whnf Γ (cast_expr e γ).
 
 (**
   Primitive reduction produces a solvable expression WHEN ITS ARGUMENTS ARE
