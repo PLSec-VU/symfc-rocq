@@ -3880,13 +3880,13 @@ End AppliedConstructorMatches.
   rescue an arm that is STUCK, because a stuck term has no derivation at any
   positive budget either, and at budget zero the whole program truncates
   instead. scratch/CompletenessNeedsFuel.v proves this. So completeness is
-  stated for programs with no stuck subterm, and the predicate no_stuck below
+  stated for programs with no stuck subterm, and the predicate progressive below
   is what says that.
 
   WHAT THE HYPOTHESIS DOES NOT HAVE TO SAY. A leaf that calls no solver - no
   branch, no case, no cast, no primitive operation - is not stuck whenever
   its concretion has a value, and the theorem already asks for that value.
-  Section 13.2 proves it, and the leaf clause of no_stuck asks for nothing
+  Section 13.2 proves it, and the leaf clause of progressive asks for nothing
   else in that case. Only a leaf that does call the solver still has to be
   handed a value, because no property of a term survives merge, cast_expr or
   reduce_prim; Section 13.2 says where each of the three blocks the proof.
@@ -4371,7 +4371,7 @@ Qed.
 
 (**
   Completeness on the solver-free fragment. This is the lemma the leaf clause
-  of no_stuck leans on: a solver-free leaf whose concretion has a concrete
+  of progressive leans on: a solver-free leaf whose concretion has a concrete
   value has a symbolic value, so it is not stuck.
 *)
 Lemma solver_free_completeness : forall Φ Γs Γc σ S e_sym e_con v_con,
@@ -4391,7 +4391,7 @@ Proof.
 Qed.
 
 (**
-  What the leaf clause of no_stuck asks for. Either the leaf makes no solver
+  What the leaf clause of progressive asks for. Either the leaf makes no solver
   call, and then the concrete run in the theorem's hypothesis already says it
   is not stuck (solver_free_completeness above); or the leaf does make one,
   and then the only handle this development has on it is a value at the
@@ -4402,26 +4402,26 @@ Qed.
   completeness is for. Now it is shown to be straight-line code, and the
   convergence comes out of the proof.
 *)
-Definition leaf_not_stuck (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
+Definition leaf_progressive (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
   (solver_free e /\ solver_free_env Γ) \/ (exists v, Φ ; Γ ⊢ e ⇓ v).
 
-Lemma leaf_not_stuck_of_terminating : forall Φ Γ e,
-  (exists v, Φ ; Γ ⊢ e ⇓ v) -> leaf_not_stuck Φ Γ e.
+Lemma leaf_progressive_of_terminating : forall Φ Γ e,
+  (exists v, Φ ; Γ ⊢ e ⇓ v) -> leaf_progressive Φ Γ e.
 Proof. intros Φ Γ e Hv. right. exact Hv. Qed.
 
-Lemma leaf_not_stuck_of_solver_free : forall Φ Γ e,
-  solver_free e -> solver_free_env Γ -> leaf_not_stuck Φ Γ e.
+Lemma leaf_progressive_of_solver_free : forall Φ Γ e,
+  solver_free e -> solver_free_env Γ -> leaf_progressive Φ Γ e.
 Proof. intros Φ Γ e Hsf Henv. left. split; assumption. Qed.
 
 (** A leaf that satisfies the clause, and whose concretion the concrete run
     answers, has a symbolic value. This is the leaf case of the proof below,
     pulled out so that what the clause buys is visible on its own. *)
-Lemma leaf_not_stuck_converges : forall Φ Γs Γc σ S e e_con v_con,
+Lemma leaf_progressive_converges : forall Φ Γs Γc σ S e e_con v_con,
   σ ⊨ Φ ->
   contains_env σ S Γs Γc ->
   contains σ S e e_con ->
   Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
-  leaf_not_stuck Φ Γs e ->
+  leaf_progressive Φ Γs e ->
   exists v, Φ ; Γs ⊢ e ⇓ v.
 Proof.
   intros Φ Γs Γc σ S e e_con v_con Hmod Henv Hcont Hevalc [[Hsf Hsfenv] | Hv].
@@ -4503,13 +4503,13 @@ End BranchAtTheTopIsNotEnough.
 (** ------------------------------------------------------------------------- *)
 
 (**
-  no_stuck σ S Φ Γ e_sym e_con says: along the path the model σ takes through
+  progressive σ S Φ Γ e_sym e_con says: along the path the model σ takes through
   the branches of e_sym, nothing is stuck.
 
   The predicate walks down the branches of e_sym. At each branch it asks for
   three things, and at the bottom it asks for one.
 
-  At a branch (Rules NS_Then and NS_Else):
+  At a branch (Rules Prog_Then and Prog_Else):
   - the guard has ONE value ec' at every budget, so the formula Rule If reads
     off the guard does not depend on the budget. It has to be one value: the
     arms below are evaluated under Φ ∧ pc, and a formula that changed with
@@ -4521,8 +4521,8 @@ End BranchAtTheTopIsNotEnough.
   - the arm the model does NOT take is budget-total. This is the whole point
     of the budget, and the only place the predicate tolerates a loop.
 
-  At the bottom (Rule NS_Leaf): the term is not a branch, it is the
-  concretion's counterpart, and it is not stuck. leaf_not_stuck in Section
+  At the bottom (Rule Prog_Leaf): the term is not a branch, it is the
+  concretion's counterpart, and it is not stuck. leaf_progressive in Section
   13.2 is what says the last part, and it offers two ways to say it. Either
   the leaf makes no call to the solver - no branch, no case, no cast, no
   primitive operation - and then it is not stuck for free, because the
@@ -4543,36 +4543,36 @@ End BranchAtTheTopIsNotEnough.
   facts about it are models_sat and models_and_iff, neither of which forbids
   a model from satisfying both a formula and its negation. So the branch the
   predicate descends into cannot be read off the symbolic side alone, and the
-  concretion is what picks it. no_stuck_contains below shows the cost is
+  concretion is what picks it. progressive_contains below shows the cost is
   nothing: the predicate already implies the concretion it mentions.
 *)
-Inductive no_stuck (σ : valuation) (S : symvars)
+Inductive progressive (σ : valuation) (S : symvars)
   : path_condition -> environment -> expr -> expr -> Prop :=
-  | NS_Leaf : forall Φ Γ e e_con,
+  | Prog_Leaf : forall Φ Γ e e_con,
       is_if e = false ->
       contains σ S e e_con ->
-      leaf_not_stuck Φ Γ e ->
-      no_stuck σ S Φ Γ e e_con
-  | NS_Then : forall Φ Γ ec et ef ec' pc e_con,
+      leaf_progressive Φ Γ e ->
+      progressive σ S Φ Γ e e_con
+  | Prog_Then : forall Φ Γ ec et ef ec' pc e_con,
       (forall n, eval (Fin n) Φ Γ ec ec') ->
       models_cond σ S ec ->
       models_cond σ S ec' ->
       expr_to_pc Γ ec' = Some pc ->
       budget_total (Φ ∧ ¬ pc) Γ ef ->
-      no_stuck σ S (Φ ∧ pc) Γ et e_con ->
-      no_stuck σ S Φ Γ (EIf ec et ef) e_con
-  | NS_Else : forall Φ Γ ec et ef ec' pc e_con,
+      progressive σ S (Φ ∧ pc) Γ et e_con ->
+      progressive σ S Φ Γ (EIf ec et ef) e_con
+  | Prog_Else : forall Φ Γ ec et ef ec' pc e_con,
       (forall n, eval (Fin n) Φ Γ ec ec') ->
       models_not_cond σ S ec ->
       models_not_cond σ S ec' ->
       expr_to_pc Γ ec' = Some pc ->
       budget_total (Φ ∧ pc) Γ et ->
-      no_stuck σ S (Φ ∧ ¬ pc) Γ ef e_con ->
-      no_stuck σ S Φ Γ (EIf ec et ef) e_con.
+      progressive σ S (Φ ∧ ¬ pc) Γ ef e_con ->
+      progressive σ S Φ Γ (EIf ec et ef) e_con.
 
 (** The hypothesis already carries the concretion it is stated against. *)
-Lemma no_stuck_contains : forall σ S Φ Γ e e_con,
-  no_stuck σ S Φ Γ e e_con -> contains σ S e e_con.
+Lemma progressive_contains : forall σ S Φ Γ e e_con,
+  progressive σ S Φ Γ e e_con -> contains σ S e e_con.
 Proof.
   intros σ S Φ Γ e e_con H. induction H.
   - assumption.
@@ -4586,14 +4586,14 @@ Qed.
   than assumed, so nothing that satisfied the old hypothesis fails the new
   one: the hypothesis of the completeness theorem only got weaker.
 *)
-Lemma NS_Leaf_converging : forall σ S Φ Γ e e_con,
+Lemma Prog_Leaf_converging : forall σ S Φ Γ e e_con,
   is_if e = false ->
   contains σ S e e_con ->
   (exists v, Φ ; Γ ⊢ e ⇓ v) ->
-  no_stuck σ S Φ Γ e e_con.
+  progressive σ S Φ Γ e e_con.
 Proof.
   intros σ S Φ Γ e e_con Hnotif Hcont Hv.
-  apply NS_Leaf; [exact Hnotif | exact Hcont | apply leaf_not_stuck_of_terminating; exact Hv].
+  apply Prog_Leaf; [exact Hnotif | exact Hcont | apply leaf_progressive_of_terminating; exact Hv].
 Qed.
 
 (** ------------------------------------------------------------------------- *)
@@ -4616,7 +4616,7 @@ Qed.
 
   Where the budget comes from at the bottom. The leaf has an unlimited-budget
   derivation - it was assumed to have one, or, for straight-line code, the
-  concrete run gives it one through leaf_not_stuck_converges. Then
+  concrete run gives it one through leaf_progressive_converges. Then
   concore_soundness gives it a concrete value, and
   concore_eval_deterministic identifies that value with the one the theorem
   was handed - a concrete program has at most one. eval_inf_has_budget then
@@ -4624,7 +4624,7 @@ Qed.
   threshold is the budget the whole recursion is built on.
 *)
 Lemma completeness_upward : forall σ S Φ Γs e_sym e_con,
-  no_stuck σ S Φ Γs e_sym e_con ->
+  progressive σ S Φ Γs e_sym e_con ->
   forall Γc v_con,
     σ ⊨ Φ ->
     contains_env σ S Γs Γc ->
@@ -4640,7 +4640,7 @@ Proof.
     | Φ Γ ec et ef ec' pc e_con Hguard Hmnc Hmnc' Hpc Htot Hns IH ];
     intros Γc v_con Hmod Henv Hcon Hevalc.
   - (* the leaf: soundness carries the concrete run back, determinism pins the value *)
-    destruct (leaf_not_stuck_converges Φ Γ Γc σ S e e_con v_con
+    destruct (leaf_progressive_converges Φ Γ Γc σ S e e_con v_con
                 Hmod Henv Hcont Hevalc Hleaf) as [v Hv].
     destruct (concore_soundness Φ Γ Γc σ S e e_con v Hmod Henv Hcont Hcon Hv)
       as [v_con' [Hec Hcv]].
@@ -4679,7 +4679,7 @@ Qed.
 (**
   Completeness of symbolic execution.
 
-  The concretion hypothesis is listed even though no_stuck_contains derives
+  The concretion hypothesis is listed even though progressive_contains derives
   it from the no-stuck hypothesis. It is what the theorem is about, and
   leaving it out would hide the statement inside a predicate.
 *)
@@ -4688,7 +4688,7 @@ Theorem concore_completeness : forall Φ Γs Γc σ S e_sym e_con v_con,
   contains_env σ S Γs Γc ->
   contains σ S e_sym e_con ->
   concore_expr e_con ->
-  no_stuck σ S Φ Γs e_sym e_con ->
+  progressive σ S Φ Γs e_sym e_con ->
   Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
   exists k v_sym, eval (Fin k) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
 Proof.
@@ -4704,7 +4704,7 @@ Corollary concore_completeness_top : forall Φ σ S e_sym e_con v_con,
   σ ⊨ Φ ->
   contains σ S e_sym e_con ->
   concore_expr e_con ->
-  no_stuck σ S Φ · e_sym e_con ->
+  progressive σ S Φ · e_sym e_con ->
   ⊢ᶜ e_con ⇓ᶜ v_con ->
   exists k v_sym, eval (Fin k) Φ · e_sym v_sym /\ contains σ S v_sym v_con.
 Proof.
@@ -4796,30 +4796,30 @@ Section CompletenessNonVacuity.
   Lemma witness_arm_diverges : forall v, ~ ((Φ ∧ ¬ PCVar x) ; · ⊢ self_app ⇓ v).
   Proof. intros v. apply self_app_diverges. exact Hfeas. Qed.
 
-  Lemma witness_no_stuck : no_stuck σ Sv Φ · live_branch (ELit l').
+  Lemma witness_progressive : progressive σ Sv Φ · live_branch (ELit l').
   Proof.
-    eapply NS_Then with (ec' := EVar x) (pc := PCVar x).
+    eapply Prog_Then with (ec' := EVar x) (pc := PCVar x).
     - intros n. apply Eval_SymVar. reflexivity.
     - exact guard_judged.
     - exact guard_judged.
     - reflexivity.
     - exists 0%nat. intros n _. apply self_app_has_value_at_every_budget.
-    - apply NS_Leaf; [reflexivity | apply Cont_Lit |].
-      apply leaf_not_stuck_of_terminating. exists (ELit l'). apply Eval_Lit.
+    - apply Prog_Leaf; [reflexivity | apply Cont_Lit |].
+      apply leaf_progressive_of_terminating. exists (ELit l'). apply Eval_Lit.
   Qed.
 
   (** The same witness through the other half of the leaf clause. The literal
       makes no call to the solver, so nothing about it has to be shown. *)
-  Lemma witness_no_stuck_solver_free : no_stuck σ Sv Φ · live_branch (ELit l').
+  Lemma witness_progressive_solver_free : progressive σ Sv Φ · live_branch (ELit l').
   Proof.
-    eapply NS_Then with (ec' := EVar x) (pc := PCVar x).
+    eapply Prog_Then with (ec' := EVar x) (pc := PCVar x).
     - intros n. apply Eval_SymVar. reflexivity.
     - exact guard_judged.
     - exact guard_judged.
     - reflexivity.
     - exists 0%nat. intros n _. apply self_app_has_value_at_every_budget.
-    - apply NS_Leaf; [reflexivity | apply Cont_Lit |].
-      apply leaf_not_stuck_of_solver_free; [apply SF_Lit | apply SFEnv_Empty].
+    - apply Prog_Leaf; [reflexivity | apply Cont_Lit |].
+      apply leaf_progressive_of_solver_free; [apply SF_Lit | apply SFEnv_Empty].
   Qed.
 
   (* ================= (b) completeness applies to it ====================== *)
@@ -4831,7 +4831,7 @@ Section CompletenessNonVacuity.
     - exact HmodPhi.
     - apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
     - apply Con_Lit.
-    - exact witness_no_stuck.
+    - exact witness_progressive.
     - apply Eval_Lit.
   Qed.
 
@@ -4896,7 +4896,7 @@ Section CompletenessNonVacuity.
   Definition stuck_branch : expr := EIf (EVar x) (ELit l') stuck_arm.
 
   Lemma completeness_rejects_a_stuck_arm :
-    ~ no_stuck σ Sv Φ · stuck_branch (ELit l').
+    ~ progressive σ Sv Φ · stuck_branch (ELit l').
   Proof.
     assert (HsatPhi : sat Φ = true) by (apply models_sat with (σ := σ); exact HmodPhi).
     intros H. inversion H as
