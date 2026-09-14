@@ -87,13 +87,13 @@ Lemma eval_loop_var : forall Φ Γ,
 Proof.
   intros Φ Γ HR Hsat. induction HR.
   - intros v Hev. inversion Hev; subst.
-    + rewrite H in H1. injection H1 as ? ?; subst.
+    + rewrite H in H2. injection H2 as ? ?; subst.
       eexists. eapply eval_w; [exact Hsat | eassumption].
     + congruence.
     + no_con_head.
     + congruence.
   - intros v Hev. inversion Hev; subst.
-    + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. eassumption.
+    + rewrite H in H2. injection H2 as ? ?; subst. apply IHHR. eassumption.
     + congruence.
     + no_con_head.
     + congruence.
@@ -246,24 +246,16 @@ Qed.
    BUndefined) in function position would block the next application, and
    the loop would have a value at some depths and none at others.
 
-   KEEP THIS LOCAL DEFINITION.  SymCore.v now indexes the real relation by a
-   fuel too, but the two indexes do not mean the same thing, so pointing this
-   section at eval would change what it proves.
+   SymCore.v now indexes the real relation by a fuel with the same
+   discipline: every rule of eval needs a live fuel, its premises run one
+   level lower, and Fin 0 has the out-of-fuel rule and nothing else.  Section
+   5 below proves the depth results of this section again against the real
+   eval, so "two is the least depth that works" holds of both.
 
-   Two differences.  First, eval_k below charges EVERY rule a unit of depth
-   and makes depth zero truncate and nothing else, while the real eval charges
-   only recursive premises and leaves every ordinary rule available at Fin 0
-   alongside Rule Out-Of-Fuel.  Second, eval_k carries eight rules, and the
-   real eval carries all eighteen, Rule Prune and Rule App-Prim included.
-
-   The first difference is what decides it.  depth_zero_misses and
-   depth_one_has_no_value below are true of eval_k and FALSE of the real eval:
-   at Fin 0 the whole if-expression already reduces to the wanted tree, because
-   Rule If passes Fin 0 to each of its premises, and each premise then takes
-   either its ordinary rule or Rule Out-Of-Fuel as it pleases.  So the real
-   eval has no least budget that works, and "two is the least depth that
-   works" is a statement about eval_k alone.  Retargeting would silently
-   delete it. *)
+   This local definition stays as the small model, readable without the
+   other rules.  The real eval differs in two ways that do not change the
+   depths here: it carries all eighteen rules, Rule Prune and Rule App-Prim
+   included, and its fold_alts spends no fuel. *)
 Inductive eval_k : nat -> path_condition -> environment -> expr -> expr -> Prop :=
   | EvalK_OutOfFuel : forall Φ Γ e,
       eval_k 0 Φ Γ e (EBot BUndefined)
@@ -507,3 +499,72 @@ Section BoundDoesNotRescueStuckness.
     eapply stuck_arm_no_value_above_zero; eassumption.
   Qed.
 End BoundDoesNotRescueStuckness.
+
+(* ------------------------------------------------------------------------- *)
+(* 5. The same depths against the real eval                                   *)
+(* ------------------------------------------------------------------------- *)
+
+(* A guard read at Fin 0 is the undefined value, and no formula reads off it,
+   so Rule If has no derivation at Fin 1. *)
+Lemma real_if_blocked_at_one : forall Ψ Γ ec et ef v,
+  sat Ψ = true -> eval (Fin 1) Ψ Γ (EIf ec et ef) v -> False.
+Proof.
+  intros Ψ Γ ec et ef v Hsat H. inversion H; subst.
+  - no_con_head.
+  - match goal with
+    | [ Hc : eval _ _ _ ec ?c, Hp : expr_to_pc _ ?c = Some _ |- _ ] =>
+        inversion Hc; subst; simpl in Hp; discriminate Hp
+    end.
+  - congruence.
+Qed.
+
+Section RealEvalDepths.
+  Variables (Φ : path_condition) (σ : valuation) (Sv : symvars).
+  Variables (x : var) (l l' : lit).
+
+  Hypothesis Hsat    : sat Φ = true.
+  Hypothesis Hfeas   : forall pc, sat (Φ ∧ ¬ pc) = true.
+  Hypothesis Hchoose : models_cond σ Sv (EVar x).
+
+  Theorem real_bound_rescues_divergence :
+    eval (Fin 2) Φ · (EIf (EVar x) (ELit l') omega) (v_div x l')
+    /\ contains σ Sv (v_div x l') (ELit l').
+  Proof.
+    split.
+    - eapply Eval_If with (pc_c := PCVar x).
+      + apply Eval_SymVar. reflexivity.
+      + reflexivity.
+      + apply Eval_Lit.
+      + unfold omega. eapply Eval_AppSpine with (ef' := EBot BUndefined);
+          [apply w_not_whnf | reflexivity | apply Eval_OutOfFuel | apply Eval_OutOfFuel].
+    - apply Cont_If_True; [exact Hchoose | apply Cont_Lit].
+  Qed.
+
+  Theorem real_depth_zero_misses : forall v,
+    eval (Fin 0) Φ · (EIf (EVar x) (ELit l') omega) v -> ~ contains σ Sv v (ELit l').
+  Proof.
+    intros v H. apply eval_fin_zero_inv in H. subst v. apply bot_undefined_not_lit.
+  Qed.
+
+  Theorem real_depth_one_has_no_value :
+    ~ (exists v, eval (Fin 1) Φ · (EIf (EVar x) (ELit l') omega) v).
+  Proof.
+    intros [v H]. exact (real_if_blocked_at_one Φ · _ _ _ v Hsat H).
+  Qed.
+
+  Theorem real_no_bound_rescues_stuckness : forall k v,
+    eval (Fin k) Φ · (e_stuck x l l') v -> ~ contains σ Sv v (ELit l').
+  Proof.
+    intros k v H. unfold e_stuck in H. destruct k as [| [| k]].
+    - apply eval_fin_zero_inv in H. subst v. apply bot_undefined_not_lit.
+    - exfalso. exact (real_if_blocked_at_one Φ · _ _ _ v Hsat H).
+    - exfalso. inversion H; subst.
+      + no_con_head.
+      + match goal with
+        | [ Hf : eval _ _ _ (stuck_arm l) _ |- _ ] =>
+            unfold stuck_arm in Hf;
+            exact (app_lit_no_value_fin k _ · l (ELit l) _ (Hfeas _) Hf)
+        end.
+      + congruence.
+  Qed.
+End RealEvalDepths.

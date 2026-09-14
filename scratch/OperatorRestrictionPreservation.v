@@ -347,7 +347,7 @@ Proof.
     { apply decompose_con_app_concore with (e := e) (d := d); assumption. }
     assert (Hep : concore_expr ep).
     { apply find_alt_concore with (d := d) (alts := alts) (xs := xs); assumption. }
-    apply (concore_eval_closed_fix (dec k) Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat).
+    apply (concore_eval_closed_fix k Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat).
     + apply concrete_env_extend_multi; assumption.
     + apply Rel_Exact; assumption.
   - (* FoldAlts_Bot *) exact Hcon.

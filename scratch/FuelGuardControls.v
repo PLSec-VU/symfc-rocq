@@ -6,7 +6,8 @@
    1. Does the guard checker accept a mutually recursive fixpoint over
       eval/fold_alts now that the recursive premises sit at (dec f), with no
       "k0 = Inf" crutch to lean on?
-   2. Is Rule Out-Of-Fuel reachable at Fin 0, and unreachable at Inf?
+   2. Is Rule Out-Of-Fuel reachable at Fin 0, unreachable at Inf, and the
+      only rule at Fin 0?
    3. Is the guard checker actually running on these fixpoints, or is it
       waving them through?
 
@@ -21,31 +22,41 @@ Require Import Coq.Lists.List.
 Import ListNotations.
 
 (** Part A: the fuel-polymorphic pair. It takes the fuel as a parameter, asks
-    nothing of it, recurses at (dec k) in every case, and the guard checker
-    accepts it - which is what ConCore.v compiling at all already says. The
-    listing below shows it adds no assumption of its own. *)
+    nothing of it, recurses at (dec k) in every eval case and at the fuel it
+    was handed in every fold_alts case, and the guard checker accepts it -
+    which is what ConCore.v compiling at all already says. The listing below
+    shows it adds no assumption of its own. *)
 Print Assumptions concore_eval_closed_fix.
 
-(** Part B: Fin 0 really does carry an out-of-fuel derivation, and Inf does not
-    admit one, so "eval Inf" is the old relation unchanged. *)
+(** Part B: Fin 0 really does carry an out-of-fuel derivation, Inf does not
+    admit one, so "eval Inf" is the old relation unchanged, and Fin 0 admits
+    no other rule, so the literal does not evaluate to itself there. *)
 Example out_of_fuel_reachable : forall l,
   eval (Fin 0) pc_true · (ELit l) (EBot BUndefined).
 Proof. intros l. apply Eval_OutOfFuel. Qed.
 
-Example dec_Inf_is_Inf : dec Inf = Inf.
+Example dec_Inf_is_Inf : dec Unlimited = Inf.
 Proof. reflexivity. Qed.
+
+Example fin_zero_prunes_every_other_rule : forall Γ l v,
+  eval (Fin 0) pc_true Γ (ELit l) v -> v = EBot BUndefined.
+Proof.
+  intros Γ l v H.
+  inversion H; subst.
+  reflexivity.
+Qed.
 
 Example inf_prunes_out_of_fuel : forall Γ l v,
   eval Inf pc_true Γ (ELit l) v -> v = ELit l.
 Proof.
   intros Γ l v H.
   (* one goal from Eval_Lit, one from Eval_Con and one from Eval_Prune; the
-     out-of-fuel case is dropped by inversion because Fin 0 cannot unify
+     out-of-fuel case is dropped by inversion because Spent cannot unify
      with Inf *)
   inversion H; subst.
   - reflexivity.
   - no_con_head.
-  - rewrite sat_pc_true in H0. discriminate.
+  - rewrite sat_pc_true in H1. discriminate.
 Qed.
 
 (** Part C: control. The same shape, but recursing on a NON-subterm, is
