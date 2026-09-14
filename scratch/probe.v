@@ -1,26 +1,16 @@
-From SymCoreTheory Require Import SymCore.
+From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
-Lemma eval_preserves_if : forall Φ Γ e v,
-  Φ ; Γ ⊢ e ⇓ v ->
-  sat Φ = true ->
-  is_if e = true ->
-  is_if v = true.
+Lemma fold_alts_con_inv : forall Φ Γ e d ea xs ep alts r,
+  decompose_con_app e = Some (d, ea) ->
+  find_alt d alts = Some (xs, ep) ->
+  fold_alts Φ Γ e alts r ->
+  Φ ; extend_env_multi Γ xs ea Γ ⊢ ep ⇓ r.
 Proof.
-  intros Φ Γ e v Heval Hsat Hif.
-  destruct e; try discriminate.
-  inversion Heval; subst; [reflexivity | rewrite Hsat in *; discriminate].
-Qed.
-
-Lemma eval_app_if_false : forall Φ Γ e v,
-  Φ ; Γ ⊢ e ⇓ v ->
-  sat Φ = true ->
-  forall ef ea, e = EApp ef ea -> is_if ef = true -> False.
-Proof.
-  induction 1; intros Hsat f0 a0 Heq Hif; try discriminate.
+  intros Φ Γ e d ea xs ep alts r Hdec Hfind Hfold.
+  inversion Hfold; subst; unfold decompose_con_app in Hdec; simpl in Hdec;
+    try discriminate.
   Show.
   Show 2.
-  Show 3.
-  Show 4.
 Abort.
