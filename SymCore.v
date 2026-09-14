@@ -42,6 +42,9 @@ Axiom primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
 Axiom op_and : primop.
 Axiom op_not : primop.
 
+(** Arity of a primitive operation: the number of arguments it is applied to (§3.1) *)
+Axiom primop_arity : primop -> nat.
+
 (** ========================================================================= *)
 (** 3. Types and Coercions in System FC / SymCore (§3.1)                      *)
 (** ========================================================================= *)
@@ -518,6 +521,7 @@ Inductive eval : path_condition -> environment -> expr -> expr -> Prop :=
   (** Rule App-Prim: Evaluate primitive operation arguments and reduce *)
   | Eval_AppPrim : forall Φ Γ ef ea p args args',
       unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+      length args = primop_arity p ->
       Forall2 (eval Φ Γ) args args' ->
       eval Φ Γ (EApp ef ea) (reduce_prim p args')
 
