@@ -318,12 +318,86 @@ evaluation is, and only on ConCore programs in a concrete environment.
 
 ---
 
-## 8. Regression suite
+## 8. Checking a claim against the development
+
+While writing prose you will keep asking "is this actually true?". Answer it in
+Rocq rather than by reading the file. The workflow below is the one that made
+this development's defects findable; the discipline is not optional, because the
+naive approach is slow enough to make you stop checking.
+
+### 8.1 Never recompile to test an idea
+
+`ConCore.v` is ~4800 lines. Recompiling it to find out whether one tactic worked
+will burn an hour and your patience. Instead write a scratch file that imports the
+already-compiled development, and compile only that:
+
+```bash
+coqc -Q . SymCoreTheory SymCore.v     # once
+coqc -Q . SymCoreTheory ConCore.v     # once
+```
+
+```coq
+(* probe.v *)
+From SymCoreTheory Require Import SymCore ConCore.
+From Stdlib Require Import Strings.String Lists.List.
+Import ListNotations.
+```
+
+```bash
+coqtop -q -Q . SymCoreTheory -batch -l probe.v
+```
+
+Silence means everything in the file was accepted. Any output is a failure with
+its line number.
+
+### 8.2 Look at the goal before writing a tactic
+
+Guessing a tactic and recompiling is the slow path. Put `Show.` where you are
+stuck and end the proof with `Abort.` so the file still runs:
+
+```coq
+Lemma whatever : forall Φ Γ e, ...
+Proof.
+  intros. inversion H; subst. Show 1. Show 2.
+Abort.
+```
+
+`Show N.` prints the Nth remaining goal with its full context. Read it, then write
+the tactic that closes it. `Check foo.` prints a statement, `Print foo.` prints a
+definition, `Print Assumptions foo.` lists exactly which axioms a result rests on.
+
+### 8.3 Three questions worth asking constantly
+
+**"Is this statement true?"** Write it as a `Lemma` and try to prove it. If it
+compiles, it is true.
+
+**"Is this statement false?"** Prove its negation. Several results in `scratch/`
+are negations — that is how the counterexamples in §5 are recorded, and a proved
+negation is much stronger evidence than a failed proof attempt.
+
+**"What does this result depend on?"** `Print Assumptions foo.` If it lists
+something you did not expect, the proof is leaning on an assumption you have not
+justified in the paper.
+
+### 8.4 Two gotchas specific to this development
+
+**The fuel index breaks `destruct` and `induction`.** `inversion H` on a
+derivation at `Inf` correctly drops the Out-Of-Fuel case, because `Fin 0` cannot
+unify with `Inf`. But `destruct` and `induction` *generalise* the index, so the
+case returns and sub-derivations arrive at `dec f` rather than `Inf`. Use the
+`inf_destruct` / `inf_induction` tactics in `ConCore.v`, or add an explicit
+`k0 = Inf ->` premise and discharge the bad case with `discriminate`.
+
+**`match goal` patterns written with notation can stop matching.** `Φ ; Γ ⊢ e ⇓ v`
+means `eval Inf Φ Γ e v`, so a pattern written that way will not match a premise
+sitting at `eval (dec Inf) ...`. Write `eval _ Φ Γ e v` in tactic patterns.
+
+### 8.5 The regression suite
 
 `scratch/` holds twenty-three files. Nineteen must compile; four
 (`Audit.v`, `prim.v`, `prim2.v`, `ReducePrimCannotCompute.v`) must **fail** —
 they are pre-repair results that must stay unprovable. If one of those four starts
-compiling, a defect has come back. Check all twenty-three after any change:
+compiling, a defect has come back. Check all of them after any change:
 
 ```bash
 for f in scratch/*.v; do coqtop -q -Q . SymCoreTheory -batch -l "$f" >/dev/null 2>&1 \
@@ -333,3 +407,7 @@ for f in scratch/*.v; do coqtop -q -Q . SymCoreTheory -batch -l "$f" >/dev/null 
 The files most worth reading before writing proofs: `CompletenessNeedsFuel.v`
 (§5.2), `DivergenceNeedsFuel.v` (§5.4), `ReducePrimCannotCompute.v` (§5.1, must
 fail), `CastSplitWorkedExample.v` (§5.3), `ConstructorApplicationStuck.v` (§1.3).
+
+If you add a counterexample while writing, put it in `scratch/` so the next person
+inherits it. That directory is the reason the five defects fixed this session
+cannot come back silently.
