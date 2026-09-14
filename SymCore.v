@@ -145,14 +145,16 @@ with closure : Type :=
   | MkClosure : environment -> expr -> closure    (** (Γ, e) from Fig. 2 *)
 
 with environment : Type :=
-  | EmptyEnv : environment                        (** ∅: empty substitution map *)
+  | EmptyEnv : environment                        (** empty substitution map *)
   | ExtendEnv : var -> closure -> environment -> environment.
                                                   (** Γ{x ↦ (Γ', e)}: substitution map *)
+
+Notation "'·'" := EmptyEnv.
 
 (** Environment lookup: (Γ', e) = Γ(x) (Fig. 3, Rule Var) *)
 Fixpoint lookup_env (Γ : environment) (x : var) : option (environment * expr) :=
   match Γ with
-  | EmptyEnv => None
+  | · => None
   | ExtendEnv y (MkClosure Γ' e) rest =>
       if string_dec x y then Some (Γ', e) else lookup_env rest x
   end.
@@ -654,7 +656,7 @@ with fv_alt (a : alt) : list var :=
 (** Domain (bound variables) of an environment *)
 Fixpoint dom_env (Γ : environment) : list var :=
   match Γ with
-  | EmptyEnv => []
+  | · => []
   | ExtendEnv x _ rest => x :: dom_env rest
   end.
 
@@ -668,7 +670,7 @@ Definition wf_env (e : expr) (Γ : environment) : Prop :=
 
 (** The empty environment is universally well-formed for any expression *)
 Lemma wf_empty_env : forall e,
-  wf_env e EmptyEnv.
+  wf_env e ·.
 Proof.
   intros e x Hin.
   reflexivity.

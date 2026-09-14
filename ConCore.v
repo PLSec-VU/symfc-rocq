@@ -41,7 +41,7 @@ with concore_alt : alt -> Prop :=
   | Con_Alt : forall d xs ep, concore_expr ep -> concore_alt (Alt d xs ep)
 
 with concrete_env : environment -> Prop :=
-  | CEnv_Empty : concrete_env EmptyEnv
+  | CEnv_Empty : concrete_env ·
   | CEnv_Extend : forall x Γ' e rest,
       concore_expr e ->
       concrete_env Γ' ->
@@ -246,7 +246,7 @@ Qed.
 
 (** In the empty environment, concrete_context is equivalent to closed_expr *)
 Lemma concrete_context_empty_closed : forall e,
-  concrete_context EmptyEnv e <-> closed_expr e.
+  concrete_context · e <-> closed_expr e.
 Proof.
   split.
   - intros Hctx x Hin.
@@ -343,7 +343,7 @@ Definition eval_con (Γ : environment) (e : expr) (v : expr) : Prop :=
 
 (** Notation for concrete big-step reduction: Γ ⊢ᶜ e ⇓ᶜ v *)
 Notation "Γ '⊢ᶜ' e '⇓ᶜ' v" := (eval_con Γ e v) (at level 70, no associativity).
-Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con EmptyEnv e v) (at level 70, no associativity).
+Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con · e v) (at level 70, no associativity).
 
 (** ------------------------------------------------------------------------- *)
 (** 8.1 SMT & Grisette Solver Behaviors for Concrete Evaluation               *)
@@ -624,7 +624,7 @@ Corollary concore_eval_closed_top : forall e v,
   concore_expr v.
 Proof.
   intros e v Hcon Heval.
-  apply (concore_eval_closed EmptyEnv e v); auto.
+  apply (concore_eval_closed · e v); auto.
   constructor.
 Qed.
 
@@ -820,7 +820,7 @@ with contains_alt (σ : valuation) (S : symvars) : alt -> alt -> Prop :=
 
 with contains_env (σ : valuation) (S : symvars) : environment -> environment -> Prop :=
   | Cont_Env_Empty :
-      contains_env σ S EmptyEnv EmptyEnv
+      contains_env σ S · ·
   | Cont_Env_Extend : forall x Γs Γc es ec rest_s rest_c,
       S x = false ->
       contains_env σ S Γs Γc ->
@@ -1870,18 +1870,18 @@ Proof.
 Qed.
 
 
-(** Top-level Soundness for whole programs starting from EmptyEnv *)
+(** Top-level Soundness for whole programs starting from · *)
 Theorem concore_soundness_top : forall Φ σ S e_sym e_con v_sym,
   σ ⊨ Φ ->
   contains σ S e_sym e_con ->
   concore_expr e_con ->
-  Φ ; EmptyEnv ⊢ e_sym ⇓ v_sym ->
+  Φ ; · ⊢ e_sym ⇓ v_sym ->
   exists v_con,
     ⊢ᶜ e_con ⇓ᶜ v_con /\
     contains σ S v_sym v_con.
 Proof.
   intros Φ σ S e_sym e_con v_sym Hmod Hcont Hcon Heval.
-  apply (concore_soundness Φ EmptyEnv EmptyEnv σ S e_sym e_con v_sym); auto.
+  apply (concore_soundness Φ · · σ S e_sym e_con v_sym); auto.
   apply Cont_Env_Empty.
 Qed.
 
@@ -1925,10 +1925,10 @@ Proof. intros. eapply contains_var_sym; eassumption. Qed.
 
 Theorem soundness_applies_to_symvar : forall σ S x,
   σ ⊨ pc_true -> S x = true ->
-  exists v_con, EmptyEnv ⊢ᶜ ELit (σ x) ⇓ᶜ v_con /\ contains σ S (EVar x) v_con.
+  exists v_con, · ⊢ᶜ ELit (σ x) ⇓ᶜ v_con /\ contains σ S (EVar x) v_con.
 Proof.
   intros σ S x Hmod Hx.
-  apply (concore_soundness pc_true EmptyEnv EmptyEnv σ S (EVar x) (ELit (σ x)) (EVar x)).
+  apply (concore_soundness pc_true · · σ S (EVar x) (ELit (σ x)) (EVar x)).
   - exact Hmod.
   - apply Cont_Env_Empty.
   - apply Cont_Var_Sym. exact Hx.
@@ -1942,11 +1942,11 @@ Definition symprim (p : primop) (a : expr) (l : lit) : expr :=
 Theorem soundness_on_symbolic_primop : forall σ S p x l,
   σ ⊨ pc_true -> S x = true -> primop_arity p = 2%nat ->
   exists v_con,
-    eval_con EmptyEnv (symprim p (ELit (σ x)) l) v_con /\
+    eval_con · (symprim p (ELit (σ x)) l) v_con /\
     contains σ S (reduce_prim p (EVar x :: ELit l :: nil)) v_con.
 Proof.
   intros σ S p x l Hmod Hx Har.
-  apply (concore_soundness pc_true EmptyEnv EmptyEnv σ S
+  apply (concore_soundness pc_true · · σ S
            (symprim p (EVar x) l) (symprim p (ELit (σ x)) l)
            (reduce_prim p (EVar x :: ELit l :: nil))).
   - exact Hmod.
@@ -1979,7 +1979,7 @@ Theorem symbolic_branch_has_concretion : forall σ S p x l lt lf,
 Proof.
   intros σ S p x l lt lf Hmod.
   apply Cont_If_True; [| apply Cont_Lit].
-  apply (models_cond_pc σ S EmptyEnv (symcond p x l) (PCPrim p (PCVar x :: PCLit l :: nil))).
+  apply (models_cond_pc σ S · (symcond p x l) (PCPrim p (PCVar x :: PCLit l :: nil))).
   - apply symcond_is_formula. reflexivity.
   - exact Hmod.
 Qed.
@@ -2000,7 +2000,7 @@ Qed.
 Theorem symbolic_branch_condition_is_judgeable : forall σ S p x l,
   models_cond σ S (symcond p x l) <-> σ ⊨ (PCPrim p (PCVar x :: PCLit l :: nil)).
 Proof.
-  intros. apply (models_cond_pc σ S EmptyEnv).
+  intros. apply (models_cond_pc σ S ·).
   apply symcond_is_formula. reflexivity.
 Qed.
 
@@ -2027,8 +2027,8 @@ Theorem contains_not_rigid_on_solvable : forall σ : valuation,
   ~ (forall S Γ es ec, Solvable Γ es -> contains σ S es ec -> es = ec).
 Proof.
   intros σ Hrigid.
-  specialize (Hrigid (only "x") EmptyEnv (EVar "x") (ELit (σ "x"))
-                     (Solvable_Var EmptyEnv "x" eq_refl)
+  specialize (Hrigid (only "x") · (EVar "x") (ELit (σ "x"))
+                     (Solvable_Var · "x" eq_refl)
                      (Cont_Var_Sym σ (only "x") "x" (only_self "x"))).
   discriminate.
 Qed.
@@ -2041,10 +2041,10 @@ Proof.
   induction 1; intros Hall;
     try reflexivity;
     try (exfalso;
-         specialize (Hall EmptyEnv); inversion Hall; fail).
+         specialize (Hall ·); inversion Hall; fail).
   - (* Cont_Var_Sym *)
     exfalso.
-    specialize (Hall (ExtendEnv x (MkClosure EmptyEnv (EBot BUndefined)) EmptyEnv)).
+    specialize (Hall (ExtendEnv x (MkClosure · (EBot BUndefined)) ·)).
     inversion Hall as [| x0 Hnone | |]; subst.
     simpl in Hnone. destruct (string_dec x x); [discriminate | congruence].
   - (* Cont_App *)
