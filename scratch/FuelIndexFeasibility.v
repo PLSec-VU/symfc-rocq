@@ -1,5 +1,10 @@
 (* Does indexing an existing relation by a fuel type with an infinite
-   element force every existing inversion to grow a case? *)
+   element force every existing inversion to grow a case?
+
+   Answered no, and the design has since landed: SymCore.v carries this exact
+   fuel type, this dec, and Rule Out-Of-Fuel with Fin 0 in its conclusion
+   index. This file stays as the small standalone model, which imports
+   nothing and can be read on its own. *)
 Inductive fuel := Inf | Fin (n : nat).
 Definition dec (f : fuel) : fuel :=
   match f with Inf => Inf | Fin 0 => Fin 0 | Fin (S n) => Fin n end.

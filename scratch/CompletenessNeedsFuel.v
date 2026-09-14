@@ -2,6 +2,13 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+(* Every statement here is about the unlimited budget, eval Inf, which the
+   notation "Phi ; Gamma |- e ==> v" now means. The argument below is the
+   reason the budget alone does not buy completeness, so nothing here should
+   be restated at a finite budget: at Fin 0 every expression evaluates, stuck
+   ones included, and the counterexample stops being a counterexample without
+   becoming a proof. *)
+
 (* A malformed application is stuck: no rule applies, and Rule Prune cannot
    rescue it while the path condition is satisfiable. *)
 Lemma app_lit_stuck : forall Φ Γ l a v,
@@ -57,7 +64,11 @@ Section CompletenessFailsOnPlainEval.
     intros [v Heval]. unfold e_sym in Heval.
     inversion Heval; subst.
     - (* Eval_If: the else branch must evaluate, but it is stuck *)
-      eapply app_lit_stuck; [apply Hfeas | exact H8].
+      match goal with
+      | [ H : eval _ _ _ stuck_else _ |- _ ] =>
+          unfold stuck_else in H;
+          eapply app_lit_stuck; [apply Hfeas | exact H]
+      end.
     - (* Eval_Prune *)
       congruence.
   Qed.
@@ -78,6 +89,9 @@ Theorem stuck_regardless_of_any_model : forall Φ x l l',
 Proof.
   intros Φ x l l' Hsat Hfeas [v Heval].
   inversion Heval; subst.
-  - eapply app_lit_stuck; [apply Hfeas | exact H8].
+  - match goal with
+    | [ H : eval _ _ _ (EApp (ELit _) _) _ |- _ ] =>
+        eapply app_lit_stuck; [apply Hfeas | exact H]
+    end.
   - congruence.
 Qed.

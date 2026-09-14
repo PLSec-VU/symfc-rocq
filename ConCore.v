@@ -496,17 +496,22 @@ Qed.
 (**
   ConCore closure under evaluation, as a pair of mutually recursive fixpoints
   rather than by the auto-derived mutual induction scheme. Rule App-Prim needs
-  the statement for every argument of its Forall2 (eval Inf Φ Γ) args args' in
-  order to feed the repaired (argument-conditional) reduce_prim_concore, and
+  the statement for every argument of its Forall2 (eval (dec f) Φ Γ) args args'
+  in order to feed the repaired (argument-conditional) reduce_prim_concore, and
   the derived scheme supplies no induction hypothesis under a Forall2.
+
+  The statement holds at every fuel, so it takes the fuel as a parameter and
+  asks nothing of it. Rule Out-Of-Fuel answers EBot BUndefined, and that is a
+  ConCore expression, so the case closes with the same constructor as Rule
+  Bot. Nothing here needs the budget to be unlimited.
 *)
-Fixpoint concore_eval_closed_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
-  (Heval : eval k0 Φ Γ e v) {struct Heval} :
-  k0 = Inf -> sat Φ = true -> concrete_env Γ -> concore_expr e -> concore_expr v
-with concore_fold_closed_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e : expr)
+Fixpoint concore_eval_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
+  (Heval : eval f0 Φ Γ e v) {struct Heval} :
+  sat Φ = true -> concrete_env Γ -> concore_expr e -> concore_expr v
+with concore_fold_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e : expr)
   (alts : list alt) (er : expr)
-  (Hfold : fold_alts k0 Φ Γ e alts er) {struct Hfold} :
-  k0 = Inf -> sat Φ = true -> concrete_env Γ -> concore_expr e -> Forall concore_alt alts -> concore_expr er.
+  (Hfold : fold_alts f0 Φ Γ e alts er) {struct Hfold} :
+  sat Φ = true -> concrete_env Γ -> concore_expr e -> Forall concore_alt alts -> concore_expr er.
 Proof.
 {
   destruct Heval as
@@ -528,28 +533,28 @@ Proof.
     | k Φ Γ e Hunsat
     | k Φ Γ τ
     | Φ Γ e
-    ]; intros Hk0 Hsat Henv Hcon; try (subst k).
+    ]; intros Hsat Henv Hcon.
   - (* Eval_Var *)
     destruct (lookup_env_concrete Γ x Γ' e Henv Hlook) as [Henv' He].
-    exact (concore_eval_closed_fix Inf Φ Γ' e e' Heval_x eq_refl Hsat Henv' He).
+    exact (concore_eval_closed_fix (dec k) Φ Γ' e e' Heval_x Hsat Henv' He).
   - (* Eval_SymVar *) exact Hcon.
   - (* Eval_Lit *) constructor.
   - (* Eval_Con *) constructor.
   - (* Eval_Cast *)
     apply cast_expr_concore.
-    apply (concore_eval_closed_fix Inf Φ Γ e e' Heval_e eq_refl Hsat Henv).
+    apply (concore_eval_closed_fix (dec k) Φ Γ e e' Heval_e Hsat Henv).
     inversion Hcon; subst; assumption.
   - (* Eval_AppAbs *)
     inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
     inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | ]; subst.
-    apply (concore_eval_closed_fix Inf Φ (extend_env Γ' x Γ ea) eb eb' Heval_b eq_refl Hsat).
+    apply (concore_eval_closed_fix (dec k) Φ (extend_env Γ' x Γ ea) eb eb' Heval_b Hsat).
     + apply concrete_env_extend; assumption.
     + assumption.
   - (* Eval_AppSpine *)
     inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-    apply (concore_eval_closed_fix Inf Φ Γ (EApp ef' ea) er Heval_app2 eq_refl Hsat Henv).
+    apply (concore_eval_closed_fix (dec k) Φ Γ (EApp ef' ea) er Heval_app2 Hsat Henv).
     apply Con_App; [| assumption].
-    exact (concore_eval_closed_fix Inf Φ Γ ef ef' Heval_f eq_refl Hsat Henv Hf).
+    exact (concore_eval_closed_fix (dec k) Φ Γ ef ef' Heval_f Hsat Henv Hf).
   - (* Eval_Bot *) exact Hcon.
   - (* Eval_AppPrim *)
     assert (Hcon_args : Forall concore_expr args).
@@ -561,7 +566,7 @@ Proof.
     + constructor.
     + inversion Hcon_args as [| a0 tl0 Hcon_a Hcon_tl]; subst.
       constructor.
-      * exact (concore_eval_closed_fix Inf Φ Γ a a' Ha eq_refl Hsat Henv Hcon_a).
+      * exact (concore_eval_closed_fix (dec k) Φ Γ a a' Ha Hsat Henv Hcon_a).
       * exact (IH Hcon_tl).
   - (* Eval_Lam *)
     constructor; [assumption |].
@@ -569,23 +574,23 @@ Proof.
   - (* Eval_AppCast *)
     inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
     inversion Hf as [| | | | | | | | e γ0 He | | | | | ]; subst.
-    apply (concore_eval_closed_fix Inf Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
-             er Heval_pushed eq_refl Hsat Henv).
+    apply (concore_eval_closed_fix (dec k) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
+             er Heval_pushed Hsat Henv).
     apply Con_Cast. apply Con_App; [assumption | apply Con_Cast; assumption].
   - (* Eval_AppBot *)
     inversion Hcon; subst. assumption.
   - (* Eval_Case *)
     inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
-    apply (concore_fold_closed_fix Inf Φ Γ (merge es') alts er Hfold eq_refl Hsat Henv);
+    apply (concore_fold_closed_fix (dec k) Φ Γ (merge es') alts er Hfold Hsat Henv);
       [| assumption].
     apply merge_concore.
-    exact (concore_eval_closed_fix Inf Φ Γ es es' Heval_es eq_refl Hsat Henv Hcon_es).
+    exact (concore_eval_closed_fix (dec k) Φ Γ es es' Heval_es Hsat Henv Hcon_es).
   - (* Eval_If *)
     exfalso. apply (not_concore_if ec et ef). assumption.
   - (* Eval_Coercion *) constructor.
   - (* Eval_Prune *) constructor.
   - (* Eval_Type *) constructor.
-  - (* Eval_OutOfFuel *) discriminate Hk0.
+  - (* Eval_OutOfFuel *) constructor.
 }
 {
   destruct Hfold as
@@ -594,7 +599,7 @@ Proof.
     | k Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
     | k Φ Γ b alts
     | k Φ Γ e alts Hnotif Hnoalt Hnotbot
-    ]; intros Hk0 Hsat Henv Hcon Halts; subst k.
+    ]; intros Hsat Henv Hcon Halts.
   - exfalso. apply (not_concore_if ec et ef). assumption.
   - exfalso. apply (not_concore_if ec et ef). assumption.
   - (* FoldAlts_Con *)
@@ -602,7 +607,7 @@ Proof.
     { apply decompose_con_app_concore with (e := e) (d := d); assumption. }
     assert (Hep : concore_expr ep).
     { apply find_alt_concore with (d := d) (alts := alts) (xs := xs); assumption. }
-    apply (concore_eval_closed_fix Inf Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep eq_refl Hsat);
+    apply (concore_eval_closed_fix (dec k) Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat);
       [| assumption].
     apply concrete_env_extend_multi; assumption.
   - (* FoldAlts_Bot *) exact Hcon.
@@ -618,9 +623,9 @@ Lemma concore_eval_closed_mut :
 Proof.
   split.
   - intros Φ Γ e v Heval Heq. subst Φ.
-    exact (concore_eval_closed_fix Inf pc_true Γ e v Heval eq_refl sat_pc_true).
+    exact (concore_eval_closed_fix Inf pc_true Γ e v Heval sat_pc_true).
   - intros Φ Γ e alts er Hfold Heq. subst Φ.
-    exact (concore_fold_closed_fix Inf pc_true Γ e alts er Hfold eq_refl sat_pc_true).
+    exact (concore_fold_closed_fix Inf pc_true Γ e alts er Hfold sat_pc_true).
 Qed.
 
 (** ConCore Closure under Evaluation:
@@ -1173,13 +1178,19 @@ Axiom eval_models_not_cond : forall Φ Γ S ec ec' σ,
   σ ⊨ Φ -> sym_free_env S Γ ->
   Φ ; Γ ⊢ ec ⇓ ec' -> models_not_cond σ S ec -> models_not_cond σ S ec'.
 
-(** The residue of the two axioms above: under their own hypotheses, an
-    evaluation step out of a judgeable condition either changes nothing or is
-    a single application of Rule App-Prim. Every other rule is excluded, by
-    solvability or by Rule Prune being unreachable under a model. *)
+(**
+  Taking apart a derivation that is fixed at the unlimited budget.
 
-(** Spike helper: destruct an eval/fold_alts derivation that sits at index Inf,
-    keeping the Inf information so the out-of-fuel case dies by discriminate. *)
+  `inversion` on a hypothesis of the form eval Inf ... already drops Rule
+  Out-Of-Fuel, because that rule writes Fin 0 in its conclusion and Fin 0
+  cannot unify with Inf. `destruct` and `induction` do not: they first
+  generalise the fuel index into a variable, so Rule Out-Of-Fuel comes back as
+  a case and every recursive premise arrives at dec f instead of Inf.
+
+  The two tactics below keep the index. They name it, remember the equation
+  that says the name is Inf, and use that equation to kill the out-of-fuel
+  case. Use them for any lemma that is true only at the unlimited budget.
+*)
 Ltac inf_induction H :=
   let k := fresh "kf" in
   let Hk := fresh "Hkf" in
@@ -1192,6 +1203,13 @@ Ltac inf_destruct H :=
   remember Inf as k eqn:Hk in H;
   revert Hk; destruct H; intro Hk; try discriminate Hk; subst.
 
+(** The residue of the two axioms above: under their own hypotheses, an
+    evaluation step out of a judgeable condition either changes nothing or is
+    a single application of Rule App-Prim. Every other rule is excluded, by
+    solvability or by Rule Prune being unreachable under a model.
+
+    Unlimited budget only: at Fin 0 Rule Out-Of-Fuel answers EBot BUndefined,
+    which is neither the condition itself nor a primitive reduction. *)
 Lemma eval_models_cond_residue : forall Φ Γ S ec ec' σ,
   σ ⊨ Φ -> sym_free_env S Γ -> Φ ; Γ ⊢ ec ⇓ ec' ->
   models_cond σ S ec \/ models_not_cond σ S ec ->
@@ -1629,6 +1647,10 @@ Qed.
   App-Spine is the only rule that could give it one, and it puts the value
   of the branch - another branch - back in operator position, so no
   derivation ever ends.
+
+  Unlimited budget only, so the proof goes by inf_induction. "No derivation
+  ever ends" is exactly what a finite budget breaks: at Fin 0 Rule
+  Out-Of-Fuel ends it with EBot BUndefined.
 *)
 Lemma eval_app_if_false : forall Φ Γ e v,
   Φ ; Γ ⊢ e ⇓ v ->
@@ -1886,6 +1908,10 @@ Ltac denote_absurd :=
   It is a Fixpoint rather than an induction because App-Prim needs the result
   for every argument in its Forall2, which Coq's derived induction principle
   does not strengthen.
+
+  Unlimited budget only, hence the k0 = Inf premise. At Fin 0 Rule
+  Out-Of-Fuel answers EBot BUndefined, and expr_to_pc reads no formula off a
+  bottom, so the answer denotes nothing.
 *)
 Fixpoint eval_denote_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e e' : expr)
   (Heval : eval k0 Φ Γ e e') {struct Heval} :
@@ -1984,6 +2010,14 @@ Qed.
   / fold_alts proof, calling back into the very fixpoint being defined) is
   what used to be papered over by the eval_prim_args_sound and
   fold_alts_contains axioms.
+
+  Unlimited budget only, hence the k0 = Inf premise on both fixpoints. The
+  conclusion asks for a CONCRETE value that the symbolic value contains, and
+  concrete evaluation has no budget of its own: it is fixed at Inf by
+  eval_con. At Fin 0 the symbolic side answers EBot BUndefined, which
+  contains only a concrete EBot BUndefined, and the concrete expression need
+  not reduce to that. Giving the concrete side a budget as well is a later
+  stage, not this one.
 *)
 
 (** `contains` commutes with `unspool_app`, threading an existing pointwise
@@ -3114,6 +3148,10 @@ Qed.
   primitive needs. An under-applied primitive spine therefore has no value at
   all: the only rule that could give it one is Rule App-Prim, and that rule
   demands a saturated spine.
+
+  Unlimited budget only, so the proof goes by inf_induction. Rule App-Prim is
+  the only rule at Inf, but at Fin 0 Rule Out-Of-Fuel gives an under-applied
+  spine a value too, and it asks nothing about arity.
 *)
 Lemma eval_prim_spine_saturated : forall Φ Γ e v,
   Φ ; Γ ⊢ e ⇓ v ->
@@ -3523,13 +3561,13 @@ Proof.
   - simpl in Hun. injection Hun as Hh _. discriminate.
 Qed.
 
-Lemma fold_alts_con_inv : forall Φ Γ e d ea xs ep alts r,
+Lemma fold_alts_con_inv : forall f Φ Γ e d ea xs ep alts r,
   decompose_con_app e = Some (d, ea) ->
   find_alt d alts = Some (xs, ep) ->
-  fold_alts Inf Φ Γ e alts r ->
-  Φ ; extend_env_multi Γ xs ea Γ ⊢ ep ⇓ r.
+  fold_alts f Φ Γ e alts r ->
+  eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep r.
 Proof.
-  intros Φ Γ e d ea xs ep alts r Hdec Hfind Hfold.
+  intros f Φ Γ e d ea xs ep alts r Hdec Hfind Hfold.
   inversion Hfold; subst; unfold decompose_con_app in Hdec; simpl in Hdec;
     try discriminate.
   - match goal with
@@ -3549,24 +3587,24 @@ Proof.
     end.
 Qed.
 
-Lemma fold_alts_bot_inv : forall Φ Γ b alts r,
-  fold_alts Inf Φ Γ (EBot b) alts r -> r = EBot b.
+Lemma fold_alts_bot_inv : forall f Φ Γ b alts r,
+  fold_alts f Φ Γ (EBot b) alts r -> r = EBot b.
 Proof.
-  intros Φ Γ b alts r Hfold.
+  intros f Φ Γ b alts r Hfold.
   inversion Hfold; subst; try reflexivity; try discriminate.
 Qed.
 
-Lemma fold_alts_otherwise_inv : forall Φ Γ e alts r,
+Lemma fold_alts_otherwise_inv : forall f Φ Γ e alts r,
   is_if e = false ->
   (match decompose_con_app e with
    | Some (d, _) => find_alt d alts = None
    | None => True
    end) ->
   is_bot e = false ->
-  fold_alts Inf Φ Γ e alts r ->
+  fold_alts f Φ Γ e alts r ->
   r = EBot BUndefined.
 Proof.
-  intros Φ Γ e alts r Hif Hno Hbot Hfold.
+  intros f Φ Γ e alts r Hif Hno Hbot Hfold.
   inversion Hfold; subst; simpl in *; try discriminate; try reflexivity.
   - exfalso. match goal with
     | [ Hd : decompose_con_app e = Some (?D, ?EA),
@@ -3583,6 +3621,10 @@ Qed.
 
   The recursion runs on the FIRST derivation. The second one is taken apart
   by the inversion lemmas above, so nothing depends on its shape.
+
+  Unlimited budget only, hence the k0 = Inf premise. Determinism is what a
+  finite budget costs: at Fin 0 the literal ELit l reduces both to itself by
+  Rule Lit and to EBot BUndefined by Rule Out-Of-Fuel.
 *)
 Fixpoint eval_det_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v1 : expr)
   (Heval : eval k0 Φ Γ e v1) {struct Heval} :
@@ -3644,7 +3686,7 @@ Proof.
       by exact (eval_det_fix Inf Φ Γ ef ef' Heval_f eq_refl ef2 Hsat Henv Hcf Hef2).
     subst ef2.
     exact (eval_det_fix Inf Φ Γ (EApp ef' ea) er Heval_app2 eq_refl v2 Hsat Henv
-             (Con_App ef' ea (concore_eval_closed_fix Inf Φ Γ ef ef' Heval_f eq_refl Hsat Henv Hcf) Hca)
+             (Con_App ef' ea (concore_eval_closed_fix Inf Φ Γ ef ef' Heval_f Hsat Henv Hcf) Hca)
              Happ2).
   - (* Rule Bot *) symmetry. exact (eval_bot_inv Φ Γ b v2 Hsat H2).
   - (* Rule App-Prim *)
@@ -3681,7 +3723,7 @@ Proof.
       by exact (eval_det_fix Inf Φ Γ es es' Heval_es eq_refl es2 Hsat Henv Hces Hes2).
     subst es2.
     exact (fold_alts_det_fix Inf Φ Γ (merge es') alts er Hfold eq_refl v2 Hsat Henv
-             (merge_concore es' (concore_eval_closed_fix Inf Φ Γ es es' Heval_es eq_refl Hsat Henv Hces))
+             (merge_concore es' (concore_eval_closed_fix Inf Φ Γ es es' Heval_es Hsat Henv Hces))
              Halts Hfold2).
   - (* Rule If: a ConCore expression is never a branch *)
     exfalso. exact (not_concore_if ec et ef Hcon).
@@ -3707,11 +3749,11 @@ Proof.
       by exact (find_alt_concore d alts xs ep Halt Halts).
     exact (eval_det_fix Inf Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep eq_refl r2 Hsat
              (concrete_env_extend_multi xs ea Γ Γ Henv Henv Hea) Hep
-             (fold_alts_con_inv Φ Γ e0 d ea xs ep alts r2 Hdec Halt H2)).
-  - (* a bottom scrutinee *) symmetry. exact (fold_alts_bot_inv Φ Γ b alts r2 H2).
+             (fold_alts_con_inv Inf Φ Γ e0 d ea xs ep alts r2 Hdec Halt H2)).
+  - (* a bottom scrutinee *) symmetry. exact (fold_alts_bot_inv Inf Φ Γ b alts r2 H2).
   - (* no alternative matches *)
     symmetry.
-    exact (fold_alts_otherwise_inv Φ Γ e0 alts r2 Hnotif Hnoalt Hnotbot H2).
+    exact (fold_alts_otherwise_inv Inf Φ Γ e0 alts r2 Hnotif Hnoalt Hnotbot H2).
 }
 Qed.
 

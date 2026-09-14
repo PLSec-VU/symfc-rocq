@@ -532,18 +532,40 @@ Definition decompose_con_app (e : expr) : option (dcon * list expr) :=
 Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
 
+(** ------------------------------------------------------------------------- *)
+(** Fuel: a step budget carried by the reduction judgement                     *)
+(** ------------------------------------------------------------------------- *)
+
+(**
+  A fuel value is the budget a derivation may spend. Inf is an unlimited
+  budget. Fin n is a budget of n steps.
+
+  Every rule below carries a fuel f and passes dec f to each of its recursive
+  premises, so a derivation that nests k rules deep spends k units. Because
+  dec Inf = Inf, a derivation at Inf never runs the budget down, and the rule
+  set at Inf is exactly the rule set this judgement had before fuel existed.
+  The notation Φ; Γ ⊢ e ⇓ e' below therefore still means what it always meant.
+
+  The budget matters only at Fin n. There, dec eventually reaches Fin 0, and
+  Rule Out-Of-Fuel stops the derivation with an undefined value instead of
+  letting it run on.
+*)
+Inductive fuel := Inf | Fin (n : nat).
+
+(** Spend one unit of budget. An unlimited budget stays unlimited, and an
+    exhausted budget stays exhausted. *)
+Definition dec (f : fuel) : fuel :=
+  match f with Inf => Inf | Fin 0 => Fin 0 | Fin (S n) => Fin n end.
+
+(** The unlimited budget is a fixed point of dec. This is the equation that
+    makes eval Inf the old, unindexed relation. *)
+Lemma dec_Inf : dec Inf = Inf. Proof. reflexivity. Qed.
+
 (**
   Mutual inductive definitions of:
   - Big-Step Reduction Judgement: Φ; Γ ⊢ e ⇓ e' (Figure 3)
   - Pattern Matching and Branch Folding: fold-alts(Φ, Γ, e, a⃗) (§3.2, lines 570-590)
 *)
-(** Fuel index (spike): Inf reproduces the unbounded relation exactly. *)
-Inductive fuel := Inf | Fin (n : nat).
-Definition dec (f : fuel) : fuel :=
-  match f with Inf => Inf | Fin 0 => Fin 0 | Fin (S n) => Fin n end.
-
-Lemma dec_Inf : dec Inf = Inf. Proof. reflexivity. Qed.
-
 Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :=
   (** Rule Var: Variable lookup in Γ and recursive evaluation *)
   | Eval_Var : forall f Φ Γ x Γ' e e',
@@ -551,24 +573,36 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (dec f) Φ Γ' e e' ->
       eval f Φ Γ (EVar x) e'
 
+  (** Rule Sym-Var: a variable that Γ does not bind is a symbolic value.
+      Solvable_Var already classifies it as a value, and every other value
+      form (literal, constructor, bottom, coercion, type, closure) has a
+      reflexivity rule; without this one no expression that mentions a
+      symbolic variable can reduce at all. *)
   | Eval_SymVar : forall f Φ Γ x,
       lookup_env Γ x = None ->
       eval f Φ Γ (EVar x) (EVar x)
 
+  (** Rule Lit: Literal reflexivity *)
   | Eval_Lit : forall f Φ Γ l,
       eval f Φ Γ (ELit l) (ELit l)
 
+  (** Rule Con: Data constructor reflexivity *)
   | Eval_Con : forall f Φ Γ d,
       eval f Φ Γ (ECon d) (ECon d)
 
+  (** Rule Cast: Evaluate expression and simplify cast *)
   | Eval_Cast : forall f Φ Γ e γ e',
       eval (dec f) Φ Γ e e' ->
       eval f Φ Γ (ECast e γ) (cast_expr e' γ)
 
+  (** Rule App-Abs: Beta-reduction with closure environment extension *)
   | Eval_AppAbs : forall f Φ Γ Γ' x eb ea eb',
       eval (dec f) Φ (extend_env Γ' x Γ ea) eb eb' ->
       eval f Φ Γ (EApp (EClos Γ' x eb) ea) eb'
 
+  (** Rule App-Spine: Reduce function head when not in WHNF, unless that head
+      is a cast. A cast operator belongs to Rule App-Cast, which pushes the
+      coercion into the argument; stripping the cast here would drop it. *)
   | Eval_AppSpine : forall f Φ Γ ef ea ef' er,
       ~ Whnf Γ ef ->
       is_cast ef = false ->
@@ -576,31 +610,57 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (dec f) Φ Γ (EApp ef' ea) er ->
       eval f Φ Γ (EApp ef ea) er
 
+  (** Rule Bot: Bottom value reflexivity *)
   | Eval_Bot : forall f Φ Γ b,
       eval f Φ Γ (EBot b) (EBot b)
 
+  (** Rule App-Prim: Evaluate primitive operation arguments and reduce *)
   | Eval_AppPrim : forall f Φ Γ ef ea p args args',
       unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
       length args = primop_arity p ->
       Forall2 (eval (dec f) Φ Γ) args args' ->
       eval f Φ Γ (EApp ef ea) (reduce_prim p args')
 
+  (** Rule Lam: Function abstraction evaluates to runtime closure *)
   | Eval_Lam : forall f Φ Γ x e,
       eval f Φ Γ (ELam x e) (EClos Γ x e)
 
+  (** Rule App-Cast: Higher-order coercion pushing *)
   | Eval_AppCast : forall f Φ Γ ef γ ea γ_a γ_r er,
       decomp_coerc_arrow γ = Some (γ_a, γ_r) ->
       eval (dec f) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
       eval f Φ Γ (EApp (ECast ef γ) ea) er
 
+  (**
+    No rule for: applying a VALUE that carries a coercion which is not an
+    arrow.
+
+    Figure 3 has no rule for this shape and neither does this judgement.
+    Rule App-Cast wants a coercion that splits into an argument coercion and
+    a result coercion, and this one does not split. Rule App-Spine refuses
+    every cast operator. So the term is stuck, deliberately: applying
+    something whose coercion is not an arrow is applying a non-function,
+    which System FC rejects at type-check time. A judgement with no typing
+    rules gets stuck there instead of inventing an answer.
+
+    ConCore.v, Section 12.5 records the history: this shape once had a rule,
+    Rule App-Cast-Opaque, because Rule App-Spine then accepted a non-arrow
+    cast operator and the concrete side could reach the shape while the
+    symbolic side walked on. The guard above closes that gap on both sides
+    at once.
+  *)
+
+  (** Rule App-Bot: Propagation of bottom in function position *)
   | Eval_AppBot : forall f Φ Γ b ea,
       eval f Φ Γ (EApp (EBot b) ea) (EBot b)
 
+  (** Rule Case: Evaluate scrutinee, merge common prefixes, and fold alternatives *)
   | Eval_Case : forall f Φ Γ es alts es' er,
       eval (dec f) Φ Γ es es' ->
       fold_alts (dec f) Φ Γ (merge es') alts er ->
       eval f Φ Γ (ECase es alts) er
 
+  (** Rule If: Evaluate condition, convert to path condition, and branch *)
   | Eval_If : forall f Φ Γ ec et ef ec' et' ef' pc_c,
       eval (dec f) Φ Γ ec ec' ->
       expr_to_pc Γ ec' = Some pc_c ->
@@ -608,40 +668,66 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (dec f) (Φ ∧ ¬ pc_c) Γ ef ef' ->
       eval f Φ Γ (EIf ec et ef) (EIf ec' et' ef')
 
+  (** Rule Coercion: Evaluate coercion under substitution *)
   | Eval_Coercion : forall f Φ Γ γ,
       eval f Φ Γ (ECoercion γ) (ECoercion (subst_coerc Γ γ))
 
+  (** Rule Prune: Infeasible path conditions reduce to unreachable *)
   | Eval_Prune : forall f Φ Γ e,
       sat Φ = false ->
       eval f Φ Γ e (EBot BUnreachable)
 
+  (** Rule Type: Evaluate type under substitution *)
   | Eval_Type : forall f Φ Γ τ,
       eval f Φ Γ (EType τ) (EType (subst_type Γ τ))
 
-  (** Spike: out-of-fuel, with Fin 0 in the CONCLUSION index. *)
+  (**
+    Rule Out-Of-Fuel: an exhausted budget gives up and reports an undefined
+    value. This is the only rule that can answer an expression the other
+    rules cannot finish in the budget, and the only rule whose answer does
+    not depend on the expression.
+
+    The rule writes Fin 0 directly in its CONCLUSION index, not as a premise
+    f = Fin 0 over a variable index. The difference is what `inversion` does
+    with it. A written Fin 0 cannot unify with Inf, so inversion of a
+    derivation at Inf drops this case outright and leaves no goal. A variable
+    index would unify with Inf, so every inversion at Inf would first have to
+    discharge an impossible equation. Writing the index keeps eval Inf a
+    drop-in replacement for the unindexed judgement, which is what lets every
+    existing statement stand unchanged.
+
+    Note that this is a rule of eval only. fold_alts has no out-of-fuel rule:
+    it never recurses on itself without passing through eval first, so the
+    budget is already spent and reported there.
+  *)
   | Eval_OutOfFuel : forall Φ Γ e,
       eval (Fin 0) Φ Γ e (EBot BUndefined)
 
 with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> expr -> Prop :=
+  (** Branch traversal: condition is converted to path condition *)
   | FoldAlts_If : forall f Φ Γ ec et ef alts et' ef' pc_c,
       expr_to_pc Γ ec = Some pc_c ->
       fold_alts (dec f) (Φ ∧ pc_c) Γ et alts et' ->
       fold_alts (dec f) (Φ ∧ ¬ pc_c) Γ ef alts ef' ->
       fold_alts f Φ Γ (EIf ec et ef) alts (EIf ec et' ef')
 
+  (** Fallback for ill-formed condition in branching *)
   | FoldAlts_IfFail : forall f Φ Γ ec et ef alts,
       expr_to_pc Γ ec = None ->
       fold_alts f Φ Γ (EIf ec et ef) alts (EBot BUndefined)
 
+  (** Constructor match: find alternative and reduce body *)
   | FoldAlts_Con : forall f Φ Γ e d ea xs ep alts er,
       decompose_con_app e = Some (d, ea) ->
       find_alt d alts = Some (xs, ep) ->
       eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep er ->
       fold_alts f Φ Γ e alts er
 
+  (** Bottom propagation *)
   | FoldAlts_Bot : forall f Φ Γ b alts,
       fold_alts f Φ Γ (EBot b) alts (EBot b)
 
+  (** Otherwise: undefined behavior *)
   | FoldAlts_Otherwise : forall f Φ Γ e alts,
       is_if e = false ->
       (match decompose_con_app e with
@@ -930,8 +1016,14 @@ Qed.
 
   Written as a Fixpoint on the derivation rather than by `induction` because
   Rule App-Prim needs the statement for every argument of its
-  Forall2 (eval Inf Φ Γ) args args', which Coq's auto-derived induction principle
-  does not supply.
+  Forall2 (eval (dec f) Φ Γ) args args', which Coq's auto-derived induction
+  principle does not supply.
+
+  Unlimited budget only, which is why the fuel comes in as k0 with a k0 = Inf
+  premise instead of being left free. At Fin 0 Rule Out-Of-Fuel takes the
+  solvable literal ELit l to EBot BUndefined, and no rule of Solvable accepts
+  a bottom. The premise is what lets the out-of-fuel case close by
+  discriminate.
 *)
 Fixpoint solvable_eval_solvable (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
   (Heval : eval k0 Φ Γ e v) {struct Heval} :

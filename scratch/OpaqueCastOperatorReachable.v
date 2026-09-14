@@ -181,8 +181,8 @@ Proof.
   - (* Rule App-Spine: the operator's only value is the kept cast, and the
        stepped term has no value *)
     match goal with
-    | [ Hop : pc_true ; env_with_cast ⊢ EVar "x" ⇓ ?ef',
-        Happ : pc_true ; env_with_cast ⊢ EApp ?ef' (ECon "E") ⇓ v |- _ ] =>
+    | [ Hop : eval _ pc_true env_with_cast (EVar "x") ?ef',
+        Happ : eval _ pc_true env_with_cast (EApp ?ef' (ECon "E")) v |- _ ] =>
         rewrite (written_operator_has_only_that_value Hcast ef' Hop) in Happ;
         exact (stepped_program_has_no_value v Happ)
     end.

@@ -225,55 +225,56 @@ Hypothesis cast_expr_concore : forall e γ,
   concore_expr e ->
   concore_expr (cast_expr e γ).
 
-Fixpoint concore_eval_closed_fix (Φ : path_condition) (Γ : environment) (e v : expr)
-  (Heval : Φ; Γ ⊢ e ⇓ v) {struct Heval} :
+Fixpoint concore_eval_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
+  (Heval : eval f0 Φ Γ e v) {struct Heval} :
   sat Φ = true -> concrete_env Γ -> concore_relaxed e -> concore_expr v
-with concore_fold_closed_fix (Φ : path_condition) (Γ : environment) (e : expr)
+with concore_fold_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e : expr)
   (alts : list alt) (er : expr)
-  (Hfold : fold_alts Φ Γ e alts er) {struct Hfold} :
+  (Hfold : fold_alts f0 Φ Γ e alts er) {struct Hfold} :
   sat Φ = true -> concrete_env Γ -> concore_expr e -> Forall concore_alt alts -> concore_expr er.
 Proof.
 {
   destruct Heval as
-    [ Φ Γ x Γ' e e' Hlook Heval_x
-    | Φ Γ x Hnone
-    | Φ Γ l
-    | Φ Γ d
-    | Φ Γ e γ e' Heval_e
-    | Φ Γ Γ' x eb ea eb' Heval_b
-    | Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
-    | Φ Γ b
-    | Φ Γ ef ea p args args' Hunspool Harity Hargs
-    | Φ Γ x e
-    | Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | Φ Γ b ea
-    | Φ Γ es alts es' er Heval_es Hfold
-    | Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
-    | Φ Γ γ
-    | Φ Γ e Hunsat
-    | Φ Γ τ
+    [ k Φ Γ x Γ' e e' Hlook Heval_x
+    | k Φ Γ x Hnone
+    | k Φ Γ l
+    | k Φ Γ d
+    | k Φ Γ e γ e' Heval_e
+    | k Φ Γ Γ' x eb ea eb' Heval_b
+    | k Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
+    | k Φ Γ b
+    | k Φ Γ ef ea p args args' Hunspool Harity Hargs
+    | k Φ Γ x e
+    | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | k Φ Γ b ea
+    | k Φ Γ es alts es' er Heval_es Hfold
+    | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
+    | k Φ Γ γ
+    | k Φ Γ e Hunsat
+    | k Φ Γ τ
+    | Φ Γ e
     ]; intros Hsat Henv Hcon.
   - (* Eval_Var *)
     destruct (lookup_env_concrete Γ x Γ' e Henv Hlook) as [Henv' He].
-    exact (concore_eval_closed_fix Φ Γ' e e' Heval_x Hsat Henv' (Rel_Exact e He)).
+    exact (concore_eval_closed_fix (dec k) Φ Γ' e e' Heval_x Hsat Henv' (Rel_Exact e He)).
   - (* Eval_SymVar *) constructor.
   - (* Eval_Lit *) constructor.
   - (* Eval_Con *) constructor.
   - (* Eval_Cast *)
     apply cast_expr_concore.
-    exact (concore_eval_closed_fix Φ Γ e e' Heval_e Hsat Henv (relaxed_cast_inv e γ Hcon)).
+    exact (concore_eval_closed_fix (dec k) Φ Γ e e' Heval_e Hsat Henv (relaxed_cast_inv e γ Hcon)).
   - (* Eval_AppAbs *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
     inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | ]; subst.
-    apply (concore_eval_closed_fix Φ (extend_env Γ' x Γ ea) eb eb' Heval_b Hsat).
+    apply (concore_eval_closed_fix (dec k) Φ (extend_env Γ' x Γ ea) eb eb' Heval_b Hsat).
     + apply concrete_env_extend; assumption.
     + apply Rel_Exact; assumption.
   - (* Eval_AppSpine: the operator's value goes back in operator position,
        and nothing is known about its shape. Rel_App is what absorbs that. *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
-    apply (concore_eval_closed_fix Φ Γ (EApp ef' ea) er Heval_app2 Hsat Henv).
+    apply (concore_eval_closed_fix (dec k) Φ Γ (EApp ef' ea) er Heval_app2 Hsat Henv).
     apply Rel_App; [| exact Ha].
-    exact (concore_eval_closed_fix Φ Γ ef ef' Heval_f Hsat Henv (Rel_Exact ef Hf)).
+    exact (concore_eval_closed_fix (dec k) Φ Γ ef ef' Heval_f Hsat Henv (Rel_Exact ef Hf)).
   - (* Eval_Bot *)
     exact (relaxed_plain (EBot b) Hcon).
   - (* Eval_AppPrim *)
@@ -288,7 +289,7 @@ Proof.
     + constructor.
     + inversion Hcon_args as [| a0 tl0 Hcon_a Hcon_tl]; subst.
       constructor.
-      * exact (concore_eval_closed_fix Φ Γ a a' Ha Hsat Henv (Rel_Exact a Hcon_a)).
+      * exact (concore_eval_closed_fix (dec k) Φ Γ a a' Ha Hsat Henv (Rel_Exact a Hcon_a)).
       * exact (IH Hcon_tl).
   - (* Eval_Lam *)
     constructor; [assumption |].
@@ -298,7 +299,7 @@ Proof.
        operator is whatever was under the arrow cast. Rel_Cast of Rel_App. *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
     inversion Hf as [| | | | | | | | e0 γ0 He | | | | | ]; subst.
-    apply (concore_eval_closed_fix Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
+    apply (concore_eval_closed_fix (dec k) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed Hsat Henv).
     apply Rel_Cast. apply Rel_App; [exact He | apply Con_Cast; exact Ha].
   - (* Eval_AppBot *)
@@ -306,24 +307,27 @@ Proof.
   - (* Eval_Case *)
     pose proof (relaxed_plain (ECase es alts) Hcon) as Hc.
     inversion Hc as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
-    apply (concore_fold_closed_fix Φ Γ (merge es') alts er Hfold Hsat Henv);
+    apply (concore_fold_closed_fix (dec k) Φ Γ (merge es') alts er Hfold Hsat Henv);
       [| assumption].
     apply merge_concore.
-    exact (concore_eval_closed_fix Φ Γ es es' Heval_es Hsat Henv (Rel_Exact es Hcon_es)).
+    exact (concore_eval_closed_fix (dec k) Φ Γ es es' Heval_es Hsat Henv (Rel_Exact es Hcon_es)).
   - (* Eval_If *)
     exfalso. apply (not_concore_if ec et ef).
     exact (relaxed_plain (EIf ec et ef) Hcon).
   - (* Eval_Coercion *) constructor.
   - (* Eval_Prune *) constructor.
   - (* Eval_Type *) constructor.
+  - (* Eval_OutOfFuel: the budget gives up with EBot BUndefined, which the
+       stricter predicate accepts just as the original one does *)
+    constructor.
 }
 {
   destruct Hfold as
-    [ Φ Γ ec et ef alts et' ef' pc_c Hpc Hfold_t Hfold_f
-    | Φ Γ ec et ef alts Hpc_none
-    | Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
-    | Φ Γ b alts
-    | Φ Γ e alts Hnotif Hnoalt Hnotbot
+    [ k Φ Γ ec et ef alts et' ef' pc_c Hpc Hfold_t Hfold_f
+    | k Φ Γ ec et ef alts Hpc_none
+    | k Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
+    | k Φ Γ b alts
+    | k Φ Γ e alts Hnotif Hnoalt Hnotbot
     ]; intros Hsat Henv Hcon Halts.
   - exfalso. apply (not_concore_if ec et ef). assumption.
   - exfalso. apply (not_concore_if ec et ef). assumption.
@@ -332,7 +336,7 @@ Proof.
     { apply decompose_con_app_concore with (e := e) (d := d); assumption. }
     assert (Hep : concore_expr ep).
     { apply find_alt_concore with (d := d) (alts := alts) (xs := xs); assumption. }
-    apply (concore_eval_closed_fix Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat).
+    apply (concore_eval_closed_fix (dec k) Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat).
     + apply concrete_env_extend_multi; assumption.
     + apply Rel_Exact; assumption.
   - (* FoldAlts_Bot *) exact Hcon.
@@ -350,7 +354,7 @@ Lemma concore_eval_closed : forall Γ e v,
   concore_expr v.
 Proof.
   intros Γ e v Henv Hcon Heval.
-  exact (concore_eval_closed_fix pc_true Γ e v Heval sat_pc_true Henv (Rel_Exact e Hcon)).
+  exact (concore_eval_closed_fix Inf pc_true Γ e v Heval sat_pc_true Henv (Rel_Exact e Hcon)).
 Qed.
 
 (* And the restriction means what it was meant to mean. *)

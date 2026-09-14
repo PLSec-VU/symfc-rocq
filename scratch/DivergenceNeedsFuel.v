@@ -88,11 +88,11 @@ Proof.
   intros Φ Γ HR Hsat. induction HR.
   - intros v Hev. inversion Hev; subst.
     + rewrite H in H1. injection H1 as ? ?; subst.
-      eexists. eapply eval_w; [exact Hsat | exact H4].
+      eexists. eapply eval_w; [exact Hsat | eassumption].
     + congruence.
     + congruence.
   - intros v Hev. inversion Hev; subst.
-    + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. exact H4.
+    + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. eassumption.
     + congruence.
     + congruence.
 Qed.
@@ -117,26 +117,29 @@ Lemma loop_has_no_value : forall Φ Γ e v,
   Φ ; Γ ⊢ e ⇓ v -> sat Φ = true -> LoopCfg Γ e -> False.
 Proof.
   intros Φ Γ e v H.
-  induction H; intros Hsat HL;
+  inf_induction H; intros Hsat HL;
     try (inversion HL; unfold omega, loop_body, w in *; discriminate).
   - (* Rule App-Abs *)
     inversion HL; subst.
-    + apply IHeval; [exact Hsat | apply LC_Var; apply resolves_extend_w].
-    + apply IHeval; [exact Hsat |].
-      apply LC_Var. apply resolves_extend_var. exact H2.
+    + apply IHeval; [reflexivity | exact Hsat | apply LC_Var; apply resolves_extend_w].
+    + apply IHeval; [reflexivity | exact Hsat |].
+      apply LC_Var. apply resolves_extend_var. assumption.
   - (* Rule App-Spine *)
     inversion HL; subst.
     + (* head is the literal lambda w; Rule Lam turns it into the closure *)
-      assert (Hef : ef' = EClos Γ floop loop_body) by (apply (eval_w Φ Γ ef' Hsat H1)).
-      subst ef'. apply IHeval2; [exact Hsat | apply LC_ClosW].
-    + exfalso. apply H. apply Whnf_Clos.
+      assert (Hef : ef' = EClos Γ floop loop_body)
+        by (apply (eval_w Φ Γ ef' Hsat); assumption).
+      subst ef'. apply IHeval2; [reflexivity | exact Hsat | apply LC_ClosW].
+    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
+      apply Whnf_Clos.
     + (* head is f; the chain resolves it to the closure *)
       match goal with
-      | [ HR : ResolvesToW Γ |- _ ] =>
-          destruct (eval_loop_var Φ Γ HR Hsat ef' H1) as [Γ0 Hef]; subst ef';
-          apply IHeval2; [exact Hsat | apply LC_ClosVar; exact HR]
+      | [ HR : ResolvesToW Γ, He : eval _ Φ Γ (EVar floop) ef' |- _ ] =>
+          destruct (eval_loop_var Φ Γ HR Hsat ef' He) as [Γ0 Hef]; subst ef';
+          apply IHeval2; [reflexivity | exact Hsat | apply LC_ClosVar; exact HR]
       end.
-    + exfalso. apply H. apply Whnf_Clos.
+    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
+      apply Whnf_Clos.
   - (* Rule App-Prim *)
     inversion HL; subst; unfold omega, loop_body, w in H; simpl in H;
       injection H as ? ?; discriminate.
@@ -196,7 +199,10 @@ Section CompletenessFailsOnDivergentArm.
   Proof.
     intros [v Heval]. unfold e_div in Heval.
     inversion Heval; subst.
-    - eapply omega_diverges; [apply Hfeas | exact H8].
+    - match goal with
+      | [ H : eval _ _ _ omega _ |- _ ] =>
+          eapply omega_diverges; [apply Hfeas | exact H]
+      end.
     - congruence.
   Qed.
 End CompletenessFailsOnDivergentArm.
@@ -210,7 +216,10 @@ Theorem diverges_regardless_of_any_model : forall Φ x l',
 Proof.
   intros Φ x l' Hsat Hfeas [v Heval].
   inversion Heval; subst.
-  - eapply omega_diverges; [apply Hfeas | exact H8].
+  - match goal with
+    | [ H : eval _ _ _ omega _ |- _ ] =>
+        eapply omega_diverges; [apply Hfeas | exact H]
+    end.
   - congruence.
 Qed.
 
@@ -226,7 +235,26 @@ Qed.
 
    App-Bot is here for a reason.  Without it a truncated head (EBot
    BUndefined) in function position would block the next application, and
-   the loop would have a value at some depths and none at others. *)
+   the loop would have a value at some depths and none at others.
+
+   KEEP THIS LOCAL DEFINITION.  SymCore.v now indexes the real relation by a
+   fuel too, but the two indexes do not mean the same thing, so pointing this
+   section at eval would change what it proves.
+
+   Two differences.  First, eval_k below charges EVERY rule a unit of depth
+   and makes depth zero truncate and nothing else, while the real eval charges
+   only recursive premises and leaves every ordinary rule available at Fin 0
+   alongside Rule Out-Of-Fuel.  Second, eval_k carries eight rules, and the
+   real eval carries all eighteen, Rule Prune and Rule App-Prim included.
+
+   The first difference is what decides it.  depth_zero_misses and
+   depth_one_has_no_value below are true of eval_k and FALSE of the real eval:
+   at Fin 0 the whole if-expression already reduces to the wanted tree, because
+   Rule If passes Fin 0 to each of its premises, and each premise then takes
+   either its ordinary rule or Rule Out-Of-Fuel as it pleases.  So the real
+   eval has no least budget that works, and "two is the least depth that
+   works" is a statement about eval_k alone.  Retargeting would silently
+   delete it. *)
 Inductive eval_k : nat -> path_condition -> environment -> expr -> expr -> Prop :=
   | EvalK_OutOfFuel : forall Φ Γ e,
       eval_k 0 Φ Γ e (EBot BUndefined)
