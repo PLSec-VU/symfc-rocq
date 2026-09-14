@@ -122,7 +122,7 @@ Proof.
   intros Hcast.
   eapply Eval_Var; [exact lookup_x |].
   rewrite <- Hcast.
-  apply Eval_Cast. eapply Eval_Con. reflexivity.
+  apply Eval_Cast. apply eval_nullary_con.
 Qed.
 
 (* And it evaluates to nothing else. *)

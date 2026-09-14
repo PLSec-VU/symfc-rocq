@@ -66,6 +66,7 @@ Inductive concore_expr : expr -> Prop :=
   | Con_Bot_Undefined : concore_expr (EBot BUndefined)
   | Con_Bot_Unreachable : concore_expr (EBot BUnreachable)
   | Con_Bot_Raise : forall e, concore_expr e -> concore_expr (EBot (BRaise e))
+  | Con_Thunk : forall Γ e, concrete_env Γ -> concore_expr e -> concore_expr (EThunk Γ e)
 
 with concore_alt : alt -> Prop :=
   | Con_Alt : forall d xs ep, concore_expr ep -> concore_alt (Alt d xs ep)
@@ -208,6 +209,21 @@ Proof.
     + apply IH with (xs := xs); assumption.
 Qed.
 
+Lemma concore_con_value : forall Γ d args,
+  concrete_env Γ ->
+  Forall concore_expr args ->
+  concore_expr (make_con_app d (map (EThunk Γ) args)).
+Proof.
+  intros Γ d args HΓ Hargs. unfold make_con_app.
+  assert (Hthunks : Forall concore_expr (map (EThunk Γ) args)).
+  { induction Hargs; simpl; constructor; [apply Con_Thunk |]; assumption. }
+  assert (Hhead : concore_expr (ECon d) /\ opaque_cast_operator (ECon d) = false)
+    by (split; [apply Con_Con | reflexivity]).
+  revert Hhead. generalize (ECon d).
+  induction Hthunks as [| a tl Ha Htl IH]; intros h [Hh Hop]; simpl; [exact Hh |].
+  apply IH. split; [apply Con_App; assumption | reflexivity].
+Qed.
+
 Section AbstractSolverContracts.
 
 (* The contracts ConCore.v uses, read against the stricter predicate. No
@@ -256,6 +272,7 @@ Proof.
     | k Φ Γ γ
     | k Φ Γ e Hunsat
     | k Φ Γ τ
+    | k Φ Γ Γ' e e' Heval_t
     | Φ Γ e
     ]; intros Hsat Henv Hcon.
   - (* Eval_Var *)
@@ -264,19 +281,19 @@ Proof.
   - (* Eval_SymVar *) constructor.
   - (* Eval_Lit *) constructor.
   - (* Eval_Con *)
-    inversion Hcon; subst.
-    + assumption.
-    + (* the head of a constructor spine is not a cast, so the operator
-         restriction is met *)
-      apply Con_App; [assumption | assumption |].
-      destruct f; try reflexivity. simpl in Hunspool_con. discriminate.
+    apply concore_con_value; [exact Henv |].
+    inversion Hcon as [e0 Hc | f a Hf Ha | e0 γ Hr]; subst.
+    + exact (proj2 (unspool_app_concore _ [] _ _ Hunspool_con Hc (Forall_nil _))).
+    + simpl in Hunspool_con.
+      exact (proj2 (unspool_app_concore f [a] _ _ Hunspool_con Hf
+                      (Forall_cons a Ha (Forall_nil _)))).
     + no_con_head.
   - (* Eval_Cast *)
     apply cast_expr_concore.
     exact (concore_eval_closed_fix (dec k) Φ Γ e e' Heval_e Hsat Henv (relaxed_cast_inv e γ Hcon)).
   - (* Eval_AppAbs *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
-    inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | ]; subst.
+    inversion Hf as [| | | | | | Γ0 x0 body Henv' Hbody | | | | | | | | ]; subst.
     apply (concore_eval_closed_fix (dec k) Φ (extend_env Γ' x Γ ea) eb eb' Heval_b Hsat).
     + apply concrete_env_extend; assumption.
     + apply Rel_Exact; assumption.
@@ -309,7 +326,7 @@ Proof.
   - (* Eval_AppCast: the pushed term is an application under a cast, and its
        operator is whatever was under the arrow cast. Rel_Cast of Rel_App. *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
-    inversion Hf as [| | | | | | | | e0 γ0 He | | | | | ]; subst.
+    inversion Hf as [| | | | | | | | e0 γ0 He | | | | | | ]; subst.
     apply (concore_eval_closed_fix (dec k) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed Hsat Henv).
     apply Rel_Cast. apply Rel_App; [exact He | apply Con_Cast; exact Ha].
@@ -317,7 +334,7 @@ Proof.
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha]. exact Hf.
   - (* Eval_Case *)
     pose proof (relaxed_plain (ECase es alts) Hcon) as Hc.
-    inversion Hc as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | ]; subst.
+    inversion Hc as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | | ]; subst.
     apply (concore_fold_closed_fix (dec k) Φ Γ (merge Γ es') alts er Hfold Hsat Henv);
       [| assumption].
     apply merge_concore.
@@ -328,6 +345,10 @@ Proof.
   - (* Eval_Coercion *) constructor.
   - (* Eval_Prune *) constructor.
   - (* Eval_Type *) constructor.
+  - (* Eval_Thunk *)
+    pose proof (relaxed_plain (EThunk Γ' e) Hcon) as Hc.
+    inversion Hc as [| | | | | | | | | | | | | | Γ0 e0 Henv' He]; subst.
+    exact (concore_eval_closed_fix (dec k) Φ Γ' e e' Heval_t Hsat Henv' (Rel_Exact e He)).
   - (* Eval_OutOfFuel: the budget gives up with EBot BUndefined, which the
        stricter predicate accepts just as the original one does *)
     constructor.
@@ -374,7 +395,7 @@ Lemma concore_app_cast_operator_is_an_arrow : forall eb γ a,
   exists γ_a γ_r, decomp_coerc_arrow γ = Some (γ_a, γ_r).
 Proof.
   intros eb γ a H.
-  inversion H as [| | | | f a0 Hf Ha Hop | | | | | | | | | ]; subst.
+  inversion H as [| | | | f a0 Hf Ha Hop | | | | | | | | | | ]; subst.
   simpl in Hop.
   destruct (decomp_coerc_arrow γ) as [[γ_a γ_r] |] eqn:Hd.
   - exists γ_a, γ_r. reflexivity.
