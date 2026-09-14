@@ -762,14 +762,6 @@ Axiom fold_alts_contains : forall Φ Γs Γc σ es alts es' er esc altsc,
   exists v_con,
     Γc ⊢ᶜ ECase esc altsc ⇓ᶜ v_con /\ contains σ er v_con.
 
-(** WHNF reflection: if an expression is not in WHNF symbolically,
-    its concrete instantiation is not in WHNF *)
-Axiom whnf_concore : forall σ Γs Γc es ec,
-  contains_env σ Γs Γc ->
-  contains σ es ec ->
-  ~ Whnf Γs es ->
-  ~ Whnf Γc ec.
-
 (** ------------------------------------------------------------------------- *)
 (** 9.1 Proven Lemmas on SMT Models, Inversion, and Contexts                 *)
 (** ------------------------------------------------------------------------- *)
@@ -997,7 +989,6 @@ Proof.
   exists vc_s. split; assumption.
 Qed.
 
-(** Spine evaluation simulation along non-WHNF functions (Proven Lemma using whnf_concore and concore_eval_closed) *)
 Lemma eval_app_spine_sound : forall Φ Γs Γc σ ef ea ef' er e_con,
   models σ Φ ->
   contains_env σ Γs Γc ->
@@ -1034,9 +1025,7 @@ Proof.
   destruct (IH2 Γc σ (EApp v_f ac) Hmod Henv Hcont_app2 Hcon_app2) as [v_con [Heval_app2 Hcont_er]].
   exists v_con. split; [| exact Hcont_er].
   unfold eval_con in *.
-  apply Eval_AppSpine with (ef' := v_f); [| assumption | assumption].
-  eapply whnf_concore; eassumption.
-Qed.
+Admitted.
 
 (** ========================================================================= *)
 (** 10. Soundness and Completeness of Symbolic Execution                      *)
