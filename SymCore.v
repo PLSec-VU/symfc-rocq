@@ -245,6 +245,48 @@ Fixpoint is_op_app (e : expr) : bool :=
   | _ => false
   end.
 
+(** Helper: checks if the head of an application spine is a data constructor *)
+Fixpoint is_con_app (e : expr) : bool :=
+  match e with
+  | ECon _ => true
+  | EApp f _ => is_con_app f
+  | _ => false
+  end.
+
+(** A constructor-headed spine unspools to that constructor *)
+Lemma is_con_app_unspool_gen : forall e args,
+  is_con_app e = true ->
+  exists d args0, unspool_app e args = (ECon d, args0).
+Proof.
+  induction e; intros args H; simpl in H; try discriminate.
+  - exists d, args. reflexivity.
+  - simpl. apply IHe1. exact H.
+Qed.
+
+Lemma is_con_app_unspool : forall e,
+  is_con_app e = true ->
+  exists d args, unspool_app e [] = (ECon d, args).
+Proof. intros e H. apply is_con_app_unspool_gen. exact H. Qed.
+
+(** A spine has one head, so it cannot be headed by both a primitive
+    operation and a data constructor *)
+Lemma op_app_not_con_app : forall e,
+  is_op_app e = true -> is_con_app e = false.
+Proof.
+  induction e; intros H; simpl in H; simpl; try discriminate; try reflexivity.
+  apply IHe1. exact H.
+Qed.
+
+(** Unspooling to a constructor head is exactly is_con_app *)
+Lemma unspool_is_con_app : forall e args d args0,
+  unspool_app e args = (ECon d, args0) ->
+  is_con_app e = true.
+Proof.
+  induction e; intros args d0 args0 H; simpl in H; try discriminate.
+  - reflexivity.
+  - simpl. eapply IHe1. exact H.
+Qed.
+
 Inductive Solvable (Γ : environment) : expr -> Prop :=
   | Solvable_Lit : forall l,
       Solvable Γ (ELit l)
@@ -260,13 +302,18 @@ Inductive Solvable (Γ : environment) : expr -> Prop :=
       Solvable Γ (EApp f a).
 
 (** Fig. 3's WHNF also lists a bare λx.e; here only the closure form is a
-    value, because Rule App-Abs applies to a closure. *)
+    value, because Rule App-Abs applies to a closure.
+
+    A data constructor applied to arguments is a value: what counts is that
+    the head of the application spine is a constructor. The arguments are
+    not required to be values. *)
 Inductive Whnf (Γ : environment) : expr -> Prop :=
   | Whnf_Solvable : forall e,
       Solvable Γ e ->
       Whnf Γ e
-  | Whnf_Con : forall d,
-      Whnf Γ (ECon d)
+  | Whnf_Con : forall e d args,
+      unspool_app e [] = (ECon d, args) ->
+      Whnf Γ e
   | Whnf_Bot : forall b,
       Whnf Γ (EBot b)
   | Whnf_Clos : forall Γ_def x body,
@@ -283,6 +330,13 @@ Inductive Whnf (Γ : environment) : expr -> Prop :=
       Whnf Γ et ->
       Whnf Γ ef ->
       Whnf Γ (EIf ec et ef).
+
+(** Closes the Whnf_Con / Eval_Con case of an inversion on an expression
+    whose spine head is visibly not a data constructor. *)
+Ltac no_con_head :=
+  match goal with
+  | [ H : unspool_app _ _ = (ECon _, _) |- _ ] => simpl in H; discriminate H
+  end.
 
 (** ------------------------------------------------------------------------- *)
 (** 7.1 expr_to_pc Reads a Formula Off the Syntax Alone                       *)
@@ -370,24 +424,43 @@ Proof. intros Γ e γ H. inversion H. Qed.
 Lemma solvable_not_if : forall Γ c t f, ~ Solvable Γ (EIf c t f).
 Proof. intros Γ c t f H. inversion H. Qed.
 
+(** A solvable term is an SMT term, so the head of its spine is never a data
+    constructor *)
+Lemma solvable_not_con_app : forall Γ e,
+  Solvable Γ e -> is_con_app e = false.
+Proof.
+  intros Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; simpl;
+    try reflexivity.
+  exact IHf.
+Qed.
+
 (** WHNF is decidable *)
 Fixpoint whnf_dec (Γ : environment) (e : expr) : {Whnf Γ e} + {~ Whnf Γ e}.
 Proof.
   destruct (solvable_dec Γ e) as [S | NS].
   - left. apply Whnf_Solvable. assumption.
   - destruct e.
-    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
+    + right. intros H. inversion H; subst; [contradiction | no_con_head].
     + (* ELit *) exfalso. apply NS. apply Solvable_Lit.
     + (* EPrimOp *) exfalso. apply NS. apply Solvable_PrimOp.
-    + left. apply Whnf_Con.
-    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
-    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
+    + left. eapply Whnf_Con. reflexivity.
+    + (* EApp *)
+      destruct (is_con_app (EApp e1 e2)) eqn:Hcon.
+      * left. destruct (is_con_app_unspool _ Hcon) as [d [args Hu]].
+        exact (Whnf_Con Γ (EApp e1 e2) d args Hu).
+      * right. intros H. inversion H; subst; [contradiction |].
+        match goal with
+        | [ Hu : unspool_app _ _ = (ECon _, _) |- _ ] =>
+            apply unspool_is_con_app in Hu; rewrite Hu in Hcon; discriminate
+        end.
+    + right. intros H. inversion H; subst; [contradiction | no_con_head].
     + left. apply Whnf_Clos.
-    + right. intros H. inversion H; subst; [contradiction | inversion H0..].
+    + right. intros H. inversion H; subst; [contradiction | no_con_head].
     + destruct (whnf_dec Γ e) as [W | NW].
       * left. apply Whnf_Cast. assumption.
       * right. intros H. inversion H; subst.
         -- apply (solvable_not_cast Γ e c); auto.
+        -- no_con_head.
         -- apply NW; auto.
     + left. apply Whnf_Coercion.
     + left. apply Whnf_Type.
@@ -397,12 +470,15 @@ Proof.
            ++ left. apply Whnf_If; auto.
            ++ right. intros H. inversion H; subst.
               ** apply (solvable_not_if Γ e1 e2 e3); auto.
+              ** no_con_head.
               ** apply NW3; auto.
         -- right. intros H. inversion H; subst.
            ++ apply (solvable_not_if Γ e1 e2 e3); auto.
+           ++ no_con_head.
            ++ apply NW2; auto.
       * right. intros H. inversion H; subst.
         -- apply (solvable_not_if Γ e1 e2 e3); auto.
+        -- no_con_head.
         -- apply NS1; auto.
     + left. apply Whnf_Bot.
 Defined.
@@ -412,8 +488,8 @@ Lemma not_whnf_lam : forall Γ x body,
   ~ Whnf Γ (ELam x body).
 Proof.
   intros Γ x body Hw.
-  inversion Hw; subst.
-  inversion H.
+  inversion Hw; subst; [| no_con_head].
+  match goal with [ H : Solvable _ _ |- _ ] => inversion H end.
 Qed.
 
 (** Helper: path-condition convertible primitive application is an operator application *)
@@ -573,9 +649,12 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   | Eval_Lit : forall f Φ Γ l,
       eval f Φ Γ (ELit l) (ELit l)
 
-  (** Rule Con: Data constructor reflexivity *)
-  | Eval_Con : forall f Φ Γ d,
-      eval f Φ Γ (ECon d) (ECon d)
+  (** Rule Con: a constructor spine is its own value. The arguments stay as
+      they are written: fold-alts binds them into the environment as thunks,
+      so evaluating them here would force them too early. *)
+  | Eval_Con : forall f Φ Γ e d args,
+      unspool_app e [] = (ECon d, args) ->
+      eval f Φ Γ e e
 
   (** Rule Cast: Evaluate expression and simplify cast *)
   | Eval_Cast : forall f Φ Γ e γ e',
@@ -952,6 +1031,12 @@ Lemma solvable_app_eval_false : forall Φ Γ e a v,
 Proof.
   intros Φ Γ e a v Hsat Hsolv Hnotop Heval.
   inversion Heval; subst.
+  - (* Eval_Con: a solvable head is never a constructor *)
+    match goal with
+    | [ Hu : unspool_app _ _ = (ECon _, _) |- _ ] =>
+        apply unspool_is_con_app in Hu; simpl in Hu;
+        rewrite (solvable_not_con_app Γ e Hsolv) in Hu; discriminate
+    end.
   - (* Eval_AppAbs *)
     inversion Hsolv; subst; try discriminate.
   - (* Eval_AppSpine *)
@@ -1020,7 +1105,7 @@ Proof.
     [ k Φ Γ x Γ' e e' Hlookup Heval_x
     | k Φ Γ x Hnone
     | k Φ Γ l
-    | k Φ Γ d
+    | k Φ Γ e d args Hunspool
     | k Φ Γ e γ e' Heval_e
     | k Φ Γ Γ' x eb ea eb' Heval_b
     | k Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
@@ -1040,7 +1125,7 @@ Proof.
     inversion Hsolv; subst. rewrite Hlookup in H0. discriminate.
   - (* Eval_SymVar *) exact Hsolv.
   - (* Eval_Lit *) exact Hsolv.
-  - (* Eval_Con *) inversion Hsolv.
+  - (* Eval_Con *) exact Hsolv.
   - (* Eval_Cast *) inversion Hsolv.
   - (* Eval_AppAbs: a closure is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
@@ -1085,6 +1170,12 @@ Proof.
     assert (Hsat : length args0 = primop_arity p0)
       by (subst v_f; eapply reduce_prim_saturated; exact Hunspool).
     inversion Heval; subst.
+    + (* Eval_Con: a solvable head is never a constructor *)
+      match goal with
+      | [ Hu : unspool_app _ _ = (ECon _, _) |- _ ] =>
+          apply unspool_is_con_app in Hu; simpl in Hu;
+          rewrite (solvable_not_con_app _ _ Hsolv) in Hu; discriminate
+      end.
     + (* Eval_AppAbs: v_f cannot be a closure *)
       rewrite <- H in Hsolv. inversion Hsolv.
     + (* Eval_AppSpine: v_f is already Whnf *)
@@ -1144,6 +1235,7 @@ Lemma eval_bot_same : forall Φ Γ b v,
 Proof.
   intros Φ Γ b v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - reflexivity.
   - rewrite Hsat in H. discriminate.
 Qed.
@@ -1157,6 +1249,7 @@ Proof.
   intros Φ Γ l v Hsat Heval.
   inversion Heval; subst.
   - reflexivity.
+  - no_con_head.
   - rewrite Hsat in H. discriminate.
 Qed.
 
@@ -1172,6 +1265,39 @@ Proof.
   - rewrite Hsat in H; discriminate.
 Qed.
 
+(** A constructor spine is its own value, and it is the only value it has:
+    every other application rule wants a different head. *)
+Lemma eval_con_spine_same : forall Φ Γ e d args v,
+  sat Φ = true ->
+  unspool_app e [] = (ECon d, args) ->
+  Φ ; Γ ⊢ e ⇓ v ->
+  v = e.
+Proof.
+  intros Φ Γ e d args v Hsat Hu Heval.
+  destruct e; simpl in Hu; try discriminate.
+  - (* ECon *)
+    injection Hu as ? ?; subst.
+    exact (eval_con_same Φ Γ d v Hsat Heval).
+  - (* EApp *)
+    inversion Heval; subst.
+    + reflexivity.
+    + simpl in Hu; discriminate.
+    + match goal with
+      | [ Hn : ~ Whnf _ e1 |- _ ] =>
+          exfalso; apply Hn;
+          destruct (is_con_app_unspool e1 (unspool_is_con_app e1 [e2] d args Hu))
+            as [d0 [args0 Hu0]];
+          exact (Whnf_Con Γ e1 d0 args0 Hu0)
+      end.
+    + match goal with
+      | [ Hp : unspool_app (EApp _ _) [] = (EPrimOp _, _) |- _ ] =>
+          simpl in Hp; rewrite Hu in Hp; discriminate
+      end.
+    + simpl in Hu; discriminate.
+    + simpl in Hu; discriminate.
+    + rewrite Hsat in *; discriminate.
+Qed.
+
 (** Evaluation of lambdas under a satisfiable path condition *)
 Lemma eval_lam_same : forall Φ Γ x body v,
   sat Φ = true ->
@@ -1180,6 +1306,7 @@ Lemma eval_lam_same : forall Φ Γ x body v,
 Proof.
   intros Φ Γ x body v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - reflexivity.
   - rewrite Hsat in H; discriminate.
 Qed.
@@ -1192,6 +1319,7 @@ Lemma eval_coercion_same : forall Φ Γ γ v,
 Proof.
   intros Φ Γ γ v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - reflexivity.
   - rewrite Hsat in H; discriminate.
 Qed.
@@ -1204,6 +1332,7 @@ Lemma eval_type_same : forall Φ Γ τ v,
 Proof.
   intros Φ Γ τ v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - rewrite Hsat in H; discriminate.
   - reflexivity.
 Qed.
@@ -1221,6 +1350,7 @@ Proof.
   inversion Heval; subst.
   - left. exists Γ', e. split; [assumption | assumption].
   - right. split; [assumption | reflexivity].
+  - no_con_head.
   - rewrite Hsat in H; discriminate.
 Qed.
 
@@ -1247,6 +1377,7 @@ Lemma eval_cast_inv : forall Φ Γ e γ v,
 Proof.
   intros Φ Γ e γ v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - exists e'. split; [assumption | reflexivity].
   - rewrite Hsat in H; discriminate.
 Qed.
@@ -1261,6 +1392,7 @@ Lemma eval_case_inv : forall Φ Γ es alts v,
 Proof.
   intros Φ Γ es alts v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - exists es'. split; [assumption | assumption].
   - rewrite Hsat in H; discriminate.
 Qed.
@@ -1278,6 +1410,7 @@ Lemma eval_if_inv : forall Φ Γ ec et ef v,
 Proof.
   intros Φ Γ ec et ef v Hsat Heval.
   inversion Heval; subst.
+  - no_con_head.
   - exists ec', et', ef', pc_c. split; [assumption|].
     split; [assumption|]. split; [assumption|].
     split; [assumption|reflexivity].
@@ -1439,7 +1572,7 @@ Proof.
     [ k Φ Γ x Γ' e e' Hlook Heval_x
     | k Φ Γ x Hnone
     | k Φ Γ l
-    | k Φ Γ d
+    | k Φ Γ e d args Hunspool
     | k Φ Γ e γ e' Heval_e
     | k Φ Γ Γ' x eb ea eb' Heval_b
     | k Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
@@ -1464,7 +1597,7 @@ Proof.
   - (* Eval_Lit *)
     exists 0%nat. intros n _. apply Eval_Lit.
   - (* Eval_Con *)
-    exists 0%nat. intros n _. apply Eval_Con.
+    exists 0%nat. intros n _. eapply Eval_Con. exact Hunspool.
   - (* Eval_Cast *)
     destruct (eval_fin_of_inf_fix Inf Φ Γ e e' Heval_e eq_refl) as [h Hh].
     exists (S h). intros n Hn. destruct n as [| m]; [lia |].
@@ -1632,15 +1765,18 @@ Proof.
   apply H1. apply (Hmono 0%nat 1%nat); [lia | exact H0].
 Qed.
 
-Lemma bigger_budget_loses_the_value : forall Φ Γ d,
+Lemma bigger_budget_loses_the_value : forall Φ Γ x ea,
   sat Φ = true ->
-  eval (Fin 0) Φ Γ (EApp (ECon d) (ECon d)) (EBot BUndefined)
-  /\ (forall v, ~ eval (Fin 1) Φ Γ (EApp (ECon d) (ECon d)) v).
+  lookup_env Γ x = None ->
+  eval (Fin 0) Φ Γ (EApp (EVar x) ea) (EBot BUndefined)
+  /\ (forall v, ~ eval (Fin 1) Φ Γ (EApp (EVar x) ea) v).
 Proof.
-  intros Φ Γ d Hsat. split.
+  intros Φ Γ x ea Hsat Hnone. split.
   - apply Eval_OutOfFuel.
   - intros v H. inversion H; subst.
-    + match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end. apply Whnf_Con.
+    + no_con_head.
+    + match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
+      apply Whnf_Solvable. apply Solvable_Var. exact Hnone.
     + match goal with [ Hu : unspool_app _ _ = _ |- _ ] => simpl in Hu; discriminate Hu end.
     + congruence.
 Qed.
@@ -1669,13 +1805,14 @@ Definition self_app : expr := EApp self_app_fun self_app_fun.
 
 Lemma self_app_fun_not_whnf : forall Γ, ~ Whnf Γ self_app_fun.
 Proof.
-  intros Γ H. inversion H; subst. inversion H0.
+  intros Γ H. inversion H; subst; [| no_con_head].
+  match goal with [ Hs : Solvable _ _ |- _ ] => inversion Hs end.
 Qed.
 
 Lemma eval_self_app_fun : forall Φ Γ v,
   sat Φ = true -> Φ ; Γ ⊢ self_app_fun ⇓ v -> v = EClos Γ self_app_var self_app_body.
 Proof.
-  intros Φ Γ v Hsat H. inversion H; subst; [reflexivity | congruence].
+  intros Φ Γ v Hsat H. inversion H; subst; [no_con_head | reflexivity | congruence].
 Qed.
 
 (** The chain of indirections that still ends at the loop lambda. *)
@@ -1706,7 +1843,8 @@ Qed.
 Lemma self_app_var_not_whnf : forall Γ,
   ResolvesToSelfApp Γ -> ~ Whnf Γ (EVar self_app_var).
 Proof.
-  intros Γ HR H. inversion H; subst. inversion H0; subst.
+  intros Γ HR H. inversion H; subst; [| no_con_head].
+  match goal with [ Hs : Solvable _ _ |- _ ] => inversion Hs; subst end.
   destruct HR; congruence.
 Qed.
 
@@ -1721,10 +1859,12 @@ Proof.
     + rewrite H in H1. injection H1 as ? ?; subst.
       eexists. eapply eval_self_app_fun; [exact Hsat | eassumption].
     + congruence.
+    + no_con_head.
     + congruence.
   - intros v Hev. inversion Hev; subst.
     + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. eassumption.
     + congruence.
+    + no_con_head.
     + congruence.
 Qed.
 
@@ -1752,6 +1892,11 @@ Proof.
   induction H; try discriminate Hkf; subst;
     intros Hsat HL;
     try (inversion HL; unfold self_app, self_app_body, self_app_fun in *; discriminate).
+  - (* Rule Con: no loop shape has a constructor at the head of its spine *)
+    inversion HL; subst;
+      match goal with
+      | [ Hu : unspool_app _ _ = (ECon _, _) |- _ ] => discriminate Hu
+      end.
   - (* Rule App-Abs *)
     inversion HL; subst.
     + apply IHeval; [reflexivity | exact Hsat | apply SA_Var; apply self_app_extend_fun].

@@ -238,7 +238,7 @@ Proof.
     [ k Φ Γ x Γ' e e' Hlook Heval_x
     | k Φ Γ x Hnone
     | k Φ Γ l
-    | k Φ Γ d
+    | k Φ Γ esp d args Hunspool_con
     | k Φ Γ e γ e' Heval_e
     | k Φ Γ Γ' x eb ea eb' Heval_b
     | k Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
@@ -259,7 +259,14 @@ Proof.
     exact (concore_eval_closed_fix (dec k) Φ Γ' e e' Heval_x Hsat Henv' (Rel_Exact e He)).
   - (* Eval_SymVar *) constructor.
   - (* Eval_Lit *) constructor.
-  - (* Eval_Con *) constructor.
+  - (* Eval_Con *)
+    inversion Hcon; subst.
+    + assumption.
+    + (* the head of a constructor spine is not a cast, so the operator
+         restriction is met *)
+      apply Con_App; [assumption | assumption |].
+      destruct f; try reflexivity. simpl in Hunspool_con. discriminate.
+    + no_con_head.
   - (* Eval_Cast *)
     apply cast_expr_concore.
     exact (concore_eval_closed_fix (dec k) Φ Γ e e' Heval_e Hsat Henv (relaxed_cast_inv e γ Hcon)).

@@ -36,6 +36,8 @@ Lemma eval_app_cast_non_arrow_stuck : forall Φ Γ eb γ ea v,
 Proof.
   intros Φ Γ eb γ ea v Hsat Hdec Heval.
   inversion Heval; subst.
+  - (* Rule Con: the spine head is the cast, not a constructor *)
+    no_con_head.
   - (* Rule App-Spine: the operator is a cast *)
     match goal with
     | [ H : is_cast (ECast eb γ) = false |- _ ] => discriminate H

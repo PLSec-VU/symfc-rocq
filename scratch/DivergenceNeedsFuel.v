@@ -30,13 +30,13 @@ Definition omega : expr := EApp w w.
    reduces by Rule Lam to a closure, and Rule App-Abs then unfolds the loop. *)
 Lemma w_not_whnf : forall Γ, ~ Whnf Γ w.
 Proof.
-  intros Γ H. inversion H; subst. inversion H0.
+  intros Γ H. inversion H; subst; [| no_con_head]. inversion H0.
 Qed.
 
 Lemma eval_w : forall Φ Γ v,
   sat Φ = true -> Φ ; Γ ⊢ w ⇓ v -> v = EClos Γ floop loop_body.
 Proof.
-  intros Φ Γ v Hsat H. inversion H; subst; [reflexivity | congruence].
+  intros Φ Γ v Hsat H. inversion H; subst; [no_con_head | reflexivity | congruence].
 Qed.
 
 (* The invariant.
@@ -75,7 +75,7 @@ Qed.
 Lemma resolves_var_not_whnf : forall Γ,
   ResolvesToW Γ -> ~ Whnf Γ (EVar floop).
 Proof.
-  intros Γ HR H. inversion H; subst. inversion H0; subst.
+  intros Γ HR H. inversion H; subst; [| no_con_head]. inversion H0; subst.
   destruct HR; congruence.
 Qed.
 
@@ -90,10 +90,12 @@ Proof.
     + rewrite H in H1. injection H1 as ? ?; subst.
       eexists. eapply eval_w; [exact Hsat | eassumption].
     + congruence.
+    + no_con_head.
     + congruence.
   - intros v Hev. inversion Hev; subst.
     + rewrite H in H1. injection H1 as ? ?; subst. apply IHHR. eassumption.
     + congruence.
+    + no_con_head.
     + congruence.
 Qed.
 
@@ -119,6 +121,11 @@ Proof.
   intros Φ Γ e v H.
   inf_induction H; intros Hsat HL;
     try (inversion HL; unfold omega, loop_body, w in *; discriminate).
+  - (* Rule Con: no loop configuration has a constructor at its spine head *)
+    inversion HL; subst;
+      match goal with
+      | [ Hu : unspool_app _ _ = (ECon _, _) |- _ ] => discriminate Hu
+      end.
   - (* Rule App-Abs *)
     inversion HL; subst.
     + apply IHeval; [reflexivity | exact Hsat | apply LC_Var; apply resolves_extend_w].
@@ -199,6 +206,7 @@ Section CompletenessFailsOnDivergentArm.
   Proof.
     intros [v Heval]. unfold e_div in Heval.
     inversion Heval; subst.
+    - no_con_head.
     - match goal with
       | [ H : eval _ _ _ omega _ |- _ ] =>
           eapply omega_diverges; [apply Hfeas | exact H]
@@ -216,6 +224,7 @@ Theorem diverges_regardless_of_any_model : forall Φ x l',
 Proof.
   intros Φ x l' Hsat Hfeas [v Heval].
   inversion Heval; subst.
+  - no_con_head.
   - match goal with
     | [ H : eval _ _ _ omega _ |- _ ] =>
         eapply omega_diverges; [apply Hfeas | exact H]

@@ -63,6 +63,8 @@ Section CompletenessFailsOnPlainEval.
   Proof.
     intros [v Heval]. unfold e_sym in Heval.
     inversion Heval; subst.
+    - (* Eval_Con: a branch has no constructor at the head of its spine *)
+      no_con_head.
     - (* Eval_If: the else branch must evaluate, but it is stuck *)
       match goal with
       | [ H : eval _ _ _ stuck_else _ |- _ ] =>
@@ -89,6 +91,7 @@ Theorem stuck_regardless_of_any_model : forall Φ x l l',
 Proof.
   intros Φ x l l' Hsat Hfeas [v Heval].
   inversion Heval; subst.
+  - no_con_head.
   - match goal with
     | [ H : eval _ _ _ (EApp (ELit _) _) _ |- _ ] =>
         eapply app_lit_stuck; [apply Hfeas | exact H]

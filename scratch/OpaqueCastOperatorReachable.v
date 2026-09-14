@@ -106,7 +106,7 @@ Lemma written_operator_is_not_a_value :
   ~ Whnf env_with_cast (EVar "x").
 Proof.
   intro H.
-  inversion H as [e0 Hsolv | | | | | | | ]; subst.
+  inversion H as [e0 Hsolv | | | | | | | ]; subst; [| no_con_head].
   inversion Hsolv as [| y Hnone | |]; subst.
   simpl in Hnone. discriminate.
 Qed.
@@ -122,7 +122,7 @@ Proof.
   intros Hcast.
   eapply Eval_Var; [exact lookup_x |].
   rewrite <- Hcast.
-  apply Eval_Cast. apply Eval_Con.
+  apply Eval_Cast. eapply Eval_Con. reflexivity.
 Qed.
 
 (* And it evaluates to nothing else. *)
@@ -144,7 +144,7 @@ Qed.
       under the cast were not a value. UNCHANGED. *)
 Lemma stepped_operator_is_a_value :
   Whnf env_with_cast kept_cast.
-Proof. apply Whnf_Cast. apply Whnf_Con. Qed.
+Proof. apply Whnf_Cast. eapply Whnf_Con. reflexivity. Qed.
 
 (* 5. FLIPPED. This used to read
 
@@ -178,6 +178,8 @@ Proof.
   intros Hcast v Heval.
   unfold eval_con, written_program in Heval.
   inversion Heval; subst.
+  - (* Rule Con: the spine head is a variable, not a constructor *)
+    no_con_head.
   - (* Rule App-Spine: the operator's only value is the kept cast, and the
        stepped term has no value *)
     match goal with

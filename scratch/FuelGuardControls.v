@@ -39,10 +39,12 @@ Example inf_prunes_out_of_fuel : forall Γ l v,
   eval Inf pc_true Γ (ELit l) v -> v = ELit l.
 Proof.
   intros Γ l v H.
-  (* one goal from Eval_Lit and one from Eval_Prune; the out-of-fuel case is
-     dropped by inversion because Fin 0 cannot unify with Inf *)
+  (* one goal from Eval_Lit, one from Eval_Con and one from Eval_Prune; the
+     out-of-fuel case is dropped by inversion because Fin 0 cannot unify
+     with Inf *)
   inversion H; subst.
   - reflexivity.
+  - no_con_head.
   - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
