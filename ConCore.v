@@ -539,11 +539,12 @@ Proof.
     | k Φ Γ econ d args Hunspool_con
     | k Φ Γ e γ e' Heval_e
     | k Φ Γ Γ' x eb ea eb' Heval_b
-    | k Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
+    | k Φ Γ ef ea ef' er Hcomp Heval_f Heval_app2
     | k Φ Γ b
     | k Φ Γ ef ea p args args' Hunspool Harity Hargs
     | k Φ Γ x e
     | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | k Φ Γ ec et ef ea er Heval_arms
     | k Φ Γ b ea
     | k Φ Γ es alts es' er Heval_es Hfold
     | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -598,6 +599,9 @@ Proof.
     apply (concore_eval_closed_fix (dec k) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed Hsat Henv).
     apply Con_Cast. apply Con_App; [assumption | apply Con_Cast; assumption].
+  - (* Eval_AppIf *)
+    exfalso. inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | | ]; subst.
+    apply (not_concore_if ec et ef). assumption.
   - (* Eval_AppBot *)
     inversion Hcon; subst. assumption.
   - (* Eval_Case *)
@@ -1263,8 +1267,9 @@ Proof.
     rewrite (solvable_not_con_app Γ e Hsolv) in H. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst.
-    apply H. apply Whnf_Solvable. exact Hf.
+    exact (comp_not_solvable _ _ H Hf).
   - right. exists p, args, args'. repeat split; assumption.
+  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. apply models_sat in Hmod. congruence.
