@@ -9,7 +9,7 @@
   of the application first, so the reducer answers a branch of folded terms.
 *)
 
-From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws.
+From SymCoreTheory Require Import SymCore ConCore CostLaws.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 

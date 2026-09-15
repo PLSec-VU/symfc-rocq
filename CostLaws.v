@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws.
+From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 
@@ -308,17 +308,11 @@ cast_expr_contains_k : forall σ S k es ec γ,
 
 Class ReducePrimContainsK : Prop :=
 reduce_prim_contains_k : forall σ S p ks args_s args_c,
+  Forall closed_term args_c ->
   Forall3 (contains_k σ S) ks args_s args_c ->
   exists k', k' <= list_sum ks + prim_slack args_c /\
     contains_k σ S k' (reduce_prim p args_s) (reduce_prim p args_c).
 
-Class ReducePrimIteContainsK : Prop :=
-reduce_prim_ite_contains_k : forall σ S k ec et ef pt pf l,
-  denotes S et pt ->
-  denotes S ef pf ->
-  contains_k σ S k (EIf ec et ef) (ELit l) ->
-  exists k', k' <= k + smt_size et + smt_size ef + 3 /\
-    contains_k σ S k' (reduce_prim op_ite (ec :: et :: ef :: nil)) (ELit l).
 
 Lemma forall3_of_forall2_contains : forall σ S args_s args_c,
   Forall2 (contains σ S) args_s args_c ->
@@ -339,17 +333,9 @@ Qed.
 
 Lemma reduce_prim_contains_of_k : ReducePrimContainsK -> ReducePrimContains.
 Proof.
-  intros Hlaw σ S p args_s args_c H.
+  intros Hlaw σ S p args_s args_c Hcl H.
   destruct (forall3_of_forall2_contains _ _ _ _ H) as [ks Hks].
-  destruct (Hlaw σ S p ks args_s args_c Hks) as [k' [_ Hk']].
-  exact (contains_k_erase _ _ _ _ _ Hk').
-Qed.
-
-Lemma reduce_prim_ite_contains_of_k : ReducePrimIteContainsK -> ReducePrimIteContains.
-Proof.
-  intros Hlaw σ S ec et ef pt pf l Ht Hf H.
-  destruct (contains_k_of_contains _ _ _ _ H) as [k Hk].
-  destruct (Hlaw σ S k ec et ef pt pf l Ht Hf Hk) as [k' [_ Hk']].
+  destruct (Hlaw σ S p ks args_s args_c Hcl Hks) as [k' [_ Hk']].
   exact (contains_k_erase _ _ _ _ _ Hk').
 Qed.
 
@@ -357,19 +343,18 @@ End CostLaws.
 
 Inductive SymFCCostLaws {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
   symfc_cost_laws :
-    SymFCLaws -> CastExprContainsK -> ReducePrimContainsK -> ReducePrimIteContainsK ->
+    ConCoreLaws -> CastExprContainsK -> ReducePrimContainsK ->
     SymFCCostLaws.
 
 Existing Class SymFCCostLaws.
 
-#[export] Instance symfc_laws_of_cost_laws `{laws : SymFCCostLaws} : SymFCLaws.
+#[export] Instance concore_laws_of_cost_laws `{laws : SymFCCostLaws} : ConCoreLaws.
 Proof. destruct laws; assumption. Qed.
 #[export] Instance cast_expr_contains_k_of_laws `{laws : SymFCCostLaws} : CastExprContainsK.
 Proof. destruct laws; assumption. Qed.
 #[export] Instance reduce_prim_contains_k_of_laws `{laws : SymFCCostLaws} : ReducePrimContainsK.
 Proof. destruct laws; assumption. Qed.
-#[export] Instance reduce_prim_ite_contains_k_of_laws `{laws : SymFCCostLaws} : ReducePrimIteContainsK.
-Proof. destruct laws; assumption. Qed.
+
 
 Section MergeCost.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver}

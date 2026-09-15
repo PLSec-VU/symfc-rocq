@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore CostLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 Open Scope string_scope.
