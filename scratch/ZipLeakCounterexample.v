@@ -619,6 +619,87 @@ Proof.
     + unfold id_fun. apply Eval_AppAbs. eapply Eval_Var; [reflexivity | apply Eval_Lit].
 Qed.
 
+Lemma case_low_fuel : forall c Φ v,
+  c <= 3 -> eval (Fin c) Φ · (ECase scrut alts) v ->
+  v = EBot BOutOfFuel \/ exists t j, v = nest (S (S (S j))) t /\ is_thunk t = true.
+Proof.
+  intros c Φ v Hc H.
+  destruct c as [| [| [| [| c]]]]; try lia;
+    [left; exact (eval_fin_zero_inv _ _ _ _ H) | | |];
+    inversion H; subst; try kill_rule;
+    match goal with
+    | [ Hs : eval _ _ _ scrut ?w, Hf : fold_alts _ _ _ (merge _ ?w) _ _ |- _ ] =>
+        rewrite dec_remaining in Hs, Hf
+    end.
+  - apply eval_fin_zero_inv in H5. subst. simpl in H7.
+    inversion H7; subst;
+      first [ left; reflexivity
+            | match goal with
+              | [ Hd : decompose_con_app _ = Some _ |- _ ] => discriminate Hd
+              | [ Hb : is_bot _ = false |- _ ] => discriminate Hb
+              end ].
+  - unfold scrut in H5. inversion H5; subst; try kill_rule.
+    match goal with [Hc : eval _ _ _ (ELit _) ?c, Hp : expr_to_pc _ ?c = Some _ |- _] =>
+      rewrite dec_remaining in Hc; apply eval_fin_zero_inv in Hc; subst; discriminate Hp end.
+  - unfold scrut in H5. inversion H5; subst; try kill_rule.
+    match goal with
+    | [ Ht : eval _ _ _ arm_t _, Hj : eval _ _ _ arm_f _ |- _ ] =>
+        rewrite dec_remaining in Ht, Hj;
+        unfold arm_t in Ht; inversion Ht; subst; try kill_rule;
+        unfold arm_f in Hj; inversion Hj; subst; try kill_rule
+    end.
+    repeat match goal with
+    | [ Hz : eval (dec (Remaining 0)) _ _ _ _ |- _ ] =>
+        rewrite dec_remaining in Hz; apply eval_fin_zero_inv in Hz; subst
+    end.
+    cbn in H7. inversion H7; subst.
+    + match goal with
+      | [ Hd : decompose_con_app _ = Some _, Hfind : find_alt _ alts = Some _,
+          Hb : eval _ _ _ _ v |- _ ] =>
+          cbn in Hd; injection Hd as <- <-; cbn in Hfind; injection Hfind as <- <-;
+          inversion Hb; subst; try kill_rule
+      end.
+      match goal with
+      | [ Hl : eval _ _ _ id_fun _ |- _ ] =>
+          rewrite dec_remaining in Hl; unfold id_fun in Hl; inversion Hl; subst; try kill_rule
+      end.
+      right. do 2 eexists. split; reflexivity.
+    + match goal with
+      | [ Hn : match decompose_con_app _ with _ => _ end |- _ ] => cbn in Hn; discriminate Hn
+      end.
+Qed.
+
+Lemma sym_prog_value_is_bot : forall n v,
+  eval (Fin n) pc_true · sym_prog v -> v = EBot BOutOfFuel.
+Proof.
+  intros n v H.
+  destruct (Nat.le_gt_cases 8 n) as [Hn | Hn].
+  { replace n with (8 + (n - 8)) in H by lia. exact (sym_prog_runs_out _ _ H). }
+  destruct n as [| n]; [exact (eval_fin_zero_inv _ _ _ _ H) |].
+  unfold sym_prog, consumer in H. inversion H; subst; try kill_rule.
+  match goal with [H6 : eval _ _ _ (ELam _ _) ?w, H8 : eval _ _ _ (EApp ?w _) _ |- _] =>
+    rewrite dec_remaining in H6, H8; destruct n as [| n];
+    [exact (eval_fin_zero_inv _ _ _ _ H8) |];
+    inversion H6; subst; try kill_rule;
+    inversion H8; subst; try kill_rule end.
+  match goal with [Hb : eval _ _ _ (EApp (EVar kv) _) _ |- _] =>
+    rewrite dec_remaining in Hb; destruct n as [| n];
+    [exact (eval_fin_zero_inv _ _ _ _ Hb) |];
+    inversion Hb; subst; try kill_rule end.
+  match goal with [Hf : eval _ _ _ (EVar kv) ?w, Ha : eval _ _ _ (EApp ?w _) _ |- _] =>
+    rewrite dec_remaining in Hf, Ha; destruct n as [| n];
+    [exact (eval_fin_zero_inv _ _ _ _ Ha) |];
+    inversion Hf; subst;
+    try match goal with [Hl : lookup_env _ _ = None |- _] => discriminate Hl end;
+    try kill_rule end.
+  match goal with [Hl : lookup_env _ kv = Some _, He : eval (dec _) _ _ _ ?w |- _] =>
+    simpl in Hl; injection Hl as <- <-; rewrite dec_remaining in He;
+    destruct (case_low_fuel n pc_true w ltac:(lia) He) as [-> | [t [j [-> Ht]]]] end.
+  - match goal with [Ha : eval _ _ _ (EApp (EBot _) _) v |- _] => exact (app_bot_value _ _ _ _ _ Ha) end.
+  - match goal with [Ha : eval _ _ _ (EApp (nest _ _) _) v |- _] =>
+      exact (walk_runs_out (S (S j)) t _ _ _ n v Ht ltac:(lia) Ha) end.
+Qed.
+
 Lemma sym_prog_budget_total : budget_total pc_true · sym_prog.
 Proof.
   exists 8. intros n Hn. replace n with (8 + (n - 8)) by lia. apply sym_prog_total.
@@ -651,8 +732,34 @@ Proof.
   exact (Hout (8 + h) ltac:(lia) v Hv Hcv).
 Qed.
 
+Theorem existential_corollary_is_false : ~ @existential_corollary model_sorts wild_solver.
+Proof.
+  intros Hex.
+  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hb [Hrun _]]]]]].
+  destruct (Hex pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
+              Hm Henv Hc Hcc Hb Hrun) as [k [v [Hv Hcv]]].
+  rewrite (sym_prog_value_is_bot k v Hv) in Hcv.
+  exact (bot_not_contains_lit _ _ _ _ Hcv).
+Qed.
+
+Theorem forall_form_lemma_is_false : ~ @forall_form_lemma model_sorts wild_solver.
+Proof.
+  intros Hall.
+  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [_ [Hrun Hout]]]]]].
+  destruct (Hall · con_prog (@ELit model_sorts true) Hrun pc_true · sigma_all no_symvars sym_prog
+              Hm Henv Hc Hcc) as [h Hh].
+  destruct (sym_prog_total h) as [v Hv].
+  exact (Hout (8 + h) ltac:(lia) v Hv (Hh (8 + h) ltac:(lia) v Hv)).
+Qed.
+
 Theorem branch_lawful_instance_refutes_target :
-  @SymFCLaws model_sorts wild_solver /\ ~ @target_completeness model_sorts wild_solver.
-Proof. exact (conj wild_symfc_laws target_completeness_is_false). Qed.
+  @SymFCLaws model_sorts wild_solver
+  /\ ~ @target_completeness model_sorts wild_solver
+  /\ ~ @existential_corollary model_sorts wild_solver
+  /\ ~ @forall_form_lemma model_sorts wild_solver.
+Proof.
+  exact (conj wild_symfc_laws (conj target_completeness_is_false
+           (conj existential_corollary_is_false forall_form_lemma_is_false))).
+Qed.
 
 Print Assumptions branch_lawful_instance_refutes_target.
