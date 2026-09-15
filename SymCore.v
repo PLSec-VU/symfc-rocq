@@ -1324,8 +1324,9 @@ Qed.
 
   What IS true of merge, and what the development uses, is merge_not_if
   above - merge leaves a non-branch alone, so it is the identity on every
-  ConCore term - and merge_contains in ConCore.v: merging never loses an
-  instance.
+  ConCore term - and merge_contains in ConCore.v: merging keeps an instance,
+  or turns the branch into a scrutinee that no alternative matches, as the
+  instance is too.
 *)
 
 (**

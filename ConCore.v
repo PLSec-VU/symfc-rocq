@@ -1137,28 +1137,29 @@ Axiom reduce_prim_ground_value : forall p args,
   exists l, reduce_prim p args = ELit l.
 
 (**
-  SMT solver behaviour: the solver's if-then-else term has the instances the
-  evaluator's branch has.
-
-  READ THIS ONE CAREFULLY - it is the only assumption merge adds.
+  SMT solver behaviour: when both arms of a branch are SMT terms under S, the
+  solver's if-then-else term has the literal instances the branch has.
 
   Section 3.3's second merge clause replaces a branch between two solvable
-  arms by reduce_prim op_ite [ec; et; ef], an SMT term. From that point the
-  branch is the solver's to resolve, and nothing else in this development can
-  say what the solver does with it: reduce_prim is opaque, and neither
-  reduce_prim_contains (which relates a reduced term to the reduction of its
-  concrete arguments) nor reduce_prim_denote (which is about SMT values) says
-  anything about a term the model must resolve to one arm.
+  arms by reduce_prim op_ite [ec; et; ef]. This is the one thing said about
+  that term.
 
-  So this is a statement about reduce_prim at op_ite, not a statement about
-  merge: whatever the reducer builds from a condition and two arms, a model
-  reads it the way it reads a branch. A solver whose ite disagreed with the
-  evaluator's branch would be a wrong solver. Merge is what makes the
-  question come up; it is not what the assumption is about.
+  The statement is about literal instances of arms that denote formulas, and
+  no more. Each wider statement has no intended model:
+  - An arm that is solvable in Γ need not be an SMT term under S: a variable
+    that Γ does not bind and S does not list stands for itself, and one term
+    cannot stand for two such variables.
+    scratch/NegationWasUnsatisfiable.v derives that no literal satisfies
+    op_not from the version with no restriction.
+  - An SMT arm has instances that are not literals: op_and x y has the
+    instance op_and l1 l2. One term cannot keep the head op_and for one
+    model and the head op_not for another.
 *)
-Axiom reduce_prim_ite_contains : forall σ S ec et ef e_c,
-  contains σ S (EIf ec et ef) e_c ->
-  contains σ S (reduce_prim op_ite (ec :: et :: ef :: nil)) e_c.
+Axiom reduce_prim_ite_contains : forall σ S ec et ef pt pf l,
+  denotes S et pt ->
+  denotes S ef pf ->
+  contains σ S (EIf ec et ef) (ELit l) ->
+  contains σ S (reduce_prim op_ite (ec :: et :: ef :: nil)) (ELit l).
 
 (** Grisette state merging soundness (Lemma A.4 in the paper) is now the
     lemma merge_contains in Section 9.3, proved from the definition of merge. *)
@@ -2174,19 +2175,107 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 9.3 Merging Never Loses an Instance (§3.3)                                *)
+(** 9.3 What Merging Keeps of an Instance (§3.3)                              *)
 (** ------------------------------------------------------------------------- *)
 
 (**
   Every concrete term the unmerged branch stands for, the merged term stands
-  for too. This is the paper's Lemma A.4, and it is now proved from Section
-  8.1's definition of merge instead of assumed.
+  for too, with one exception: the SMT clause. Its term keeps the literal
+  instances of SMT arms (merge_keeps_literal_instance), and in general only
+  this: the term and the instance are both scrutinees that no alternative
+  matches. That is the paper's Lemma A.4 in the form that has a model, proved
+  from Section 8.1's definition of merge.
 
   The proof is one case per clause of the merge table. The shape is always
   the same: the model picks an arm, the clause's result agrees with that arm
   on the head, and the branch that is left inside the result is resolved by
   the same model the same way.
 *)
+
+Definition inert_scrutinee (e : expr) : Prop :=
+  is_if (fst (unspool_app e [])) = false /\ decompose_con_app e = None /\ is_bot e = false.
+
+Lemma spine_head_app : forall f a,
+  fst (unspool_app (EApp f a) []) = fst (unspool_app f []).
+Proof.
+  intros f a. simpl. destruct (unspool_app f []) as [h args] eqn:Hu.
+  pose proof (unspool_app_shift f [] [a] h args Hu) as Hshift. simpl in Hshift.
+  rewrite Hshift. reflexivity.
+Qed.
+
+Lemma decompose_con_app_none : forall e,
+  is_con_app e = false -> decompose_con_app e = None.
+Proof.
+  intros e H. destruct (decompose_con_app e) as [[d args] |] eqn:Hd; [| reflexivity].
+  apply decompose_con_app_unspool, unspool_is_con_app in Hd. congruence.
+Qed.
+
+Lemma inert_not_if : forall e, inert_scrutinee e -> is_if e = false.
+Proof. intros e [Hh _]. exact (is_if_false_of_spine_head e Hh). Qed.
+
+Lemma inert_app : forall f a,
+  inert_scrutinee f -> is_con_app f = false -> inert_scrutinee (EApp f a).
+Proof.
+  intros f a [Hh _] Hc. split; [| split].
+  - rewrite spine_head_app. exact Hh.
+  - apply decompose_con_app_none. exact Hc.
+  - reflexivity.
+Qed.
+
+Lemma inert_cast : forall e γ, inert_scrutinee (ECast e γ).
+Proof. intros e γ. repeat split. Qed.
+
+Lemma solvable_inert : forall Γ e, Solvable Γ e -> inert_scrutinee e.
+Proof.
+  intros Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa];
+    try (repeat split; fail).
+  apply inert_app; [exact IHf | exact (solvable_not_con_app Γ f Hf)].
+Qed.
+
+Lemma contains_is_con_app_false : forall σ S Γ e c,
+  Solvable Γ e -> contains σ S e c -> is_con_app c = false.
+Proof.
+  intros σ S Γ e c H. revert c.
+  induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; intros c Hc;
+    inversion Hc; subst; try reflexivity.
+  simpl. apply IHf. assumption.
+Qed.
+
+Lemma contains_solvable_inert : forall σ S Γ e c,
+  Solvable Γ e -> contains σ S e c -> inert_scrutinee c.
+Proof.
+  intros σ S Γ e c H. revert c.
+  induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; intros c Hc;
+    inversion Hc; subst; try (repeat split; fail).
+  apply inert_app; [apply IHf; assumption |].
+  eapply contains_is_con_app_false; [exact Hf | eassumption].
+Qed.
+
+Lemma fold_alts_inert : forall f Φ Γ e alts r,
+  inert_scrutinee e -> fold_alts f Φ Γ e alts r -> r = EBot BUndefined.
+Proof.
+  intros f Φ Γ e alts r [Hh [Hd Hb]] Hfold.
+  apply (fold_alts_otherwise_same f Φ Γ e alts r (is_if_false_of_spine_head e Hh));
+    [rewrite Hd; exact I | exact Hb | exact Hfold].
+Qed.
+
+Lemma fold_alts_inert_undefined : forall f Φ Γ e alts,
+  inert_scrutinee e -> fold_alts f Φ Γ e alts (EBot BUndefined).
+Proof.
+  intros f Φ Γ e alts [Hh [Hd Hb]].
+  apply FoldAlts_Otherwise; [exact Hh | rewrite Hd; exact I | exact Hb].
+Qed.
+
+Lemma solvable_in_empty_env : forall Γ e, Solvable Γ e -> Solvable · e.
+Proof.
+  intros Γ e H. destruct (solvable_expr_to_pc Γ e H) as [pc Hpc].
+  exact (expr_to_pc_solvable · e pc Hpc).
+Qed.
+
+Lemma denotes_solvable : forall S e pc, denotes S e pc -> Solvable · e.
+Proof.
+  intros S e pc H. exact (expr_to_pc_solvable · e pc (H · (sym_free_env_empty S))).
+Qed.
 
 (** A branch is related to a concrete term by resolving it, never by
     denotation: a branch is not a primitive application. *)
@@ -2274,15 +2363,38 @@ Ltac merge_leaf_rest et ef Hc Hcases :=
     [ inversion Hct; subst; [| kill_den] | inversion Hcf; subst; [| kill_den] ];
     apply Cont_Bot ].
 
+Definition merge_keeps (σ : valuation) (S : symvars) (m e_c : expr) : Prop :=
+  contains σ S m e_c \/ (inert_scrutinee m /\ inert_scrutinee e_c).
+
+Lemma smt_ite_inert : forall σ S Γ ec et ef e_c,
+  Solvable Γ et -> Solvable Γ ef ->
+  contains σ S (EIf ec et ef) e_c ->
+  inert_scrutinee (reduce_prim op_ite (ec :: et :: ef :: nil)) /\ inert_scrutinee e_c.
+Proof.
+  intros σ S Γ ec et ef e_c Ht Hf Hc.
+  assert (Hec : Solvable · ec).
+  { destruct (contains_if_inv σ S ec et ef e_c Hc) as [[[pc [Hd _]] _] | [[pc [Hd _]] _]];
+      exact (denotes_solvable S ec pc Hd). }
+  split.
+  - apply (solvable_inert ·). apply reduce_prim_solvable.
+    apply Forall_cons; [exact Hec |].
+    apply Forall_cons; [exact (solvable_in_empty_env Γ et Ht) |].
+    apply Forall_cons; [exact (solvable_in_empty_env Γ ef Hf) | apply Forall_nil].
+  - destruct (contains_if_inv σ S ec et ef e_c Hc) as [[_ Hct] | [_ Hcf]];
+      [exact (contains_solvable_inert σ S Γ et e_c Ht Hct)
+      | exact (contains_solvable_inert σ S Γ ef e_c Hf Hcf)].
+Qed.
+
 Lemma ite_leaf_contains : forall σ S Γ ec et ef e_c,
-  contains σ S (EIf ec et ef) e_c -> contains σ S (ite_leaf Γ ec et ef) e_c.
+  contains σ S (EIf ec et ef) e_c -> merge_keeps σ S (ite_leaf Γ ec et ef) e_c.
 Proof.
   intros σ S Γ ec et ef e_c Hc.
   assert (Hcases := contains_if_inv σ S ec et ef e_c Hc).
-  unfold ite_leaf.
+  unfold merge_keeps, ite_leaf.
   destruct (decompose_con_app et) as [[d1 a1]|] eqn:E1;
   destruct (decompose_con_app ef) as [[d2 a2]|] eqn:E2.
   - (* both arms are constructor spines *)
+    left.
     destruct (andb (String.eqb d1 d2) (Nat.eqb (length a1) (length a2))) eqn:Hg;
       [| exact Hc].
     apply andb_prop in Hg as [Hd Hl].
@@ -2300,45 +2412,63 @@ Proof.
       rewrite <- (unspool_make_con_app e_c d1 args_c Huc).
       unfold make_con_app. apply contains_fold_left_app; [| apply Cont_Con].
       apply zip_if_contains_false; assumption.
-  - destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
-    + apply reduce_prim_ite_contains. exact Hc.
-    + exact Hc.
-    + merge_leaf_rest et ef Hc Hcases.
-  - destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
-    + apply reduce_prim_ite_contains. exact Hc.
-    + exact Hc.
-    + merge_leaf_rest et ef Hc Hcases.
-  - destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
-    + apply reduce_prim_ite_contains. exact Hc.
-    + exact Hc.
-    + merge_leaf_rest et ef Hc Hcases.
+  - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf Hc).
+    + left. exact Hc.
+    + left. merge_leaf_rest et ef Hc Hcases.
+  - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf Hc).
+    + left. exact Hc.
+    + left. merge_leaf_rest et ef Hc Hcases.
+  - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf Hc).
+    + left. exact Hc.
+    + left. merge_leaf_rest et ef Hc Hcases.
 Qed.
 
 Lemma ite_contains : forall σ S Γ et ec ef e_c,
-  contains σ S (EIf ec et ef) e_c -> contains σ S (ite Γ ec et ef) e_c.
+  contains σ S (EIf ec et ef) e_c -> merge_keeps σ S (ite Γ ec et ef) e_c.
 Proof.
   intros σ S Γ et. induction et; intros ec ef e_c Hc;
     try (rewrite ite_leaf_of by (left; reflexivity);
          apply ite_leaf_contains; exact Hc).
   destruct ef; try (rewrite ite_leaf_of by (right; reflexivity);
                     apply ite_leaf_contains; exact Hc).
-  rewrite ite_cast.
-  destruct (dec_eqb coercion_eq_dec c c0) eqn:Hx; [| exact Hc].
+  rewrite ite_cast. unfold merge_keeps.
+  destruct (dec_eqb coercion_eq_dec c c0) eqn:Hx; [| left; exact Hc].
   apply dec_eqb_eq in Hx. subst c0.
   destruct (contains_if_inv σ S ec (ECast et c) (ECast ef c) e_c Hc)
     as [[Hmc Hct]|[Hmc Hcf]].
   - inversion Hct; subst; [| kill_den].
-    apply Cont_Cast. apply IHet. apply Cont_If_True; assumption.
+    destruct (IHet ec ef _ (Cont_If_True σ S ec et ef _ Hmc ltac:(eassumption)))
+      as [Hk | _]; [left; apply Cont_Cast; exact Hk | right; split; apply inert_cast].
   - inversion Hcf; subst; [| kill_den].
-    apply Cont_Cast. apply IHet. apply Cont_If_False; assumption.
+    destruct (IHet ec ef _ (Cont_If_False σ S ec et ef _ Hmc ltac:(eassumption)))
+      as [Hk | _]; [left; apply Cont_Cast; exact Hk | right; split; apply inert_cast].
 Qed.
 
 Lemma merge_contains : forall σ S Γ es ec,
   contains σ S es ec ->
-  contains σ S (merge Γ es) ec.
+  merge_keeps σ S (merge Γ es) ec.
 Proof.
-  intros σ S Γ es ec H. destruct es; simpl; try exact H.
+  intros σ S Γ es ec H. destruct es; simpl; try (left; exact H).
   apply ite_contains. exact H.
+Qed.
+
+Lemma merge_keeps_literal_instance : forall σ S Γ ec et ef pt pf l,
+  denotes S et pt -> denotes S ef pf ->
+  contains σ S (EIf ec et ef) (ELit l) ->
+  contains σ S (merge Γ (EIf ec et ef)) (ELit l).
+Proof.
+  intros σ S Γ ec et ef pt pf l Ht Hf Hc. simpl.
+  pose proof (denotes_solvable S et pt Ht) as Hst.
+  rewrite ite_leaf_of by (left; destruct et; inversion Hst; reflexivity).
+  unfold ite_leaf.
+  rewrite (decompose_con_app_none et (solvable_not_con_app · et Hst)).
+  destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
+  - eapply reduce_prim_ite_contains; eassumption.
+  - exact Hc.
+  - inversion Hst; subst; exact Hc.
 Qed.
 
 (** Fully general version: whatever head the spine settles on (as long as
@@ -2658,10 +2788,15 @@ Proof.
     apply contains_case_inv in Hcont as [esc [altsc [Heq [Hcont_es Hcont_alts]]]]; subst.
     inversion Hcon as [| | | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | | ]; subst.
     destruct (concore_soundness_fix Inf Φ Γ es es' Heval_es eq_refl Γc σ S esc Hmod Henv Hcont_es Hcon_es) as [vc_s [Heval_esc Hcont_vs]].
-    assert (Hcont_merge : contains σ S (merge Γ es') vc_s) by (apply merge_contains; exact Hcont_vs).
-    destruct (concore_soundness_fold_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl Γc σ S esc altsc Hmod Henv Hcon_es Hcon_alts
-                (ex_intro _ vc_s (conj Heval_esc Hcont_merge)) Hcont_alts) as [v_con [Heval_case Hcont_er]].
-    exists v_con. split; assumption.
+    destruct (merge_contains σ S Γ es' vc_s Hcont_vs) as [Hcont_merge | [Hinert_s Hinert_c]].
+    + destruct (concore_soundness_fold_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl Γc σ S esc altsc Hmod Henv Hcon_es Hcon_alts
+                  (ex_intro _ vc_s (conj Heval_esc Hcont_merge)) Hcont_alts) as [v_con [Heval_case Hcont_er]].
+      exists v_con. split; assumption.
+    + rewrite (fold_alts_inert _ _ _ _ _ er Hinert_s Hfold).
+      exists (EBot BUndefined). split; [| apply Cont_Bot].
+      unfold eval_con. eapply Eval_Case; [exact Heval_esc |].
+      rewrite (merge_not_if Γc vc_s (inert_not_if vc_s Hinert_c)).
+      apply fold_alts_inert_undefined. exact Hinert_c.
   - (* Eval_If *)
     assert (Hfree : sym_free_env S Γ)
       by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
@@ -3316,6 +3451,81 @@ Section ComputingPrimitive.
     - apply Hsucc_not_identity. apply Hid.
   Qed.
 End ComputingPrimitive.
+
+(* ================ (g) a model takes an else-branch ====================== *)
+
+Section ElseBranch.
+  Variable l_else : lit.
+  Hypothesis negation_holds : prim_value op_not (l_else :: nil) = lit_true.
+
+  Definition else_model : valuation := fun _ => l_else.
+  Definition branch_var : var := "x".
+  Definition branch_on_x (et ef : expr) : expr := EIf (EVar branch_var) et ef.
+
+  Lemma else_model_refutes_x : models_not_cond else_model (only branch_var) (EVar branch_var).
+  Proof.
+    exists (PCVar branch_var). split; [| exact negation_holds].
+    intros Γ Hfree. simpl. rewrite (Hfree branch_var (only_self branch_var)). reflexivity.
+  Qed.
+
+  Corollary else_branch_instance : forall lt lf,
+    contains else_model (only branch_var) (branch_on_x (ELit lt) (ELit lf)) (ELit lf).
+  Proof. intros lt lf. apply Cont_If_False; [exact else_model_refutes_x | apply Cont_Lit]. Qed.
+
+  Definition truth_alts (lt lf : lit) : list alt :=
+    Alt "T" nil (ELit lt) :: Alt "F" nil (ELit lf) :: nil.
+  Definition symbolic_match (lt lf : lit) : expr :=
+    ECase (branch_on_x (ECon "T") (ECon "F")) (truth_alts lt lf).
+  Definition else_match (lt lf : lit) : expr := ECase (ECon "F") (truth_alts lt lf).
+
+  Lemma symbolic_match_runs : forall Φ lt lf,
+    Φ ; · ⊢ symbolic_match lt lf ⇓ branch_on_x (ELit lt) (ELit lf).
+  Proof.
+    intros Φ lt lf. unfold symbolic_match, branch_on_x.
+    eapply Eval_Case.
+    - eapply Eval_If with (pc_c := PCVar branch_var);
+        [apply Eval_SymVar; reflexivity | reflexivity
+        | apply eval_nullary_con | apply eval_nullary_con].
+    - simpl. eapply FoldAlts_If; [reflexivity | |];
+        (eapply FoldAlts_Con; [reflexivity | reflexivity | apply Eval_Lit]).
+  Qed.
+
+  Lemma symbolic_match_contains_else_match : forall lt lf,
+    contains else_model (only branch_var) (symbolic_match lt lf) (else_match lt lf).
+  Proof.
+    intros lt lf. apply Cont_Case.
+    - apply Cont_If_False; [exact else_model_refutes_x | apply Cont_Con].
+    - repeat constructor.
+  Qed.
+
+  Lemma else_match_concore : forall lt lf, concore_expr (else_match lt lf).
+  Proof. intros lt lf. repeat constructor. Qed.
+
+  Lemma else_model_satisfies_negated_guard : else_model ⊨ (¬ PCVar branch_var).
+  Proof. exact negation_holds. Qed.
+
+  Corollary soundness_takes_else_branch : forall lt lf,
+    exists v_con,
+      · ⊢ᶜ else_match lt lf ⇓ᶜ v_con /\
+      contains else_model (only branch_var) (branch_on_x (ELit lt) (ELit lf)) v_con.
+  Proof.
+    intros lt lf.
+    apply (concore_soundness (¬ PCVar branch_var) · · else_model (only branch_var)
+             (symbolic_match lt lf) (else_match lt lf)).
+    - exact else_model_satisfies_negated_guard.
+    - apply Cont_Env_Empty.
+    - apply symbolic_match_contains_else_match.
+    - apply else_match_concore.
+    - apply symbolic_match_runs.
+  Qed.
+
+  Lemma else_match_reads_else_arm : forall lt lf, · ⊢ᶜ else_match lt lf ⇓ᶜ ELit lf.
+  Proof.
+    intros lt lf. unfold eval_con, else_match.
+    eapply Eval_Case; [apply eval_nullary_con |].
+    simpl. eapply FoldAlts_Con; [reflexivity | reflexivity | apply Eval_Lit].
+  Qed.
+End ElseBranch.
 
 End NonVacuity.
 
