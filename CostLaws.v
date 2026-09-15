@@ -1,5 +1,5 @@
 From SymCoreTheory Require Import SymCore ConCore BranchLaws.
-From Stdlib Require Import Lists.List Arith.PeanoNat Lia.
+From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 
 Inductive Forall3 {A B C : Type} (R : A -> B -> C -> Prop) : list A -> list B -> list C -> Prop :=
@@ -265,6 +265,20 @@ Proof.
   - rewrite Nat.add_assoc. apply IH. apply ContK_App; assumption.
 Qed.
 
+Lemma forall3_length_right : forall (A B C : Type) (R : A -> B -> C -> Prop) la lb lc,
+  Forall3 R la lb lc -> length lb = length lc.
+Proof.
+  intros A B C R la lb lc H. induction H; simpl; [reflexivity | f_equal; assumption].
+Qed.
+
+Lemma forall3_contains_k_erase : forall σ S ks l1 l2,
+  Forall3 (contains_k σ S) ks l1 l2 -> Forall2 (contains σ S) l1 l2.
+Proof.
+  intros σ S ks l1 l2 H.
+  induction H as [| k a_s a_c ks l1 l2 Ha _ IH]; constructor; [| exact IH].
+  exact (contains_k_erase _ _ _ _ _ Ha).
+Qed.
+
 Lemma contains_k_if_inv : forall σ S k ec et ef e_c,
   contains_k σ S k (EIf ec et ef) e_c ->
   exists k0, k = 1 + smt_size ec + k0 /\
@@ -356,3 +370,262 @@ Proof. destruct laws; assumption. Qed.
 Proof. destruct laws; assumption. Qed.
 #[export] Instance reduce_prim_ite_contains_k_of_laws `{laws : SymFCCostLaws} : ReducePrimIteContainsK.
 Proof. destruct laws; assumption. Qed.
+
+Section MergeCost.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}.
+
+Fixpoint field_count (e : expr) : nat :=
+  match e with
+  | EApp f _ => 1 + field_count f
+  | ECast e0 _ => field_count e0
+  | _ => 0
+  end.
+
+Lemma field_count_unspool : forall e L d args,
+  unspool_app e L = (ECon d, args) -> field_count e + length L = length args.
+Proof.
+  induction e; intros L d0 args0 H; simpl in H; try discriminate H.
+  - injection H as _ <-. reflexivity.
+  - simpl. rewrite <- (IHe1 _ _ _ H). simpl. lia.
+Qed.
+
+Lemma forall3_length_left_right : forall (A B C : Type) (R : A -> B -> C -> Prop) la lb lc,
+  Forall3 R la lb lc -> length la = length lc.
+Proof.
+  intros A B C R la lb lc H. induction H; simpl; [reflexivity | f_equal; assumption].
+Qed.
+
+Lemma list_sum_map_offset : forall c ks,
+  list_sum (map (fun k => c + k) ks) = length ks * c + list_sum ks.
+Proof. intros c ks. induction ks as [| k ks IH]; simpl; [reflexivity | rewrite IH; lia]. Qed.
+
+Lemma contains_k_unspool_con : forall σ S k e_sym e_con,
+  contains_k σ S k e_sym e_con ->
+  forall ks L_s L_c,
+    Forall3 (contains_k σ S) ks L_s L_c ->
+    forall d args,
+      unspool_app e_sym L_s = (ECon d, args) ->
+      exists args_c ks',
+        unspool_app e_con L_c = (ECon d, args_c) /\
+        Forall3 (contains_k σ S) ks' args args_c /\
+        list_sum ks' = k + list_sum ks.
+Proof.
+  induction 1; intros kl Ls Lc HL d0 args0 Hunspool; simpl in Hunspool;
+    try discriminate Hunspool.
+  - injection Hunspool as <- <-.
+    exists Lc, kl. split; [reflexivity | split; [exact HL | reflexivity]].
+  - destruct (IHcontains_k1 (ka :: kl) (a_s :: Ls) (a_c :: Lc)
+                (Forall3_cons _ _ _ _ _ _ _ H0 HL) d0 args0 Hunspool)
+      as [args_c [ks' [Hu [HF Hs]]]].
+    exists args_c, ks'. split; [exact Hu | split; [exact HF | simpl in Hs; lia]].
+  - exfalso.
+    apply (unspool_app_shift es [] Ls) in H. simpl in H.
+    rewrite H in Hunspool. discriminate Hunspool.
+Qed.
+
+Lemma zip_if_contains_k_true : forall σ S ec a1 a2 ks args_c,
+  models_cond σ S ec ->
+  length a1 = length a2 ->
+  Forall3 (contains_k σ S) ks a1 args_c ->
+  Forall3 (contains_k σ S) (map (fun k => 1 + smt_size ec + k) ks) (zip_if ec a1 a2) args_c.
+Proof.
+  intros σ S ec a1 a2 ks args_c Hmc Hlen HF. revert a2 Hlen.
+  induction HF as [| k x y ks l l' Hxy HF IH]; intros a2 Hlen.
+  - destruct a2; simpl; constructor.
+  - destruct a2 as [| z zs]; [discriminate |]. simpl.
+    constructor; [apply ContK_If_True; assumption | apply IH; simpl in Hlen; auto].
+Qed.
+
+Lemma zip_if_contains_k_false : forall σ S ec a1 a2 ks args_c,
+  models_not_cond σ S ec ->
+  length a1 = length a2 ->
+  Forall3 (contains_k σ S) ks a2 args_c ->
+  Forall3 (contains_k σ S) (map (fun k => 1 + smt_size ec + k) ks) (zip_if ec a1 a2) args_c.
+Proof.
+  intros σ S ec a1 a2 ks args_c Hmc Hlen HF. revert a1 Hlen.
+  induction HF as [| k x y ks l l' Hxy HF IH]; intros a1 Hlen.
+  - destruct a1; simpl; constructor.
+  - destruct a1 as [| z zs]; [discriminate |]. simpl.
+    constructor; [apply ContK_If_False; assumption | apply IH; simpl in Hlen; auto].
+Qed.
+
+Lemma contains_k_clos_inv : forall σ S k Γs x body ec,
+  contains_k σ S k (EThunk Γs (ELam x body)) ec ->
+  exists Γc bodyc kenv kb, ec = EThunk Γc (ELam x bodyc) /\ S x = false /\
+    contains_env_k σ S kenv Γs Γc /\ contains_k σ S kb body bodyc /\ k = kenv + kb.
+Proof.
+  intros σ S k Γs x body ec H.
+  inversion H; subst.
+  - match goal with
+    | [ Hl : contains_k _ _ _ (ELam _ _) _, He : contains_env_k _ _ _ _ _ |- _ ] =>
+        inversion Hl; subst;
+        [ eexists; eexists; eexists; eexists;
+          split; [reflexivity | split; [assumption | split; [exact He | split; [eassumption | reflexivity]]]]
+        | match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end ]
+    end.
+  - exfalso.
+    match goal with
+    | [ Hl : contains_k _ _ _ (ELam _ _) _, Ht : is_thunk _ = true |- _ ] =>
+        inversion Hl; subst;
+        [ discriminate Ht
+        | match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end ]
+    end.
+  - match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end.
+Qed.
+
+Definition merge_keeps_k (σ : valuation) (S : symvars) (k : nat) (m e_c : expr) : Prop :=
+  (exists k', k' <= (1 + field_count e_c) * k /\ contains_k σ S k' m e_c)
+  \/ (inert_scrutinee m /\ inert_scrutinee e_c).
+
+Lemma merge_keeps_k_same : forall σ S k m e_c,
+  contains_k σ S k m e_c -> merge_keeps_k σ S k m e_c.
+Proof. intros σ S k m e_c H. left. exists k. split; [nia | exact H]. Qed.
+
+Lemma merge_keeps_k_zero : forall σ S k m e_c,
+  contains_k σ S 0 m e_c -> merge_keeps_k σ S k m e_c.
+Proof. intros σ S k m e_c H. left. exists 0. split; [lia | exact H]. Qed.
+
+Lemma ite_leaf_clos_contains_k : forall σ S Γ k ec Γ1 e1 Γ2 e2 e_c,
+  contains_k σ S k (EIf ec (EThunk Γ1 e1) (EThunk Γ2 e2)) e_c ->
+  merge_keeps_k σ S k (ite_leaf Γ ec (EThunk Γ1 e1) (EThunk Γ2 e2)) e_c.
+Proof.
+  intros σ S Γ k ec Γ1 e1 Γ2 e2 e_c Hc.
+  unfold ite_leaf. simpl.
+  destruct e1 as [| | | | | x1 b1 | | | | | | | ]; try (apply merge_keeps_k_same; exact Hc).
+  destruct e2 as [| | | | | x2 b2 | | | | | | | ]; try (apply merge_keeps_k_same; exact Hc).
+  destruct (env_eqb Γ1 Γ2 && String.eqb x1 x2)%bool eqn:Hx; [| apply merge_keeps_k_same; exact Hc].
+  apply andb_prop in Hx as [Hxe Hxx].
+  apply env_eqb_eq in Hxe. apply String.eqb_eq in Hxx. subst Γ2 x2.
+  destruct (contains_k_if_inv σ S _ ec _ _ e_c Hc) as [k0 [-> [[Hmc Hct] | [Hmc Hcf]]]].
+  - destruct (contains_k_clos_inv σ S _ Γ1 x1 b1 e_c Hct)
+      as [Γc [bc [kenv [kb [Heq [Hsx [Henv [Hb Hk]]]]]]]].
+    subst e_c k0. apply merge_keeps_k_same.
+    replace (1 + smt_size ec + (kenv + kb)) with (kenv + (1 + smt_size ec + kb)) by lia.
+    apply ContK_Thunk; [exact Henv |].
+    apply ContK_Lam; [exact Hsx | apply ContK_If_True; assumption].
+  - destruct (contains_k_clos_inv σ S _ Γ1 x1 b2 e_c Hcf)
+      as [Γc [bc [kenv [kb [Heq [Hsx [Henv [Hb Hk]]]]]]]].
+    subst e_c k0. apply merge_keeps_k_same.
+    replace (1 + smt_size ec + (kenv + kb)) with (kenv + (1 + smt_size ec + kb)) by lia.
+    apply ContK_Thunk; [exact Henv |].
+    apply ContK_Lam; [exact Hsx | apply ContK_If_False; assumption].
+Qed.
+
+Ltac merge_leaf_rest_k et ef Hc Hcases :=
+  destruct et; destruct ef; simpl; try (apply merge_keeps_k_same; exact Hc);
+  try exact (ite_leaf_clos_contains_k _ _ · _ _ _ _ _ _ _ Hc);
+  try (match goal with
+       | |- merge_keeps_k _ _ _ (match ?b with _ => _ end) _ =>
+           destruct b; apply merge_keeps_k_same; exact Hc
+       end);
+  match goal with
+  | |- merge_keeps_k _ _ _ (if ?b then _ else _) _ =>
+      let Hx := fresh "Hx" in
+      destruct b eqn:Hx; [| apply merge_keeps_k_same; exact Hc];
+      first [apply dec_eqb_eq in Hx | apply bottom_eqb_eq in Hx]; subst;
+      let k0 := fresh "k0" in
+      let Hk := fresh "Hk" in
+      let Hm := fresh "Hm" in
+      let Ha := fresh "Ha" in
+      destruct Hcases as [k0 [Hk [[Hm Ha] | [Hm Ha]]]];
+      inversion Ha; subst;
+      try (match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end);
+      apply merge_keeps_k_zero; constructor
+  end.
+
+Lemma ite_leaf_contains_k : forall σ S Γ k ec et ef e_c,
+  contains_k σ S k (EIf ec et ef) e_c -> merge_keeps_k σ S k (ite_leaf Γ ec et ef) e_c.
+Proof.
+  intros σ S Γ k ec et ef e_c Hc.
+  assert (Hcases := contains_k_if_inv σ S k ec et ef e_c Hc).
+  unfold ite_leaf.
+  destruct (decompose_con_app et) as [[d1 a1]|] eqn:E1;
+  destruct (decompose_con_app ef) as [[d2 a2]|] eqn:E2.
+  - destruct (andb (String.eqb d1 d2) (Nat.eqb (length a1) (length a2))) eqn:Hg;
+      [| apply merge_keeps_k_same; exact Hc].
+    apply andb_prop in Hg as [Hd Hl].
+    apply String.eqb_eq in Hd. apply Nat.eqb_eq in Hl. subst d2.
+    assert (Hu1 := decompose_con_app_unspool et d1 a1 E1).
+    assert (Hu2 := decompose_con_app_unspool ef d1 a2 E2).
+    left.
+    destruct Hcases as [k0 [-> [[Hmc Hct] | [Hmc Hcf]]]].
+    + destruct (contains_k_unspool_con σ S _ et e_c Hct nil nil nil (Forall3_nil _) d1 a1 Hu1)
+        as [args_c [ks [Huc [HFa Hs]]]].
+      pose proof (field_count_unspool e_c nil d1 args_c Huc) as Hn.
+      pose proof (forall3_length_left_right _ _ _ _ _ _ _ HFa) as Hlen.
+      exists (list_sum (map (fun k => 1 + smt_size ec + k) ks)).
+      split.
+      * rewrite list_sum_map_offset. simpl in Hs, Hn. nia.
+      * rewrite <- (unspool_make_con_app e_c d1 args_c Huc).
+        unfold make_con_app.
+        exact (contains_k_fold_left_app σ S _ _ _ 0 _ _
+                 (zip_if_contains_k_true σ S ec a1 a2 ks args_c Hmc Hl HFa) (ContK_Con σ S d1)).
+    + destruct (contains_k_unspool_con σ S _ ef e_c Hcf nil nil nil (Forall3_nil _) d1 a2 Hu2)
+        as [args_c [ks [Huc [HFa Hs]]]].
+      pose proof (field_count_unspool e_c nil d1 args_c Huc) as Hn.
+      pose proof (forall3_length_left_right _ _ _ _ _ _ _ HFa) as Hlen.
+      exists (list_sum (map (fun k => 1 + smt_size ec + k) ks)).
+      split.
+      * rewrite list_sum_map_offset. simpl in Hs, Hn. nia.
+      * rewrite <- (unspool_make_con_app e_c d1 args_c Huc).
+        unfold make_con_app.
+        exact (contains_k_fold_left_app σ S _ _ _ 0 _ _
+                 (zip_if_contains_k_false σ S ec a1 a2 ks args_c Hmc Hl HFa) (ContK_Con σ S d1)).
+  - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf (contains_k_erase _ _ _ _ _ Hc)).
+    + apply merge_keeps_k_same. exact Hc.
+    + merge_leaf_rest_k et ef Hc Hcases.
+  - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf (contains_k_erase _ _ _ _ _ Hc)).
+    + apply merge_keeps_k_same. exact Hc.
+    + merge_leaf_rest_k et ef Hc Hcases.
+  - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf (contains_k_erase _ _ _ _ _ Hc)).
+    + apply merge_keeps_k_same. exact Hc.
+    + merge_leaf_rest_k et ef Hc Hcases.
+Qed.
+
+Lemma ite_contains_k : forall σ S Γ et ec ef k e_c,
+  contains_k σ S k (EIf ec et ef) e_c -> merge_keeps_k σ S k (ite Γ ec et ef) e_c.
+Proof.
+  intros σ S Γ et. induction et; intros ec ef k e_c Hc;
+    try (rewrite ite_leaf_of by (left; reflexivity);
+         apply ite_leaf_contains_k; exact Hc).
+  destruct ef; try (rewrite ite_leaf_of by (right; reflexivity);
+                    apply ite_leaf_contains_k; exact Hc).
+  rewrite ite_cast.
+  destruct (dec_eqb coercion_eq_dec c c0) eqn:Hx; [| apply merge_keeps_k_same; exact Hc].
+  apply dec_eqb_eq in Hx. subst c0.
+  destruct (contains_k_if_inv σ S _ ec (ECast et c) (ECast ef c) e_c Hc)
+    as [k0 [-> [[Hmc Hct] | [Hmc Hcf]]]].
+  - inversion Hct; subst;
+      [| match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end].
+    match goal with
+    | [ Hi : contains_k _ _ k0 et ?ec0 |- _ ] =>
+        destruct (IHet ec ef _ _ (ContK_If_True σ S k0 ec et ef _ Hmc Hi))
+          as [[k' [Hk' Hc']] | _];
+        [ left; exists k'; split; [simpl; exact Hk' | apply ContK_Cast; exact Hc']
+        | right; split; apply inert_cast ]
+    end.
+  - inversion Hcf; subst;
+      [| match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end].
+    match goal with
+    | [ Hi : contains_k _ _ k0 ef ?ec0 |- _ ] =>
+        destruct (IHet ec ef _ _ (ContK_If_False σ S k0 ec et ef _ Hmc Hi))
+          as [[k' [Hk' Hc']] | _];
+        [ left; exists k'; split; [simpl; exact Hk' | apply ContK_Cast; exact Hc']
+        | right; split; apply inert_cast ]
+    end.
+Qed.
+
+Lemma merge_contains_k : forall σ S Γ k es ec,
+  contains_k σ S k es ec ->
+  merge_keeps_k σ S k (merge Γ es) ec.
+Proof.
+  intros σ S Γ k es ec H. destruct es; simpl; try (apply merge_keeps_k_same; exact H).
+  apply ite_contains_k. exact H.
+Qed.
+
+
+End MergeCost.
