@@ -4052,11 +4052,18 @@ Qed.
   The recursion runs on the FIRST derivation. The second one is taken apart
   by the inversion lemmas above, so nothing depends on its shape.
 
-  Unlimited budget only, hence the k0 = Inf premise. A finite budget breaks
-  one step of the argument: Section 12.2 separates Rule App-Spine from Rule
-  App-Prim because the operator of a saturated primitive spine has no value,
-  and at Fin 0 Rule Out-Of-Fuel gives it one.
-  bounded_determinism_decides_reduce_prim below is the consequence.
+  Unlimited budget only, hence the k0 = Inf premise. Rule App-Spine no
+  longer fires on a primitive spine, because Comp excludes it, so the old
+  overlap with Rule App-Prim at Fin 0 is gone. A finite budget still breaks
+  the argument in a different step. At a finite budget a value can be
+  EBot BOutOfFuel, which is not ConCore, so concore_eval_closed_fix does not
+  apply. The laws fix cast_expr and reduce_prim only on ConCore input and on
+  input that contains relates, and a closure over an out-of-fuel binding is
+  neither. So the laws allow cast_expr to turn such a closure into a branch,
+  and Rule Prune can then answer its dead arm while Rule Lit answers the
+  same arm. ApplicationRules.v states this as
+  bounded_concrete_determinism_fails and
+  bounded_concrete_determinism_not_provable.
 *)
 Fixpoint eval_det_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v1 : expr)
   (Heval : eval k0 Φ Γ e v1) {struct Heval} :
