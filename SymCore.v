@@ -445,7 +445,7 @@ Context {solver : SymCoreSolver}.
     assumption. It needs Solvable and the spine helpers, which come first. *)
 
 (** ========================================================================= *)
-(** 7. Solvable and WHNF Definitions in Prop (§3.2)                            *)
+(** 7. Solvable and Computation Definitions in Prop (§3.2)                     *)
 (** ========================================================================= *)
 
 (** Helper: checks if the head of an expression is a primitive operation *)
@@ -512,39 +512,35 @@ Inductive Solvable (Γ : environment) : expr -> Prop :=
       Solvable Γ a ->
       Solvable Γ (EApp f a).
 
-(** Fig. 3's WHNF also lists a bare λx.e; here only the closure form is a
-    value, because Rule App-Abs applies to a closure.
+Fixpoint spine_head (e : expr) : expr :=
+  match e with
+  | EApp f _ => spine_head f
+  | _ => e
+  end.
 
-    A data constructor applied to arguments is a value: what counts is that
-    the head of the application spine is a constructor. The arguments are
-    not required to be values. *)
-Inductive Whnf (Γ : environment) : expr -> Prop :=
-  | Whnf_Solvable : forall e,
-      Solvable Γ e ->
-      Whnf Γ e
-  | Whnf_Con : forall e d args,
-      unspool_app e [] = (ECon d, args) ->
-      Whnf Γ e
-  | Whnf_Bot : forall b,
-      Whnf Γ (EBot b)
-  | Whnf_Clos : forall Γ_def x body,
-      Whnf Γ (EClos Γ_def x body)
-  | Whnf_Coercion : forall γ,
-      Whnf Γ (ECoercion γ)
-  | Whnf_Type : forall τ,
-      Whnf Γ (EType τ)
-  | Whnf_Cast : forall eb γ,
-      Whnf Γ eb ->
-      Whnf Γ (ECast eb γ)
-  | Whnf_If : forall ec et ef,
-      Solvable Γ ec ->
-      Whnf Γ et ->
-      Whnf Γ ef ->
-      Whnf Γ (EIf ec et ef).
+Definition is_con_or_prim (e : expr) : bool :=
+  match e with
+  | ECon _ | EPrimOp _ => true
+  | _ => false
+  end.
+
+Inductive Comp (Γ : environment) : expr -> Prop :=
+  | Comp_Var : forall x,
+      lookup_env Γ x <> None ->
+      Comp Γ (EVar x)
+  | Comp_Lam : forall x body,
+      Comp Γ (ELam x body)
+  | Comp_Case : forall es alts,
+      Comp Γ (ECase es alts)
+  | Comp_Thunk : forall Γ' e,
+      Comp Γ (EThunk Γ' e)
+  | Comp_App : forall ef ea,
+      is_con_or_prim (spine_head (EApp ef ea)) = false ->
+      Comp Γ (EApp ef ea).
 
 End SymCore.
 
-(** Closes the Whnf_Con / Eval_Con case of an inversion on an expression
+(** Closes the Eval_Con case of an inversion on an expression
     whose spine head is visibly not a data constructor. *)
 Ltac no_con_head :=
   match goal with
@@ -603,7 +599,7 @@ Proof.
 Qed.
 
 (** ========================================================================= *)
-(** 8. Decision Functions (Fixpoints) for Solvable and WHNF                    *)
+(** 8. Decision Functions (Fixpoints) for Solvable and Computations            *)
 (** ========================================================================= *)
 
 (** Solvable is decidable *)
@@ -651,71 +647,56 @@ Proof.
   exact IHf.
 Qed.
 
-(** WHNF is decidable *)
-Fixpoint whnf_dec (Γ : environment) (e : expr) : {Whnf Γ e} + {~ Whnf Γ e}.
-Proof.
-  destruct (solvable_dec Γ e) as [S | NS].
-  - left. apply Whnf_Solvable. assumption.
-  - destruct e.
-    + right. intros H. inversion H; subst; [contradiction | no_con_head].
-    + (* ELit *) exfalso. apply NS. apply Solvable_Lit.
-    + (* EPrimOp *) exfalso. apply NS. apply Solvable_PrimOp.
-    + left. eapply Whnf_Con. reflexivity.
-    + (* EApp *)
-      destruct (is_con_app (EApp e1 e2)) eqn:Hcon.
-      * left. destruct (is_con_app_unspool _ Hcon) as [d [args Hu]].
-        exact (Whnf_Con Γ (EApp e1 e2) d args Hu).
-      * right. intros H. inversion H; subst; [contradiction |].
-        match goal with
-        | [ Hu : unspool_app _ _ = (ECon _, _) |- _ ] =>
-            apply unspool_is_con_app in Hu; rewrite Hu in Hcon; discriminate
-        end.
-    + right. intros H. inversion H; subst; [contradiction | no_con_head].
-    + left. apply Whnf_Clos.
-    + right. intros H. inversion H; subst; [contradiction | no_con_head].
-    + destruct (whnf_dec Γ e) as [W | NW].
-      * left. apply Whnf_Cast. assumption.
-      * right. intros H. inversion H; subst.
-        -- apply (solvable_not_cast Γ e c); auto.
-        -- no_con_head.
-        -- apply NW; auto.
-    + left. apply Whnf_Coercion.
-    + left. apply Whnf_Type.
-    + destruct (solvable_dec Γ e1) as [S1 | NS1].
-      * destruct (whnf_dec Γ e2) as [W2 | NW2].
-        -- destruct (whnf_dec Γ e3) as [W3 | NW3].
-           ++ left. apply Whnf_If; auto.
-           ++ right. intros H. inversion H; subst.
-              ** apply (solvable_not_if Γ e1 e2 e3); auto.
-              ** no_con_head.
-              ** apply NW3; auto.
-        -- right. intros H. inversion H; subst.
-           ++ apply (solvable_not_if Γ e1 e2 e3); auto.
-           ++ no_con_head.
-           ++ apply NW2; auto.
-      * right. intros H. inversion H; subst.
-        -- apply (solvable_not_if Γ e1 e2 e3); auto.
-        -- no_con_head.
-        -- apply NS1; auto.
-    + left. apply Whnf_Bot.
-    + right. intros H. inversion H; subst; [contradiction | no_con_head].
-Defined.
+Lemma spine_head_con_or_prim : forall e,
+  is_con_or_prim (spine_head e) = (is_con_app e || is_op_app e)%bool.
+Proof. induction e; simpl; try reflexivity. exact IHe1. Qed.
 
-(** An abstraction ELam is never in WHNF: it must evaluate to a closure EClos before application *)
-Lemma not_whnf_lam : forall Γ x body,
-  ~ Whnf Γ (ELam x body).
+Lemma fst_unspool_app : forall e args, fst (unspool_app e args) = spine_head e.
+Proof. induction e; intros args; simpl; try reflexivity. apply IHe1. Qed.
+
+Lemma comp_app_iff : forall Γ ef ea,
+  Comp Γ (EApp ef ea) <-> is_con_app ef = false /\ is_op_app ef = false.
 Proof.
-  intros Γ x body Hw.
-  inversion Hw; subst; [| no_con_head].
-  match goal with [ H : Solvable _ _ |- _ ] => inversion H end.
+  intros Γ ef ea. split.
+  - intros H. inversion H as [| | | | ef0 ea0 Hhead]; subst.
+    simpl in Hhead. rewrite spine_head_con_or_prim in Hhead.
+    apply Bool.orb_false_iff in Hhead. exact Hhead.
+  - intros [Hc Ho]. apply Comp_App. simpl.
+    rewrite spine_head_con_or_prim, Hc, Ho. reflexivity.
 Qed.
 
-Lemma not_whnf_thunk : forall Γ Γ' e,
-  ~ Whnf Γ (EThunk Γ' e).
+Definition comp_dec (Γ : environment) (e : expr) : {Comp Γ e} + {~ Comp Γ e}.
 Proof.
-  intros Γ Γ' e Hw.
-  inversion Hw; subst; [| no_con_head].
-  match goal with [ H : Solvable _ _ |- _ ] => inversion H end.
+  destruct e;
+    try (right; intros H; inversion H; fail);
+    try (left; constructor; fail).
+  - destruct (lookup_env Γ v) eqn:Heq.
+    + left. apply Comp_Var. rewrite Heq. discriminate.
+    + right. intros H. inversion H; subst. contradiction.
+  - destruct (is_con_or_prim (spine_head (EApp e1 e2))) eqn:Hhead.
+    + right. intros H. inversion H; subst. congruence.
+    + left. apply Comp_App. exact Hhead.
+Defined.
+
+Lemma comp_not_con_app : forall Γ e, Comp Γ e -> is_con_app e = false.
+Proof.
+  intros Γ e Hc. destruct Hc as [| | | | ef ea Hhead]; try reflexivity.
+  simpl in Hhead |- *. rewrite spine_head_con_or_prim in Hhead.
+  apply Bool.orb_false_iff in Hhead. exact (proj1 Hhead).
+Qed.
+
+Lemma comp_not_op_app : forall Γ e, Comp Γ e -> is_op_app e = false.
+Proof.
+  intros Γ e Hc. destruct Hc as [| | | | ef ea Hhead]; try reflexivity.
+  simpl in Hhead |- *. rewrite spine_head_con_or_prim in Hhead.
+  apply Bool.orb_false_iff in Hhead. exact (proj2 Hhead).
+Qed.
+
+Lemma comp_not_solvable : forall Γ e, Comp Γ e -> ~ Solvable Γ e.
+Proof.
+  intros Γ e Hc Hs.
+  pose proof (comp_not_op_app Γ e Hc) as Hop.
+  destruct Hc; inversion Hs; subst; congruence.
 Qed.
 
 (** Helper: path-condition convertible primitive application is an operator application *)
@@ -1085,12 +1066,11 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (dec f) Φ (extend_env Γ' x Γ ea) eb eb' ->
       eval (Live f) Φ Γ (EApp (EClos Γ' x eb) ea) eb'
 
-  (** Rule App-Spine: Reduce function head when not in WHNF, unless that head
-      is a cast. A cast operator belongs to Rule App-Cast, which pushes the
-      coercion into the argument; stripping the cast here would drop it. *)
+  (** Rule App-Spine: Reduce a function head that is a computation. A cast,
+      a branch, a closure, a bottom and a constructor or primitive spine are
+      not computations; each of them has its own application rule. *)
   | Eval_AppSpine : forall f Φ Γ ef ea ef' er,
-      ~ Whnf Γ ef ->
-      is_cast ef = false ->
+      Comp Γ ef ->
       eval (dec f) Φ Γ ef ef' ->
       eval (dec f) Φ Γ (EApp ef' ea) er ->
       eval (Live f) Φ Γ (EApp ef ea) er
@@ -1116,23 +1096,28 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (dec f) Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r) er ->
       eval (Live f) Φ Γ (EApp (ECast ef γ) ea) er
 
+  (** Rule App-If: an application of a branch applies each arm *)
+  | Eval_AppIf : forall f Φ Γ ec et ef ea er,
+      eval (dec f) Φ Γ (EIf ec (EApp et ea) (EApp ef ea)) er ->
+      eval (Live f) Φ Γ (EApp (EIf ec et ef) ea) er
+
   (**
     No rule for: applying a VALUE that carries a coercion which is not an
     arrow.
 
     Figure 3 has no rule for this shape and neither does this judgement.
     Rule App-Cast wants a coercion that splits into an argument coercion and
-    a result coercion, and this one does not split. Rule App-Spine refuses
-    every cast operator. So the term is stuck, deliberately: applying
-    something whose coercion is not an arrow is applying a non-function,
-    which System FC rejects at type-check time. A judgement with no typing
-    rules gets stuck there instead of inventing an answer.
+    a result coercion, and this one does not split. Rule App-Spine reads only
+    computations, and a cast is not one. So the term is stuck, deliberately:
+    applying something whose coercion is not an arrow is applying a
+    non-function, which System FC rejects at type-check time. A judgement with
+    no typing rules gets stuck there instead of inventing an answer.
 
     ConCore.v, Section 12.5 records the history: this shape once had a rule,
     Rule App-Cast-Opaque, because Rule App-Spine then accepted a non-arrow
     cast operator and the concrete side could reach the shape while the
-    symbolic side walked on. The guard above closes that gap on both sides
-    at once.
+    symbolic side walked on. Comp excludes every cast, which closes that gap
+    on both sides at once.
   *)
 
   (** Rule App-Bot: Propagation of bottom in function position *)
@@ -1421,7 +1406,7 @@ Proof.
 Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** 10.3 Normal Form / WHNF Guarantee (§3.2)                                   *)
+(** 10.3 Solvable Results of Primitives (§3.2)                                *)
 (** ------------------------------------------------------------------------- *)
 
 (**
@@ -1441,8 +1426,7 @@ Qed.
 
   With the hypothesis, a primitive applied to plain SMT arguments still yields
   a plain SMT term, while a primitive applied to an argument that still
-  branches is left free to distribute over that branch and return an EIf -
-  which Whnf_If already accepts as a value.
+  branches is left free to distribute over that branch and return an EIf.
 *)
 Class ReducePrimSolvable : Prop :=
 reduce_prim_solvable : forall Γ p args,
@@ -1466,14 +1450,6 @@ reduce_prim_saturated : forall p args p0 args0,
   length args0 = primop_arity p0.
 
 Context {reduce_prim_saturated_law : ReducePrimSaturated}.
-
-(** WHNF follows directly from being solvable *)
-Lemma reduce_prim_whnf : forall Γ p args,
-  Forall (Solvable Γ) args ->
-  Whnf Γ (reduce_prim p args).
-Proof.
-  intros. apply Whnf_Solvable. apply reduce_prim_solvable. assumption.
-Qed.
 
 (** Unspooling an application spine preserves the operator head property *)
 Lemma unspool_is_op_app : forall e args p args0,
@@ -1527,7 +1503,7 @@ Proof.
   - (* Eval_AppAbs *)
     inversion Hsolv; subst; try discriminate.
   - (* Eval_AppSpine *)
-    exfalso. apply (Whnf_Solvable Γ e) in Hsolv. contradiction.
+    match goal with [ Hc : Comp _ _ |- _ ] => exact (comp_not_solvable _ _ Hc Hsolv) end.
   - (* Eval_AppPrim *)
     match goal with
     | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
@@ -1535,6 +1511,8 @@ Proof.
     end.
   - (* Eval_AppCast *)
     inversion Hsolv; subst; try discriminate.
+  - (* Eval_AppIf *)
+    inversion Hsolv.
   - (* Eval_AppBot *)
     inversion Hsolv; subst; try discriminate.
   - (* Eval_Prune *)
@@ -1548,7 +1526,7 @@ Qed.
   A saturated (arity-matching) primitive-operator result can never itself be
   applied to a further argument: Rule App-Prim demands the combined spine's
   argument count match the operator's arity exactly (§3.1, arity), so one
-  argument too many gets stuck, and no other rule can fire on an already-WHNF
+  argument too many gets stuck, and no other rule can fire on a solvable
   operator application.
 *)
 (** Every argument of a solvable operator spine is itself solvable *)
@@ -1595,11 +1573,12 @@ Proof.
     | k Φ Γ e d args Hunspool
     | k Φ Γ e γ e' Heval_e
     | k Φ Γ Γ' x eb ea eb' Heval_b
-    | k Φ Γ ef ea ef' er Hnotwhnf Heval_f Heval_app2
+    | k Φ Γ ef ea ef' er Hcomp Heval_f Heval_app2
     | k Φ Γ b
     | k Φ Γ ef ea p args args' Hunspool Harity Hargs
     | k Φ Γ x e
     | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | k Φ Γ ec et ef ea er Heval_arms
     | k Φ Γ b ea
     | k Φ Γ es alts es' er Heval_es Hfold
     | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -1619,8 +1598,8 @@ Proof.
   - (* Eval_Cast *) inversion Hsolv.
   - (* Eval_AppAbs: a closure is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
-  - (* Eval_AppSpine: the head is solvable, hence already WHNF *)
-    exfalso. apply Hnotwhnf. apply Whnf_Solvable.
+  - (* Eval_AppSpine: a solvable head is not a computation *)
+    exfalso. apply (comp_not_solvable _ _ Hcomp).
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. exact Hsf.
   - (* Eval_Bot *) inversion Hsolv.
   - (* Eval_AppPrim *)
@@ -1636,6 +1615,8 @@ Proof.
       * exact (IH Hstl).
   - (* Eval_Lam *) inversion Hsolv.
   - (* Eval_AppCast: a cast is not solvable *)
+    inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
+  - (* Eval_AppIf: a branch is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
   - (* Eval_AppBot: a bottom is not solvable *)
     inversion Hsolv as [| | | f a Hop Hsf Hsa]; subst. inversion Hsf.
@@ -1655,7 +1636,6 @@ Proof.
   intros Γ p args ac v Hsargs Heval.
   remember (reduce_prim p args) as v_f eqn:Heqvf.
   assert (Hsolv : Solvable Γ v_f) by (subst v_f; apply reduce_prim_solvable; assumption).
-  assert (Hwhnf : Whnf Γ v_f) by (apply Whnf_Solvable; exact Hsolv).
   destruct (is_op_app v_f) eqn:Hop.
   - destruct (is_op_app_unspool v_f Hop) as [p0 [args0 Hunspool]].
     assert (Hsat : length args0 = primop_arity p0)
@@ -1669,8 +1649,8 @@ Proof.
       end.
     + (* Eval_AppAbs: v_f cannot be a closure *)
       rewrite <- H0 in Hsolv. inversion Hsolv.
-    + (* Eval_AppSpine: v_f is already Whnf *)
-      contradiction.
+    + (* Eval_AppSpine: a solvable v_f is not a computation *)
+      match goal with [ Hc : Comp _ _ |- _ ] => exact (comp_not_solvable _ _ Hc Hsolv) end.
     + (* Eval_AppPrim: the combined spine's arity no longer matches *)
       simpl in H2.
       apply (unspool_app_shift (reduce_prim p args) [] [ac] (EPrimOp p0) args0) in Hunspool.
@@ -1682,6 +1662,9 @@ Proof.
       lia.
     + (* Eval_AppCast: v_f cannot be a cast *)
       rewrite <- H0 in Hsolv. inversion Hsolv.
+    + (* Eval_AppIf: v_f cannot be a branch *)
+      match goal with [ Heq : EIf _ _ _ = _ |- _ ] => rewrite <- Heq in Hsolv end.
+      inversion Hsolv.
     + (* Eval_AppBot: v_f cannot be a bottom *)
       rewrite <- H in Hsolv. inversion Hsolv.
     + (* Eval_Prune: pc_true is always satisfiable *)
@@ -1783,16 +1766,15 @@ Proof.
       end.
     + simpl in Hu; discriminate.
     + match goal with
-      | [ Hn : ~ Whnf _ e1 |- _ ] =>
-          exfalso; apply Hn;
-          destruct (is_con_app_unspool e1 (unspool_is_con_app e1 [e2] d args Hu))
-            as [d0 [args0 Hu0]];
-          exact (Whnf_Con Γ e1 d0 args0 Hu0)
+      | [ Hc : Comp _ e1 |- _ ] =>
+          pose proof (unspool_is_con_app e1 [e2] d args Hu) as Hcon;
+          rewrite (comp_not_con_app _ _ Hc) in Hcon; discriminate Hcon
       end.
     + match goal with
       | [ Hp : unspool_app (EApp _ _) [] = (EPrimOp _, _) |- _ ] =>
           simpl in Hp; rewrite Hu in Hp; discriminate
       end.
+    + simpl in Hu; discriminate.
     + simpl in Hu; discriminate.
     + simpl in Hu; discriminate.
     + rewrite Hsat in *; discriminate.
@@ -2077,11 +2059,12 @@ Proof.
     | k Φ Γ e d args Hunspool
     | k Φ Γ e γ e' Heval_e
     | k Φ Γ Γ' x eb ea eb' Heval_b
-    | k Φ Γ ef ea ef' er Hnotwhnf Hguard Heval_f Heval_app2
+    | k Φ Γ ef ea ef' er Hcomp Heval_f Heval_app2
     | k Φ Γ b
     | k Φ Γ ef ea p args args' Hunspool Harity Hargs
     | k Φ Γ x e
     | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
+    | k Φ Γ ec et ef ea er Heval_arms
     | k Φ Γ b ea
     | k Φ Γ es alts es' er Heval_es Hfold
     | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -2115,8 +2098,7 @@ Proof.
     destruct (eval_fin_of_inf_fix Inf Φ Γ (EApp ef' ea) er Heval_app2 eq_refl) as [h2 Hh2].
     exists (S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
     eapply Eval_AppSpine.
-    + exact Hnotwhnf.
-    + exact Hguard.
+    + exact Hcomp.
     + simpl. apply Hh1. lia.
     + simpl. apply Hh2. lia.
   - (* Eval_Bot *)
@@ -2142,6 +2124,12 @@ Proof.
       as [h Hh].
     exists (S h). intros n Hn. destruct n as [| m]; [lia |].
     eapply Eval_AppCast; [exact Hdecomp |]. simpl. apply Hh. lia.
+  - (* Eval_AppIf *)
+    destruct (eval_fin_of_inf_fix Inf Φ Γ
+                (EIf ec (EApp et ea) (EApp ef ea)) er Heval_arms eq_refl)
+      as [h Hh].
+    exists (S h). intros n Hn. destruct n as [| m]; [lia |].
+    apply Eval_AppIf. simpl. apply Hh. lia.
   - (* Eval_AppBot *)
     exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_AppBot.
   - (* Eval_Case *)
@@ -2282,8 +2270,7 @@ Proof.
   - apply Eval_OutOfFuel.
   - intros v H. inversion H; subst.
     + no_con_head.
-    + match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
-      apply Whnf_Solvable. apply Solvable_Var. exact Hnone.
+    + match goal with [ Hc : Comp _ _ |- _ ] => inversion Hc; subst; congruence end.
     + match goal with [ Hu : unspool_app _ _ = _ |- _ ] => simpl in Hu; discriminate Hu end.
     + congruence.
 Qed.
@@ -2310,11 +2297,8 @@ Definition self_app_body : expr := EApp (EVar self_app_var) (EVar self_app_var).
 Definition self_app_fun : expr := ELam self_app_var self_app_body.
 Definition self_app : expr := EApp self_app_fun self_app_fun.
 
-Lemma self_app_fun_not_whnf : forall Γ, ~ Whnf Γ self_app_fun.
-Proof.
-  intros Γ H. inversion H; subst; [| no_con_head].
-  match goal with [ Hs : Solvable _ _ |- _ ] => inversion Hs end.
-Qed.
+Lemma self_app_fun_comp : forall Γ, Comp Γ self_app_fun.
+Proof. intros Γ. apply Comp_Lam. Qed.
 
 Lemma eval_self_app_fun : forall Φ Γ v,
   sat Φ = true -> Φ ; Γ ⊢ self_app_fun ⇓ v -> v = EClos Γ self_app_var self_app_body.
@@ -2347,12 +2331,10 @@ Proof.
   destruct (string_dec self_app_var self_app_var); [reflexivity | contradiction].
 Qed.
 
-Lemma self_app_var_not_whnf : forall Γ,
-  ResolvesToSelfApp Γ -> ~ Whnf Γ (EVar self_app_var).
+Lemma self_app_var_comp : forall Γ,
+  ResolvesToSelfApp Γ -> Comp Γ (EVar self_app_var).
 Proof.
-  intros Γ HR H. inversion H; subst; [| no_con_head].
-  match goal with [ Hs : Solvable _ _ |- _ ] => inversion Hs; subst end.
-  destruct HR; congruence.
+  intros Γ HR. apply Comp_Var. destruct HR; congruence.
 Qed.
 
 Lemma eval_self_app_var : forall Φ Γ,
@@ -2414,15 +2396,13 @@ Proof.
     + assert (Hef : ef' = EClos Γ self_app_var self_app_body)
         by (apply (eval_self_app_fun Φ Γ ef' Hsat); assumption).
       subst ef'. apply IHeval2; [reflexivity | exact Hsat | apply SA_ClosFun].
-    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
-      apply Whnf_Clos.
+    + match goal with [ Hc : Comp _ (EClos _ _ _) |- _ ] => inversion Hc end.
     + match goal with
       | [ HR : ResolvesToSelfApp Γ, He : eval _ Φ Γ (EVar self_app_var) ef' |- _ ] =>
           destruct (eval_self_app_var Φ Γ HR Hsat ef' He) as [Γ0 Hef]; subst ef';
           apply IHeval2; [reflexivity | exact Hsat | apply SA_ClosVar; exact HR]
       end.
-    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
-      apply Whnf_Clos.
+    + match goal with [ Hc : Comp _ (EClos _ _ _) |- _ ] => inversion Hc end.
   - (* Rule App-Prim *)
     inversion HL; subst; unfold self_app, self_app_body, self_app_fun in H; simpl in H;
       injection H as ? ?; discriminate.
@@ -2471,14 +2451,13 @@ Proof.
     + destruct k as [| k].
       * exists (EBot BUndefined). unfold self_app.
         eapply Eval_AppSpine with (ef' := EBot BUndefined);
-          [apply self_app_fun_not_whnf | reflexivity | apply Eval_OutOfFuel
+          [apply self_app_fun_comp | apply Eval_OutOfFuel
           | apply Eval_OutOfFuel].
       * destruct (IH Ψ Γ (EApp (EClos Γ self_app_var self_app_body) self_app_fun)
                    (SA_ClosFun Γ Γ)) as [v Hv].
         exists v. unfold self_app.
         eapply Eval_AppSpine with (ef' := EClos Γ self_app_var self_app_body).
-        -- apply self_app_fun_not_whnf.
-        -- reflexivity.
+        -- apply self_app_fun_comp.
         -- simpl. unfold self_app_fun. apply Eval_Lam.
         -- simpl. exact Hv.
     + destruct (IH Ψ (extend_env Γ1 self_app_var Γ self_app_fun) self_app_body
@@ -2487,8 +2466,7 @@ Proof.
     + destruct (self_app_var_value_bounded Γ H k Ψ) as [vf [Hvf [Hbot | [Γ0 Hclos]]]].
       * subst vf. exists (EBot BUndefined). unfold self_app_body.
         eapply Eval_AppSpine with (ef' := EBot BUndefined).
-        -- apply self_app_var_not_whnf. exact H.
-        -- reflexivity.
+        -- apply self_app_var_comp. exact H.
         -- simpl. exact Hvf.
         -- destruct k as [| k]; [apply Eval_OutOfFuel | apply Eval_AppBot].
       * subst vf.
@@ -2496,8 +2474,7 @@ Proof.
                    (SA_ClosVar Γ Γ0 H)) as [v Hv].
         exists v. unfold self_app_body.
         eapply Eval_AppSpine with (ef' := EClos Γ0 self_app_var self_app_body).
-        -- apply self_app_var_not_whnf. exact H.
-        -- reflexivity.
+        -- apply self_app_var_comp. exact H.
         -- simpl. exact Hvf.
         -- simpl. exact Hv.
     + destruct (IH Ψ (extend_env Γ1 self_app_var Γ (EVar self_app_var)) self_app_body
