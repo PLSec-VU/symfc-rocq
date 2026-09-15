@@ -245,7 +245,9 @@ Proof.
   assert (Hp : inflate_not a = model_reduce_prim PNot (a :: nil))
     by (destruct H; reflexivity).
   cbn [reduce_prim fuel_solver fuel_reduce_prim]. rewrite Hp.
-  unfold model_reduce_prim, op_spine. cbn [length model_arity Nat.eqb fold_left].
+  unfold model_reduce_prim.
+  rewrite split_args_not_if by (constructor; [apply flat_not_if; exact Hf | constructor]).
+  unfold reduce_unbranched, op_spine. cbn [length model_arity Nat.eqb fold_left].
   rewrite lift_flat by (simpl; rewrite Hf; reflexivity).
   simpl. unfold fold_leaf. simpl. rewrite Hg. reflexivity.
 Qed.

@@ -26,7 +26,7 @@ Fixpoint answer_leaves (e : expr) : expr :=
   end.
 
 Definition con_reduce_prim (p : model_primop) (args : list expr) : expr :=
-  answer_leaves (model_reduce_prim p args).
+  answer_leaves (reduce_unbranched p args).
 
 Definition con_solver : SymCoreSolver :=
   Build_SymCoreSolver
@@ -133,7 +133,7 @@ Instance con_reduce_prim_contains : @ReducePrimContains model_sorts con_solver.
 Proof.
   intros σ S p args_s args_c HF.
   change (contains σ S (con_reduce_prim p args_s) (con_reduce_prim p args_c)).
-  unfold con_reduce_prim, model_reduce_prim. rewrite <- (Forall2_length HF).
+  unfold con_reduce_prim, reduce_unbranched. rewrite <- (Forall2_length HF).
   destruct (Nat.eqb (length args_s) (model_arity p)) eqn:Hlen; [| apply Cont_Lit].
   apply Nat.eqb_eq in Hlen.
   assert (Hc : contains σ S (op_spine p args_s) (op_spine p args_c))
@@ -152,8 +152,8 @@ Qed.
 Instance con_reduce_prim_denote : @ReducePrimDenote model_sorts con_solver.
 Proof.
   intros σ S p args ls HF.
-  pose proof (@model_reduce_prim_denote σ S p args ls HF) as H.
-  change (denote σ S (model_reduce_prim p args) (prim_value p ls)) in H.
+  pose proof (@unbranched_denote σ S p args ls HF) as H.
+  change (denote σ S (reduce_unbranched p args) (prim_value p ls)) in H.
   change (denote σ S (con_reduce_prim p args) (prim_value p ls)).
   unfold con_reduce_prim. rewrite (answer_leaves_of_denote σ S _ _ H). exact H.
 Qed.
@@ -164,11 +164,11 @@ Proof.
   change (smt_ground (con_reduce_prim p args) = true) in H.
   change (exists l, con_reduce_prim p args = ELit l).
   unfold con_reduce_prim in *.
-  destruct (is_if (model_reduce_prim p args)) eqn:Hif.
-  - destruct (model_reduce_prim p args); simpl in Hif, H; discriminate.
+  destruct (is_if (reduce_unbranched p args)) eqn:Hif.
+  - destruct (reduce_unbranched p args); simpl in Hif, H; discriminate.
   - rewrite (answer_leaves_not_if _ Hif) in *. unfold answer_con_arg in *.
-    destruct (has_con_arg (model_reduce_prim p args)); [discriminate H |].
-    exact (@model_reduce_prim_ground_value p args H).
+    destruct (has_con_arg (reduce_unbranched p args)); [discriminate H |].
+    exact (@unbranched_ground_value p args H).
 Qed.
 
 Instance con_reduce_prim_saturated : @ReducePrimSaturated model_sorts con_solver.
@@ -176,18 +176,18 @@ Proof.
   intros p args p0 args0 H.
   change (unspool_app (con_reduce_prim p args) nil = (EPrimOp p0, args0)) in H.
   unfold con_reduce_prim in H.
-  destruct (is_if (model_reduce_prim p args)) eqn:Hif.
-  - destruct (model_reduce_prim p args); simpl in Hif, H; discriminate.
+  destruct (is_if (reduce_unbranched p args)) eqn:Hif.
+  - destruct (reduce_unbranched p args); simpl in Hif, H; discriminate.
   - rewrite (answer_leaves_not_if _ Hif) in H. unfold answer_con_arg in H.
-    destruct (has_con_arg (model_reduce_prim p args)); [discriminate H |].
-    exact (@model_reduce_prim_saturated p args p0 args0 H).
+    destruct (has_con_arg (reduce_unbranched p args)); [discriminate H |].
+    exact (@unbranched_saturated p args p0 args0 H).
 Qed.
 
 Instance con_reduce_prim_solvable : @ReducePrimSolvable model_sorts con_solver.
 Proof.
   intros Γ p args HF.
-  pose proof (@model_reduce_prim_solvable Γ p args HF) as H.
-  change (Solvable Γ (model_reduce_prim p args)) in H.
+  pose proof (@unbranched_solvable Γ p args HF) as H.
+  change (Solvable Γ (reduce_unbranched p args)) in H.
   change (Solvable Γ (con_reduce_prim p args)).
   unfold con_reduce_prim. rewrite (answer_leaves_of_solvable Γ _ H). exact H.
 Qed.
@@ -195,24 +195,24 @@ Qed.
 Instance con_reduce_prim_concore : @ReducePrimConcore model_sorts con_solver.
 Proof.
   intros p args HF.
-  pose proof (@model_reduce_prim_concore p args HF) as H.
-  change (concore_expr (model_reduce_prim p args)) in H.
+  pose proof (@unbranched_concore p args HF) as H.
+  change (concore_expr (reduce_unbranched p args)) in H.
   change (concore_expr (con_reduce_prim p args)).
   unfold con_reduce_prim.
   rewrite (answer_leaves_not_if _ (concore_not_if _ H)). unfold answer_con_arg.
-  destruct (has_con_arg (model_reduce_prim p args)); [apply Con_Con | exact H].
+  destruct (has_con_arg (reduce_unbranched p args)); [apply Con_Con | exact H].
 Qed.
 
 Instance con_reduce_prim_ite_contains : @ReducePrimIteContains model_sorts con_solver.
 Proof.
   intros σ S ec et ef pt pf l Ht Hf Hc.
-  pose proof (@model_reduce_prim_ite_contains σ S ec et ef pt pf l Ht Hf Hc) as H.
-  change (contains σ S (model_reduce_prim op_ite (ec :: et :: ef :: nil)) (ELit l)) in H.
+  pose proof (@unbranched_ite_contains σ S ec et ef pt pf l Ht Hf Hc) as H.
+  change (contains σ S (reduce_unbranched op_ite (ec :: et :: ef :: nil)) (ELit l)) in H.
   change (contains σ S (con_reduce_prim op_ite (ec :: et :: ef :: nil)) (ELit l)).
   destruct (contains_if_inv σ S ec et ef (ELit l) Hc) as [[[pc [Hdc _]] _] | [[pc [Hdc _]] _]];
-  assert (Hden : denote σ S (model_reduce_prim op_ite (ec :: et :: ef :: nil))
+  assert (Hden : denote σ S (reduce_unbranched op_ite (ec :: et :: ef :: nil))
                    (prim_value op_ite (pc_value σ pc :: pc_value σ pt :: pc_value σ pf :: nil)))
-    by (apply (@model_reduce_prim_denote σ S op_ite);
+    by (apply (@unbranched_denote σ S op_ite);
         apply Forall2_cons; [exists pc; split; [exact Hdc | reflexivity] |];
         apply Forall2_cons; [exists pt; split; [exact Ht | reflexivity] |];
         apply Forall2_cons; [exists pf; split; [exact Hf | reflexivity] |];
