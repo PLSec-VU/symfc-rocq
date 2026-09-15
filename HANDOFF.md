@@ -19,7 +19,7 @@ When this document is not enough, section 11 tells you how to ask Rocq directly.
 
 ## 1. Status
 
-- **The Rocq development was last changed in `610f214`.** All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
+- **The Rocq development was last changed after `610f214`, in changes that are not yet committed.** They add the results in section 6.4 and section 10, items 4 and 10. All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
 - **The main theorems are closed.** `Print Assumptions` says "Closed under the global context" for each. The laws enter only as section arguments.
 - **The laws have a model.** `Model.v` builds a concrete solver with `lit := bool`, real `and`, `not` and `ite`, and a reducer that simplifies. It proves every law.
 - **Every theorem is non-vacuous.** `NonVacuity.v` checks, inside the model, that each theorem has an instance where all hypotheses hold and the conclusion says something. One instance runs through an else-branch. One has a looping arm the model does not take. A second solver, `pruning_solver`, makes Rule Prune fire.
@@ -40,8 +40,8 @@ The file order is `SymCore.v`, `ConCore.v`, `CostLaws.v`, `Completeness.v`, `Mod
 | File | Contents |
 | --- | --- |
 | `SymCore.v` | Syntax, the solver parameters (`SymCoreSorts`, `SymCoreSolver`), `Solvable`, `Comp`, `delay`, merge (`ite_leaf`, `ite`, `merge`), fuel, the judgements `eval` and `fold_alts`, fuel lemmas (`eval_inf_has_budget`, `eval_fin_zero_inv`) |
-| `ConCore.v` | `concore_expr`, `concrete_env`, `scoped`/`closed_term`/`closed_program`, valuations and `models`, `denotes`/`denote`, the instance relation `contains`, most laws, alignment lemmas, `merge_keeps`, **soundness**, **concrete determinism**, `budget_total`, the bundle `ConCoreLaws` |
-| `CostLaws.v` | `contains_k` (instances indexed by symbolic overhead), erasure lemmas, the cost laws, `merge_contains_k`, the bundle `SymFCCostLaws` |
+| `ConCore.v` | `concore_expr`, `concrete_env`, `scoped`/`closed_term`/`closed_program`, valuations and `models`, `denotes`/`denote`, the instance relation `contains`, most laws, alignment lemmas, `merge_keeps`, **soundness**, **concrete determinism**, **symbolic results agree** (`symbolic_results_share_the_instance`), the scope limit `branch_on_bound_variable_has_no_instance`, `budget_total`, the bundle `ConCoreLaws` |
+| `CostLaws.v` | `contains_k` (instances indexed by symbolic overhead), erasure lemmas, the cost laws, `merge_contains_k`, the bundle `SymFCCostLaws`, the scope limits `cast_of_symvar_is_not_branch` and `cast_of_smt_term_is_not_its_own_branch` |
 | `Completeness.v` | The completeness statements, worked examples, and the proof: `eval_nested_ind`, `smt_eval_fin`, `good_at`, `forall_form`, and the three **completeness theorems** |
 | `Model.v` | The concrete solver and proofs of every law (`model_laws`, `model_symfc_cost_laws`) |
 | `Saturation.v` | The well-formedness condition "primitives are fully applied", its two laws, and preservation by evaluation |
@@ -256,7 +256,7 @@ Each statement below is exact, apart from notation. Check it with `Check` (secti
 Limits:
 
 - **Unlimited bound only.** At a finite bound it does not follow from the laws. A run that exceeds the bound can pass `⊥ₖ` into `cast`, and the laws say nothing about non-ConCore input. [`ApplicationRules.v`: `bounded_concrete_determinism_fails`. Its assumptions are two `cast` equations and one unsatisfiable guard.]
-- **Symbolic evaluation is not deterministic.** Rule Prune may give `∅` or the ordinary value on an infeasible path, and it does so by design. [`NonVacuity.v`: `pm_symbolic_evaluation_not_deterministic`, `scratch/EvalNotDeterministic.v`] Do not claim symbolic determinism.
+- **Symbolic evaluation is not deterministic.** Rule Prune may give `∅` or the ordinary value on an infeasible path, and it does so by design. [`NonVacuity.v`: `pm_symbolic_evaluation_not_deterministic`, `scratch/EvalNotDeterministic.v`] Do not claim symbolic determinism. It is not expected: SymCore exists to find ConCore values, and concrete determinism is the determinism theorem of the paper.
 
 **Proof structure.** Induction on the first derivation (`eval_det_fix`) with inversion on the second.
 
@@ -330,6 +330,28 @@ In plain words: if the concrete run ends, then every large enough bound gives a 
 
 **What `budget_total` excludes.** It excludes only programs that get stuck somewhere evaluation goes. After App-If, a stuck term is ill-typed or a primitive applied to the wrong number of arguments. [`Completeness.v`: `budget_total_fails_on_stuck_arm`; `scratch/CompletenessNeedsFuel.v`] Rule Prune can rescue a stuck arm on an infeasible path. [`NonVacuity.v`: `pm_completeness_instance`, `pm_plain_model_not_budget_total`]
 
+### 6.4 Symbolic results agree: `symbolic_results_share_the_instance` (`ConCore.v`)
+
+This is an optional corollary, not a main theorem. Concrete determinism (section 6.1) is the determinism theorem of the paper. Use this corollary only if the text needs to say that pruning never changes an answer.
+
+> Let `σ ⊨ Φ`. Assume:
+> - `contains_env σ S Γs Γc`;
+> - `contains σ S e_s e_c`;
+> - `e_c` is ConCore;
+> - `closed_program Γc e_c`;
+> - `Φ; Γs ⊢ e_s ⇓ v₁` and `Φ; Γs ⊢ e_s ⇓ v₂`.
+>
+> Then there is a `v_c` with `Γc ⊢ᶜ e_c ⇓ᶜ v_c`, `contains σ S v₁ v_c` and `contains σ S v₂ v_c`.
+
+In plain words: two symbolic results of the same term can differ only on paths that no model takes. Under every model that satisfies the path condition, both give the same concrete answer.
+
+Limits:
+
+- **Unlimited bound only**, like soundness.
+- **It does not make concrete determinism trivial.** Its proof applies soundness twice, and then concrete determinism makes the two concrete values equal.
+
+**Proof.** Soundness gives `v_c₁` for `v₁` and `v_c₂` for `v₂`. The environment `Γc` is ConCore (`contains_env_concrete`). Concrete determinism gives `v_c₁ = v_c₂`.
+
 ---
 
 ## 7. How the design was forced
@@ -349,6 +371,8 @@ Read these before writing prose. Each one is a place where the obvious statement
 | Opaque functions only need to keep instances | They can inflate fuel cost | `scratch/FuelInflationCounterexample.v`, `scratch/ZipLeakCounterexample.v` |
 | Casts keep closedness automatically | A lawful cast can invent a free variable | `scratch/SoundnessNeedsScopeLaws.v` |
 | Merge then fold equals fold | The guard is read before or after evaluation | `scratch/MergeIsNotThePapersIte.v` |
+| The theorems cover code that branches on a computed SMT value | Such code has no instance, and the cast cost law forbids a cast that makes the branch | `ConCore.v`: `branch_on_bound_variable_has_no_instance`; `CostLaws.v`: `cast_of_symvar_is_not_branch` |
+| A counterexample from a bounded run is guaranteed | A lawful cast can turn `⊥ₖ` into `true` | `scratch/BoundedSoundnessFailsUnderLaws.v` |
 
 ---
 
@@ -388,6 +412,8 @@ Exactly five files fail today:
 
 Every other file must pass. If one of the five starts to pass, look at why.
 
+`BoundedSoundnessFailsUnderLaws.v` is the witness for section 10, item 10.
+
 Older files whose names describe their result:
 
 - `CaptureWitness`, `ConatIsWorse`, `EvalModelsCondVerdict`, `FuelGuardControls`;
@@ -404,12 +430,17 @@ Read a file's theorem names with `grep -n '^Theorem\|^Lemma' scratch/<file>.v`.
 1. **The scope laws are settled.** `ReducePrimScoped` and `CastExprScoped` say that `reduce-prim` and `cast` do not create free variables. The user accepted them as common sense for any real solver. `CastExprScoped` is proved necessary (`scratch/SoundnessNeedsScopeLaws.v`). `ReducePrimScoped` is kept by analogy.
 2. **Determinism holds only at `Inf`**, and only for concrete runs. Section 6.1 explains why.
 3. **`merge_keeps` is weaker than "merge never loses an instance".** Merging can lose the instance of a variable outside `S`. No theorem needs the strong form, and the paper must not claim it.
-4. **A branch whose guard is a lambda-bound variable has no instance** (`scratch/BoundGuardHasNoInstance.v`). The theorems say nothing about such terms. Source programs contain no branches, so this does not affect programs users write.
+4. **The theorems do not cover runtime branches. This is the largest open item.** A runtime branch is a symbolic branch whose guard is computed while the program runs, for example the comparison of a symbolic key inside `Map.insert`. The paper's first example, `mapLookupInsert`, needs one. The development has two ways to make such a branch, and the theorems cover neither:
+   - **A branch in code.** `λx. if x then e_t else e_f` has no instance under any model (`ConCore.v`: `branch_on_bound_variable_has_no_instance`; `scratch/BoundGuardHasNoInstance.v` shows that the model evaluates it). Soundness and completeness need an instance, so they say nothing about a program that contains such a function. Embedding code is where these functions appear.
+   - **A cast that makes a branch.** `CastExprContainsK` makes a cast keep the overhead index exactly, and a branch adds overhead. So a cast of a symbolic variable is never a branch (`CostLaws.v`: `cast_of_symvar_is_not_branch`), and a cast of an SMT term `t` is never `if t then D₁ else D₂` (`cast_of_smt_term_is_not_its_own_branch`).
+
+   So in every run the theorems cover, each symbolic branch is already in the starting term, and its guard mentions only symbolic variables. Every non-vacuity instance has this shape. The fix is a design decision that is still open. One option: let `contains` relate a branch whose guard is not known yet, and give ConCore a rule that picks an arm when the guard is a literal. Another option: relax `CastExprContainsK` to allow bounded extra overhead, and add a model cast that makes a branch. Nobody has checked that the completeness proof survives either change. Until this is fixed, the paper must state the theorems only for terms whose branches are all in the starting term.
 5. **Several laws only make sense relative to ConCore or closed input.** `bounded_concrete_determinism_fails` shows the laws leave `cast` free on input that contains `⊥ₖ`.
 6. **`sat` is constantly true in the main model.** `NonVacuity.v` adds `pruning_solver` so that Rule Prune is exercised.
 7. **Stale comments may remain** in `SymCore.v` and `ConCore.v`. Before quoting a comment, check it against the code. Search with `grep -n 'WHNF\|EClos\|progressive\|solver_free\|Section 12.5'`.
 8. **The paper describes `contains` as a Boolean relation.** In the development it is a `Prop` relation with a semantic rule for SMT terms. Describe it as a relation.
 9. **The worked examples at the top of `Completeness.v`** sit in a section with only `ConCoreLaws`, and they predate the cost laws. The model instances in `NonVacuity.v` are the ones to cite.
+10. **No soundness theorem covers a bounded run.** Soundness needs a run at `Inf`, and such a run exists only when every path ends, including paths no model takes (`NonVacuity.v`: `nv_symbolic_run_diverges`). The tool reports counterexamples from bounded runs. The laws do not make those counterexamples real. `scratch/BoundedSoundnessFailsUnderLaws.v` builds a solver that satisfies every law in `SymFCCostLaws`. Its cast turns `⊥ₖ` into `true`, so `cast(Ω)` has the value `true` at bound 2, but the concrete run has no value (`lawful_solver_breaks_bounded_soundness`). The main model in `Model.v` does not do this. So the paper must not say "guaranteed counterexample" of a bounded run unless the tool re-runs the counterexample concretely. A fix would add a law that `cast` and `reduce-prim` keep `⊥ₖ` visible, and then prove soundness at a bound.
 
 ---
 

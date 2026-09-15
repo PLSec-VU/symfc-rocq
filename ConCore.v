@@ -3244,6 +3244,21 @@ Proof.
   - exact (conj Scoped_Env_Empty Hcl).
 Qed.
 
+Theorem branch_on_bound_variable_has_no_instance : forall σ S x t f e_con,
+  ~ contains σ S (ELam x (EIf (EVar x) t f)) e_con.
+Proof.
+  intros σ S x t f e_con H.
+  inversion H as [| | | | | | | | | y bodys bodyc Hx Hbody | | | | | | | es p args l Hu];
+    subst; [| discriminate Hu].
+  set (binds_x := ExtendEnv x (MkClosure · (EBot BUndefined)) ·).
+  assert (Hfree : sym_free_env S binds_x).
+  { intros y Hy. simpl. destruct (string_dec y x) as [-> | _];
+      [rewrite Hx in Hy; discriminate Hy | reflexivity]. }
+  destruct (contains_if_inv σ S _ _ _ _ Hbody) as [[[pc [Hden _]] _] | [[pc [Hden _]] _]];
+    specialize (Hden binds_x Hfree); simpl in Hden;
+    destruct (string_dec x x); congruence.
+Qed.
+
 
 (**
   The other half of this section, completeness, is in Completeness.v. Its
@@ -4500,6 +4515,27 @@ Corollary concore_eval_deterministic_top : forall e v1 v2,
 Proof.
   intros e v1 v2 Hcon H1 H2.
   exact (concore_eval_deterministic · e v1 v2 CEnv_Empty Hcon H1 H2).
+Qed.
+
+Theorem symbolic_results_share_the_instance : forall Φ Γs Γc σ S e_sym e_con v1 v2,
+  σ ⊨ Φ ->
+  contains_env σ S Γs Γc ->
+  contains σ S e_sym e_con ->
+  concore_expr e_con ->
+  closed_program Γc e_con ->
+  Φ ; Γs ⊢ e_sym ⇓ v1 ->
+  Φ ; Γs ⊢ e_sym ⇓ v2 ->
+  exists v_con,
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S v1 v_con /\ contains σ S v2 v_con.
+Proof.
+  intros Φ Γs Γc σ S e_sym e_con v1 v2 Hmod Henv Hcont Hcon Hcl H1 H2.
+  destruct (concore_soundness Φ Γs Γc σ S e_sym e_con v1 Hmod Henv Hcont Hcon Hcl H1)
+    as [c1 [Hc1 Hk1]].
+  destruct (concore_soundness Φ Γs Γc σ S e_sym e_con v2 Hmod Henv Hcont Hcon Hcl H2)
+    as [c2 [Hc2 Hk2]].
+  pose proof (concore_eval_deterministic Γc e_con c1 c2
+                (contains_env_concrete σ S Γs Γc Henv) Hcon Hc1 Hc2) as Hsame.
+  subst c2. exists c1. repeat split; assumption.
 Qed.
 
 

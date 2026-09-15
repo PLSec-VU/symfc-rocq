@@ -614,3 +614,34 @@ Qed.
 
 
 End MergeCost.
+
+Section CastsAddNoBranch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {cast_law : CastExprContainsK}.
+
+Theorem cast_of_symvar_is_not_branch : forall (σ : valuation) (S : symvars) x γ ec et ef,
+  S x = true -> cast_expr (EVar x) γ <> EIf ec et ef.
+Proof.
+  intros σ S x γ ec et ef Hx Heq.
+  pose proof (cast_expr_contains_k σ S 0 (EVar x) (ELit (σ x)) γ (ContK_Var_Sym σ S x Hx)) as H.
+  rewrite Heq in H. inversion H; subst; try lia;
+    match goal with [ Hu : unspool_app _ _ = _ |- _ ] => discriminate Hu end.
+Qed.
+
+Theorem cast_of_smt_term_is_not_its_own_branch :
+  forall (σ : valuation) (S : symvars) es p args l γ d1 d2,
+  unspool_app es [] = (EPrimOp p, args) ->
+  length args = primop_arity p ->
+  smt_ground es = false ->
+  denote σ S es l ->
+  cast_expr es γ <> EIf es (ECon d1) (ECon d2).
+Proof.
+  intros σ S es p args l γ d1 d2 Hu Hlen Hg Hd Heq.
+  pose proof (cast_expr_contains_k σ S _ es (ELit l) γ
+                (ContK_Denote σ S es p args l Hu Hlen Hg Hd)) as H.
+  rewrite Heq in H. inversion H; subst;
+    try match goal with [ Hc : contains_k _ _ _ (ECon _) _ |- _ ] => inversion Hc; subst end;
+    try lia;
+    match goal with [ Hu' : unspool_app (EIf _ _ _) _ = _ |- _ ] => discriminate Hu' end.
+Qed.
+
+End CastsAddNoBranch.
