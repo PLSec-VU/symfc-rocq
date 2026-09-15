@@ -162,9 +162,10 @@ Definition decomp_coerc_arrow (γ : coercion) : option (coercion * coercion) :=
 
 (**
   Expressions (Fig. 1) and Environment Γ ::= {x ↦ (Γ, e)} (Fig. 2).
-  Extended with runtime closures (Γ, λx. e) produced by Rule Lam and applied
-  in Rule App-Abs, and with thunks (Γ, e) produced by Rule Con for the fields
-  of a constructor value and forced by Rule Thunk.
+  Extended with runtime thunks (Γ, e). Rule Con produces them for the fields
+  of a constructor value and Rule Thunk forces them. Rule Lam produces the
+  thunk (Γ, λx. e), which is the closure of a lambda, and Rule App-Abs
+  applies it.
 *)
 
 Inductive bottom : Type :=
@@ -180,7 +181,6 @@ with expr : Type :=
   | ECon : dcon -> expr                           (** D: data constructor *)
   | EApp : expr -> expr -> expr                   (** ef ea: application *)
   | ELam : var -> expr -> expr                    (** λx. e: abstraction *)
-  | EClos : environment -> var -> expr -> expr    (** (Γ, λx. e): runtime closure (Fig. 3 Lam/App-Abs) *)
   | ECase : expr -> list alt -> expr              (** case e of a⃗: case split *)
   | ECast : expr -> coercion -> expr              (** e ⊲ γ: cast *)
   | ECoercion : coercion -> expr                  (** γ: coercion *)
@@ -224,8 +224,6 @@ Fixpoint expr_eqb (e1 e2 : expr) {struct e1} : bool :=
   | ECon d1, ECon d2 => String.eqb d1 d2
   | EApp f1 a1, EApp f2 a2 => andb (expr_eqb f1 f2) (expr_eqb a1 a2)
   | ELam x1 b1, ELam x2 b2 => andb (String.eqb x1 x2) (expr_eqb b1 b2)
-  | EClos Γ1 x1 b1, EClos Γ2 x2 b2 =>
-      andb (andb (env_eqb Γ1 Γ2) (String.eqb x1 x2)) (expr_eqb b1 b2)
   | ECase s1 alts1, ECase s2 alts2 =>
       andb (expr_eqb s1 s2)
         ((fix alts_eqb (l1 l2 : list alt) {struct l1} : bool :=
@@ -295,9 +293,6 @@ Proof.
       rewrite (expr_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2). reflexivity.
     + apply andb_prop in H as [H1 H2]. apply String.eqb_eq in H1. subst.
       rewrite (expr_eqb_eq _ _ H2). reflexivity.
-    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
-      apply String.eqb_eq in H2. subst.
-      rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H3). reflexivity.
     + apply andb_prop in H as [H1 H2].
       rewrite (expr_eqb_eq _ _ H1). f_equal.
       revert l0 H2. induction l as [| [d1 xs1 p1] t1 IH]; intros l0 H2.
@@ -526,6 +521,12 @@ Definition is_con_or_prim (e : expr) : bool :=
   | _ => false
   end.
 
+Definition is_lam (e : expr) : bool :=
+  match e with
+  | ELam _ _ => true
+  | _ => false
+  end.
+
 Inductive Comp (Γ : environment) : expr -> Prop :=
   | Comp_Var : forall x,
       lookup_env Γ x <> None ->
@@ -535,6 +536,7 @@ Inductive Comp (Γ : environment) : expr -> Prop :=
   | Comp_Case : forall es alts,
       Comp Γ (ECase es alts)
   | Comp_Thunk : forall Γ' e,
+      is_lam e = false ->
       Comp Γ (EThunk Γ' e)
   | Comp_App : forall ef ea,
       is_con_or_prim (spine_head (EApp ef ea)) = false ->
@@ -629,7 +631,6 @@ Proof.
   - right. intros H. inversion H.
   - right. intros H. inversion H.
   - right. intros H. inversion H.
-  - right. intros H. inversion H.
 Defined.
 
 (** Helper inversion lemmas on Solvable *)
@@ -678,6 +679,9 @@ Proof.
   - destruct (is_con_or_prim (spine_head (EApp e1 e2))) eqn:Hhead.
     + right. intros H. inversion H; subst. congruence.
     + left. apply Comp_App. exact Hhead.
+  - destruct (is_lam e0) eqn:Hlam.
+    + right. intros H. inversion H; subst. congruence.
+    + left. apply Comp_Thunk. exact Hlam.
 Defined.
 
 Lemma comp_not_con_app : forall Γ e, Comp Γ e -> is_con_app e = false.
@@ -911,8 +915,9 @@ Fixpoint zip_if (ec : expr) (l1 l2 : list expr) : list expr :=
   a variable is solvable depends on whether Γ binds it - which is why merge
   takes an environment.
 
-  Clauses 3, 5, 6 and 7: a lambda merges when the binders agree; a bottom, a
-  type and a coercion merge only when the two arms are the same term.
+  Clauses 3, 5, 6 and 7: two lambda closures merge when their environments
+  and their binders agree; a bottom, a type and a coercion merge only when the
+  two arms are the same term.
 
   Clause 8: anything else stays a branch.
 
@@ -933,8 +938,10 @@ Definition ite_leaf (Γ : environment) (ec et ef : expr) : expr :=
         else EIf ec et ef
       else
         match et, ef with
-        | ELam x1 b1, ELam x2 b2 =>
-            if String.eqb x1 x2 then ELam x1 (EIf ec b1 b2) else EIf ec et ef
+        | EThunk Γ1 (ELam x1 b1), EThunk Γ2 (ELam x2 b2) =>
+            if andb (env_eqb Γ1 Γ2) (String.eqb x1 x2)
+            then EThunk Γ1 (ELam x1 (EIf ec b1 b2))
+            else EIf ec et ef
         | EBot b1, EBot b2 =>
             if bottom_eqb b1 b2 then EBot b1 else EIf ec et ef
         | EType τ1, EType τ2 =>
@@ -1083,7 +1090,7 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   (** Rule App-Abs: Beta-reduction with closure environment extension *)
   | Eval_AppAbs : forall f Φ Γ Γ' x eb ea eb',
       eval (dec f) Φ (extend_env Γ' x Γ ea) eb eb' ->
-      eval (Live f) Φ Γ (EApp (EClos Γ' x eb) ea) eb'
+      eval (Live f) Φ Γ (EApp (EThunk Γ' (ELam x eb)) ea) eb'
 
   (** Rule App-Spine: Reduce a function head that is a computation. A cast,
       a branch, a closure, a bottom and a constructor or primitive spine are
@@ -1105,9 +1112,9 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       Forall2 (eval (dec f) Φ Γ) args args' ->
       eval (Live f) Φ Γ (EApp ef ea) (reduce_prim p args')
 
-  (** Rule Lam: Function abstraction evaluates to runtime closure *)
+  (** Rule Lam: a lambda evaluates to its closure, the thunk (Γ, λx. e) *)
   | Eval_Lam : forall f Φ Γ x e,
-      eval (Live f) Φ Γ (ELam x e) (EClos Γ x e)
+      eval (Live f) Φ Γ (ELam x e) (EThunk Γ (ELam x e))
 
   (** Rule App-Cast: Higher-order coercion pushing *)
   | Eval_AppCast : forall f Φ Γ ef γ ea γ_a γ_r er,
@@ -1257,7 +1264,7 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 
 (**
   Source expressions represent pure System FC ASTs translated from Haskell
-  prior to evaluation. They contain no runtime environment closures (EClos)
+  prior to evaluation. They contain no runtime thunks or closures (EThunk)
   and no runtime symbolic execution branch trees (EIf).
 *)
 
@@ -1273,7 +1280,6 @@ Fixpoint fv (e : expr) : list var :=
   | EVar x => [x]
   | EApp f a => fv f ++ fv a
   | ELam x body => remove string_dec x (fv body)
-  | EClos _ x body => remove string_dec x (fv body)
   | ECase es alts => fv es ++ flat_map fv_alt alts
   | ECast e _ => fv e
   | EIf ec et ef => fv ec ++ fv et ++ fv ef
@@ -1823,7 +1829,7 @@ Qed.
 Lemma eval_lam_same : forall Φ Γ x body v,
   sat Φ = true ->
   Φ ; Γ ⊢ ELam x body ⇓ v ->
-  v = EClos Γ x body.
+  v = EThunk Γ (ELam x body).
 Proof.
   intros Φ Γ x body v Hsat Heval.
   inversion Heval; subst.
@@ -2340,7 +2346,7 @@ Lemma self_app_fun_comp : forall Γ, Comp Γ self_app_fun.
 Proof. intros Γ. apply Comp_Lam. Qed.
 
 Lemma eval_self_app_fun : forall Φ Γ v,
-  sat Φ = true -> Φ ; Γ ⊢ self_app_fun ⇓ v -> v = EClos Γ self_app_var self_app_body.
+  sat Φ = true -> Φ ; Γ ⊢ self_app_fun ⇓ v -> v = EThunk Γ self_app_fun.
 Proof.
   intros Φ Γ v Hsat H. inversion H; subst; [no_con_head | reflexivity | congruence].
 Qed.
@@ -2380,7 +2386,7 @@ Lemma eval_self_app_var : forall Φ Γ,
   ResolvesToSelfApp Γ ->
   sat Φ = true ->
   forall v, Φ ; Γ ⊢ EVar self_app_var ⇓ v ->
-  exists Γ0, v = EClos Γ0 self_app_var self_app_body.
+  exists Γ0, v = EThunk Γ0 self_app_fun.
 Proof.
   intros Φ Γ HR Hsat. induction HR.
   - intros v Hev. inversion Hev; subst.
@@ -2401,13 +2407,13 @@ Inductive SelfAppState : environment -> expr -> Prop :=
   | SA_Self : forall Γ,
       SelfAppState Γ self_app
   | SA_ClosFun : forall Γ Γ0,
-      SelfAppState Γ (EApp (EClos Γ0 self_app_var self_app_body) self_app_fun)
+      SelfAppState Γ (EApp (EThunk Γ0 self_app_fun) self_app_fun)
   | SA_Var : forall Γ,
       ResolvesToSelfApp Γ ->
       SelfAppState Γ self_app_body
   | SA_ClosVar : forall Γ Γ0,
       ResolvesToSelfApp Γ ->
-      SelfAppState Γ (EApp (EClos Γ0 self_app_var self_app_body) (EVar self_app_var)).
+      SelfAppState Γ (EApp (EThunk Γ0 self_app_fun) (EVar self_app_var)).
 
 (** Every step out of a loop shape lands in a loop shape, so an unbounded
     derivation can never bottom out. The induction is on the derivation, not
@@ -2432,16 +2438,16 @@ Proof.
       apply SA_Var. apply self_app_extend_var. assumption.
   - (* Rule App-Spine *)
     inversion HL; subst.
-    + assert (Hef : ef' = EClos Γ self_app_var self_app_body)
+    + assert (Hef : ef' = EThunk Γ self_app_fun)
         by (apply (eval_self_app_fun Φ Γ ef' Hsat); assumption).
       subst ef'. apply IHeval2; [reflexivity | exact Hsat | apply SA_ClosFun].
-    + match goal with [ Hc : Comp _ (EClos _ _ _) |- _ ] => inversion Hc end.
+    + match goal with [ Hc : Comp _ (EThunk _ _) |- _ ] => inversion Hc; discriminate end.
     + match goal with
       | [ HR : ResolvesToSelfApp Γ, He : eval _ Φ Γ (EVar self_app_var) ef' |- _ ] =>
           destruct (eval_self_app_var Φ Γ HR Hsat ef' He) as [Γ0 Hef]; subst ef';
           apply IHeval2; [reflexivity | exact Hsat | apply SA_ClosVar; exact HR]
       end.
-    + match goal with [ Hc : Comp _ (EClos _ _ _) |- _ ] => inversion Hc end.
+    + match goal with [ Hc : Comp _ (EThunk _ _) |- _ ] => inversion Hc; discriminate end.
   - (* Rule App-Prim *)
     inversion HL; subst; unfold self_app, self_app_body, self_app_fun in H; simpl in H;
       injection H as ? ?; discriminate.
@@ -2462,7 +2468,7 @@ Lemma self_app_var_value_bounded : forall Γ,
   ResolvesToSelfApp Γ ->
   forall k Ψ, exists v,
     eval (Fin k) Ψ Γ (EVar self_app_var) v
-    /\ (v = EBot BOutOfFuel \/ exists Γ0, v = EClos Γ0 self_app_var self_app_body).
+    /\ (v = EBot BOutOfFuel \/ exists Γ0, v = EThunk Γ0 self_app_fun).
 Proof.
   intros Γ HR. induction HR as [Γa Γb Hl | Γa Γb Hl HR IH];
     intros k Ψ; destruct k as [| k].
@@ -2470,7 +2476,7 @@ Proof.
   - destruct k as [| k].
     + exists (EBot BOutOfFuel).
       split; [eapply Eval_Var; [exact Hl | apply Eval_OutOfFuel] | left; reflexivity].
-    + exists (EClos Γb self_app_var self_app_body). split.
+    + exists (EThunk Γb self_app_fun). split.
       * eapply Eval_Var; [exact Hl |]. simpl. unfold self_app_fun. apply Eval_Lam.
       * right. exists Γb. reflexivity.
   - exists (EBot BOutOfFuel). split; [apply Eval_OutOfFuel | left; reflexivity].
@@ -2492,10 +2498,10 @@ Proof.
         eapply Eval_AppSpine with (ef' := EBot BOutOfFuel);
           [apply self_app_fun_comp | apply Eval_OutOfFuel
           | apply Eval_OutOfFuel].
-      * destruct (IH Ψ Γ (EApp (EClos Γ self_app_var self_app_body) self_app_fun)
+      * destruct (IH Ψ Γ (EApp (EThunk Γ self_app_fun) self_app_fun)
                    (SA_ClosFun Γ Γ)) as [v Hv].
         exists v. unfold self_app.
-        eapply Eval_AppSpine with (ef' := EClos Γ self_app_var self_app_body).
+        eapply Eval_AppSpine with (ef' := EThunk Γ self_app_fun).
         -- apply self_app_fun_comp.
         -- simpl. unfold self_app_fun. apply Eval_Lam.
         -- simpl. exact Hv.
@@ -2509,10 +2515,10 @@ Proof.
         -- simpl. exact Hvf.
         -- destruct k as [| k]; [apply Eval_OutOfFuel | apply Eval_AppBot].
       * subst vf.
-        destruct (IH Ψ Γ (EApp (EClos Γ0 self_app_var self_app_body) (EVar self_app_var))
+        destruct (IH Ψ Γ (EApp (EThunk Γ0 self_app_fun) (EVar self_app_var))
                    (SA_ClosVar Γ Γ0 H)) as [v Hv].
         exists v. unfold self_app_body.
-        eapply Eval_AppSpine with (ef' := EClos Γ0 self_app_var self_app_body).
+        eapply Eval_AppSpine with (ef' := EThunk Γ0 self_app_fun).
         -- apply self_app_var_comp. exact H.
         -- simpl. exact Hvf.
         -- simpl. exact Hv.
@@ -2578,7 +2584,7 @@ Qed.
 
 Definition chain_var : var := "x".
 Definition chain_end : expr := ELam chain_var (EVar chain_var).
-Definition chain_value : expr := EClos EmptyEnv chain_var (EVar chain_var).
+Definition chain_value : expr := EThunk EmptyEnv (ELam chain_var (EVar chain_var)).
 
 Fixpoint var_chain (k : nat) : environment :=
   match k with
