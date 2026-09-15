@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore BranchLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -145,3 +145,12 @@ Proof.
 Qed.
 
 Print Assumptions finding2_not_a_counterexample.
+
+Theorem stacking_cast_violates_cast_expr_branch : ~ @CastExprBranch model_sorts stacking_solver.
+Proof.
+  intros H.
+  pose proof (H guard (ELit true) (ELit true) wild_cast) as E.
+  vm_compute in E. discriminate E.
+Qed.
+
+Print Assumptions stacking_cast_violates_cast_expr_branch.

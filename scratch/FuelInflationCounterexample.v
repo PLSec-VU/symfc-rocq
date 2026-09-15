@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore BranchLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Arith.Wf_nat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -649,3 +649,12 @@ Proof.
 Qed.
 
 Print Assumptions lawful_instance_refutes_target.
+
+Theorem fuel_solver_violates_reduce_prim_branch : ~ @ReducePrimBranch model_sorts fuel_solver.
+Proof.
+  intros H.
+  pose proof (H PNot nil (ELit true) (EThunk · (ELit true)) (ELit true) nil (Forall_nil _)) as E.
+  vm_compute in E. discriminate E.
+Qed.
+
+Print Assumptions fuel_solver_violates_reduce_prim_branch.
