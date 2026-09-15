@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Arith.Wf_nat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -658,3 +658,25 @@ Proof.
 Qed.
 
 Print Assumptions fuel_solver_violates_reduce_prim_branch.
+
+Definition thunk_arm : expr := EThunk · (ECon "U").
+Definition branch_arg : expr := EIf (@ELit model_sorts true) thunk_arm (ECon "U").
+
+Lemma branch_arg_contains_k : contains_k sigma_all no_symvars 2 branch_arg thunk_arm.
+Proof.
+  apply (ContK_If_True sigma_all no_symvars 0 (@ELit model_sorts true) thunk_arm (ECon "U") thunk_arm);
+    [exact lit_true_models_cond |].
+  exact (ContK_Thunk sigma_all no_symvars 0 0 · · _ _ (ContK_Env_Empty _ _) (ContK_Con _ _ _)).
+Qed.
+
+Theorem fuel_solver_violates_reduce_prim_contains_k : ~ @ReducePrimContainsK model_sorts fuel_solver.
+Proof.
+  intros Hlaw.
+  destruct (Hlaw sigma_all no_symvars PNot (2 :: nil) (branch_arg :: nil) (thunk_arm :: nil)
+              (Forall3_cons _ _ _ _ _ _ _ branch_arg_contains_k (Forall3_nil _)))
+    as [k' [Hle Hc]].
+  apply thunk_depth_contains_k in Hc.
+  vm_compute in Hle, Hc. lia.
+Qed.
+
+Print Assumptions fuel_solver_violates_reduce_prim_contains_k.

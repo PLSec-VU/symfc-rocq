@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Arith.Wf_nat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -763,3 +763,23 @@ Proof.
 Qed.
 
 Print Assumptions branch_lawful_instance_refutes_target.
+
+Definition branch_thunk : expr := EThunk · (EIf (@ELit model_sorts true) (ECon unit_con) (ECon unit_con)).
+Definition plain_thunk : expr := EThunk · (ECon unit_con).
+
+Lemma branch_thunk_contains_k : contains_k sigma_all no_symvars 2 branch_thunk plain_thunk.
+Proof.
+  apply (ContK_Thunk sigma_all no_symvars 0 2); [apply ContK_Env_Empty |].
+  exact (ContK_If_True sigma_all no_symvars 0 (ELit true) (ECon unit_con) (ECon unit_con) (ECon unit_con)
+           lit_true_models_cond (ContK_Con _ _ _)).
+Qed.
+
+Theorem wild_solver_violates_cast_expr_contains_k : ~ @CastExprContainsK model_sorts wild_solver.
+Proof.
+  intros Hlaw.
+  pose proof (Hlaw sigma_all no_symvars 2 branch_thunk plain_thunk coerc0 branch_thunk_contains_k) as Hc.
+  apply thunk_depth_contains_k in Hc.
+  vm_compute in Hc. lia.
+Qed.
+
+Print Assumptions wild_solver_violates_cast_expr_contains_k.
