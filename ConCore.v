@@ -613,7 +613,7 @@ Proof.
     { apply decompose_con_app_concore with (e := e) (d := d); assumption. }
     assert (Hep : concore_expr ep).
     { apply find_alt_concore with (d := d) (alts := alts) (xs := xs); assumption. }
-    apply (concore_eval_closed_fix (dec k) Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat);
+    apply (concore_eval_closed_fix k Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep Hsat);
       [| assumption].
     apply concrete_env_extend_multi; assumption.
   - (* FoldAlts_Bot *) exact Hcon.
@@ -1172,26 +1172,27 @@ Axiom cast_expr_contains : forall σ S es ec γ,
   Taking apart a derivation that is fixed at the unlimited budget.
 
   `inversion` on a hypothesis of the form eval Inf ... already drops Rule
-  Out-Of-Fuel, because that rule writes Fin 0 in its conclusion and Fin 0
+  Out-Of-Fuel, because that rule writes Spent in its conclusion and Spent
   cannot unify with Inf. `destruct` and `induction` do not: they first
   generalise the fuel index into a variable, so Rule Out-Of-Fuel comes back as
   a case and every recursive premise arrives at dec f instead of Inf.
 
   The two tactics below keep the index. They name it, remember the equation
-  that says the name is Inf, and use that equation to kill the out-of-fuel
-  case. Use them for any lemma that is true only at the unlimited budget.
+  that says the name is Inf, use that equation to kill the out-of-fuel case,
+  and inject it to fix f at Unlimited in every other case. Use them for any
+  lemma that is true only at the unlimited budget.
 *)
 Ltac inf_induction H :=
   let k := fresh "kf" in
   let Hk := fresh "Hkf" in
   remember Inf as k eqn:Hk in H;
-  induction H; try discriminate Hk; subst.
+  induction H; try discriminate Hk; try (injection Hk as Hk); subst.
 
 Ltac inf_destruct H :=
   let k := fresh "kf" in
   let Hk := fresh "Hkf" in
   remember Inf as k eqn:Hk in H;
-  revert Hk; destruct H; intro Hk; try discriminate Hk; subst.
+  revert Hk; destruct H; intro Hk; try discriminate Hk; try (injection Hk as Hk); subst.
 
 (** Every rule other than App-Prim is excluded here, by solvability or by Rule
     Prune being unreachable under a model.
@@ -1465,7 +1466,7 @@ Proof.
   inversion Heval; subst.
   - reflexivity.
   - no_con_head.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma eval_con_con : forall Γ d v,
@@ -1481,7 +1482,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - reflexivity.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma eval_clos_false : forall Γ env x body v,
@@ -1490,7 +1491,7 @@ Proof.
   intros Γ env x body v Heval.
   inversion Heval; subst.
   - no_con_head.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 (** A variable in WHNF is unbound, hence symbolic, hence its own value. Rule
@@ -1513,7 +1514,7 @@ Proof.
   intros Γ p v Heval.
   inversion Heval; subst.
   - no_con_head.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma eval_coercion_con : forall Γ γ v,
@@ -1523,7 +1524,7 @@ Proof.
   inversion Heval; subst.
   - no_con_head.
   - reflexivity.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma eval_type_con : forall Γ τ v,
@@ -1532,7 +1533,7 @@ Proof.
   intros Γ τ v Heval.
   inversion Heval; subst.
   - no_con_head.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
   - reflexivity.
 Qed.
 
@@ -1542,12 +1543,12 @@ Proof.
   intros Γ γ a v Heval.
   inversion Heval; subst.
   - no_con_head.
-  - apply H1. apply Whnf_Coercion.
+  - apply H2. apply Whnf_Coercion.
   - match goal with
     | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
         simpl in H; discriminate
     end.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma eval_app_type_false : forall Γ τ a v,
@@ -1556,12 +1557,12 @@ Proof.
   intros Γ τ a v Heval.
   inversion Heval; subst.
   - no_con_head.
-  - apply H1. apply Whnf_Type.
+  - apply H2. apply Whnf_Type.
   - match goal with
     | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
         simpl in H; discriminate
     end.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma eval_app_lit_false : forall Γ l a v,
@@ -1570,12 +1571,12 @@ Proof.
   intros Γ l a v Heval.
   inversion Heval; subst.
   - no_con_head.
-  - apply H1. apply Whnf_Solvable. apply Solvable_Lit.
+  - apply H2. apply Whnf_Solvable. apply Solvable_Lit.
   - match goal with
     | [ H : unspool_app (EApp _ _) [] = _ |- _ ] =>
         simpl in H; discriminate
     end.
-  - rewrite sat_pc_true in H. discriminate.
+  - rewrite sat_pc_true in H0. discriminate.
 Qed.
 
 Lemma not_whnf_case : forall Γ es alts,
@@ -1803,7 +1804,7 @@ Proof.
     end.
   - simpl in Hop. discriminate.
   - simpl in Hop. discriminate.
-  - rewrite Hsat in H. discriminate.
+  - rewrite Hsat in H0. discriminate.
 Qed.
 
 Lemma eval_app_spine_sound : forall Φ Γs Γc σ S ef ea ef' er e_con,
@@ -1982,7 +1983,7 @@ Proof.
     | kv Φ Γ τ
     | kv Φ Γ Γ' eb eb' Heval_t
     | Φ Γ eb
-    ]; intros Hk0; try discriminate Hk0; subst kv; intros σ S l Hmod Hfree Hden;
+    ]; intros Hk0; try discriminate Hk0; injection Hk0 as Hk0; subst kv; intros σ S l Hmod Hfree Hden;
     try denote_absurd.
   - (* Eval_Var: a denoting variable is symbolic, so Γ cannot bind it *)
     exfalso. destruct (denote_var_inv σ S x l Hden) as [Hsx _].
@@ -2496,7 +2497,7 @@ Proof.
     | kv Φ Γ τ
     | kv Φ Γ Γ' e e' Heval_t
     | Φ Γ e
-    ]; intros Hk0; try discriminate Hk0; subst kv; intros Γc σ S e_con Hmod Henv Hcont Hcon.
+    ]; intros Hk0; try discriminate Hk0; injection Hk0 as Hk0; subst kv; intros Γc σ S e_con Hmod Henv Hcont Hcon.
   - (* Eval_Var *)
     assert (Hfree : sym_free_env S Γ)
       by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
@@ -2533,7 +2534,7 @@ Proof.
     destruct (contains_unspool_con σ S esp e_con Hcont [] [] Hnil d args Hunspool_con)
       as [args_c [Hunspool_c Hargs_c]].
     exists (make_con_app d (map (EThunk Γc) args_c)). split.
-    + unfold eval_con. exact (Eval_Con Inf pc_true Γc e_con d args_c Hunspool_c).
+    + unfold eval_con. exact (Eval_Con Unlimited pc_true Γc e_con d args_c Hunspool_c).
     + exact (contains_con_value σ S Γ Γc d args args_c Henv Hargs_c).
   - (* Eval_Cast *)
     apply contains_cast_inv in Hcont as [ec [Heq Hcont_e]]; subst.
@@ -3834,7 +3835,7 @@ Lemma fold_alts_con_inv : forall f Φ Γ e d ea xs ep alts r,
   decompose_con_app e = Some (d, ea) ->
   find_alt d alts = Some (xs, ep) ->
   fold_alts f Φ Γ e alts r ->
-  eval (dec f) Φ (extend_env_multi Γ xs ea Γ) ep r.
+  eval f Φ (extend_env_multi Γ xs ea Γ) ep r.
 Proof.
   intros f Φ Γ e d ea xs ep alts r Hdec Hfind Hfold.
   inversion Hfold; subst; unfold decompose_con_app in Hdec; simpl in Hdec;
@@ -3891,9 +3892,11 @@ Qed.
   The recursion runs on the FIRST derivation. The second one is taken apart
   by the inversion lemmas above, so nothing depends on its shape.
 
-  Unlimited budget only, hence the k0 = Inf premise. Determinism is what a
-  finite budget costs: at Fin 0 the literal ELit l reduces both to itself by
-  Rule Lit and to EBot BUndefined by Rule Out-Of-Fuel.
+  Unlimited budget only, hence the k0 = Inf premise. A finite budget breaks
+  one step of the argument: Section 12.2 separates Rule App-Spine from Rule
+  App-Prim because the operator of a saturated primitive spine has no value,
+  and at Fin 0 Rule Out-Of-Fuel gives it one.
+  bounded_determinism_decides_reduce_prim below is the consequence.
 *)
 Fixpoint eval_det_fix (k0 : fuel) (Φ : path_condition) (Γ : environment) (e v1 : expr)
   (Heval : eval k0 Φ Γ e v1) {struct Heval} :
@@ -3927,7 +3930,7 @@ Proof.
     | kv Φ Γ τ
     | kv Φ Γ Γ' e0 e' Heval_t
     | Φ Γ e0
-    ]; intros Hk0; try discriminate Hk0; subst kv; intros v2 Hsat Henv Hcon H2.
+    ]; intros Hk0; try discriminate Hk0; injection Hk0 as Hk0; subst kv; intros v2 Hsat Henv Hcon H2.
   - (* Rule Var *)
     destruct (lookup_env_concrete Γ x Γ' e0 Henv Hlook) as [Henv' He].
     exact (eval_det_fix Inf Φ Γ' e0 e' Heval_x eq_refl v2 Hsat Henv' He
@@ -4052,6 +4055,62 @@ Corollary concore_eval_deterministic_top : forall e v1 v2,
 Proof.
   intros e v1 v2 Hcon H1 H2.
   exact (concore_eval_deterministic · e v1 v2 CEnv_Empty Hcon H1 H2).
+Qed.
+
+(**
+  Determinism at every finite budget is not provable here. The operator of
+  the saturated spine below is not a value, because its first argument is a
+  lambda. At Fin 1 Rule App-Spine runs the operator at Fin 0, gets the
+  undefined value, and answers undefined. Rule App-Prim runs the arguments at
+  Fin 0 instead and answers reduce_prim of three undefined values. So
+  determinism at every budget would fix what the solver returns for those
+  arguments, which no axiom here says.
+*)
+Definition prim_spine_arg : expr := ELam "y" (EVar "y").
+Definition prim_spine_operator : expr :=
+  EApp (EApp (EPrimOp op_ite) prim_spine_arg) prim_spine_arg.
+Definition prim_spine : expr := EApp prim_spine_operator prim_spine_arg.
+Definition undefined_args : list expr :=
+  EBot BUndefined :: EBot BUndefined :: EBot BUndefined :: nil.
+
+Lemma prim_spine_concore : concore_expr prim_spine.
+Proof. unfold prim_spine, prim_spine_operator, prim_spine_arg. repeat constructor. Qed.
+
+Lemma prim_spine_operator_not_whnf : forall Γ, ~ Whnf Γ prim_spine_operator.
+Proof.
+  intros Γ Hw. unfold prim_spine_operator, prim_spine_arg in Hw.
+  inversion Hw; subst; [| no_con_head].
+  match goal with [ Hs : Solvable _ _ |- _ ] => inversion Hs; subst end.
+  match goal with [ Hs : Solvable _ (ELam _ _) |- _ ] => inversion Hs end.
+Qed.
+
+Lemma prim_spine_by_app_spine :
+  eval (Fin 1) pc_true · prim_spine (EBot BUndefined).
+Proof.
+  unfold prim_spine. eapply Eval_AppSpine with (ef' := EBot BUndefined).
+  - apply prim_spine_operator_not_whnf.
+  - reflexivity.
+  - apply Eval_OutOfFuel.
+  - apply Eval_OutOfFuel.
+Qed.
+
+Lemma prim_spine_by_app_prim :
+  eval (Fin 1) pc_true · prim_spine (reduce_prim op_ite undefined_args).
+Proof.
+  unfold prim_spine, prim_spine_operator. eapply Eval_AppPrim.
+  - reflexivity.
+  - rewrite op_ite_arity. reflexivity.
+  - unfold undefined_args. repeat constructor.
+Qed.
+
+Lemma bounded_determinism_decides_reduce_prim :
+  (forall n Γ e v1 v2, concrete_env Γ -> concore_expr e ->
+     eval (Fin n) pc_true Γ e v1 -> eval (Fin n) pc_true Γ e v2 -> v1 = v2) ->
+  reduce_prim op_ite undefined_args = EBot BUndefined.
+Proof.
+  intros Hdet.
+  exact (Hdet 1%nat · prim_spine _ _ CEnv_Empty prim_spine_concore
+           prim_spine_by_app_prim prim_spine_by_app_spine).
 Qed.
 
 (** The term of Section 12.3 has exactly one value, the one Rule App-Cast
@@ -4209,7 +4268,7 @@ Section AppliedConstructorMatches.
 
   Lemma just_evaluates : forall Γ, pc_true ; Γ ⊢ just ⇓ just_value Γ.
   Proof.
-    intros Γ. exact (Eval_Con Inf pc_true Γ just "Just" [ELit l] just_unspools).
+    intros Γ. exact (Eval_Con Unlimited pc_true Γ just "Just" [ELit l] just_unspools).
   Qed.
 
   Lemma just_is_concore : concore_expr just.
@@ -4738,7 +4797,7 @@ Proof.
     | kv Ψ0 Γ0 τ
     | kv Ψ0 Γ0 Γ' e0 e' Hev_t
     | Ψ0 Γ0 e0
-    ]; intros Hk0 Hsat; try discriminate Hk0; subst kv;
+    ]; intros Hk0 Hsat; try discriminate Hk0; injection Hk0 as Hk0; subst kv;
     intros Φ Γs σ S e_sym Hmod Henv Hcont Hsf Hsfenv.
   - (* Rule Var *)
     inversion Hcont; subst; try not_solver_free.
@@ -4780,7 +4839,7 @@ Proof.
       as [args_c' [Hu_c Hargs]].
     rewrite Hunspool_con in Hu_c. injection Hu_c as <- <-.
     exists (make_con_app d (map (EThunk Γs) args0)). split; [| split].
-    + exact (Eval_Con Inf Φ Γs e_sym d args0 Hu0).
+    + exact (Eval_Con Unlimited Φ Γs e_sym d args0 Hu0).
     + exact (contains_con_value σ S Γs Γ0 d args0 args_c Henv Hargs).
     + apply solver_free_con_value; [exact Hsfenv |].
       exact (solver_free_unspool_args e_sym [] _ _ Hsf (Forall_nil _) Hu0).
@@ -5016,10 +5075,12 @@ End BranchAtTheTopIsNotEnough.
   three things, and at the bottom it asks for one.
 
   At a branch (Rules Prog_Then and Prog_Else):
-  - the guard has ONE value ec' at every budget, so the formula Rule If reads
-    off the guard does not depend on the budget. It has to be one value: the
-    arms below are evaluated under Φ ∧ pc, and a formula that changed with
-    the budget would change the path condition the recursion runs under.
+  - the guard has ONE value ec' at every budget from some threshold on, so
+    the formula Rule If reads off the guard does not depend on the budget. It
+    has to be one value: the arms below are evaluated under Φ ∧ pc, and a
+    formula that changed with the budget would change the path condition the
+    recursion runs under. It cannot be every budget: at Fin 0 the guard has
+    only the undefined value, and no formula reads off that.
   - the model reads the guard's value the same way it reads the guard. This
     is what eval_models_cond proves at the unlimited budget; here it is asked
     for directly, because the guard is evaluated at a finite budget and that
@@ -5062,7 +5123,7 @@ Inductive progressive (σ : valuation) (S : symvars)
       leaf_progressive Φ Γ e ->
       progressive σ S Φ Γ e e_con
   | Prog_Then : forall Φ Γ ec et ef ec' pc e_con,
-      (forall n, eval (Fin n) Φ Γ ec ec') ->
+      (exists h, forall n, (h <= n)%nat -> eval (Fin n) Φ Γ ec ec') ->
       models_cond σ S ec ->
       models_cond σ S ec' ->
       expr_to_pc Γ ec' = Some pc ->
@@ -5070,7 +5131,7 @@ Inductive progressive (σ : valuation) (S : symvars)
       progressive σ S (Φ ∧ pc) Γ et e_con ->
       progressive σ S Φ Γ (EIf ec et ef) e_con
   | Prog_Else : forall Φ Γ ec et ef ec' pc e_con,
-      (forall n, eval (Fin n) Φ Γ ec ec') ->
+      (exists h, forall n, (h <= n)%nat -> eval (Fin n) Φ Γ ec ec') ->
       models_not_cond σ S ec ->
       models_not_cond σ S ec' ->
       expr_to_pc Γ ec' = Some pc ->
@@ -5113,8 +5174,9 @@ Qed.
   survive the induction, for the same reason it did not survive the induction
   in eval_fin_of_inf_fix: a bigger budget is not always safe, so the only
   claim a branch can pass up to the branch above is "every budget from here
-  on works". Rule If then combines the two budgets its premises report with
-  max and spends one more on itself.
+  on works". Rule If then combines the three budgets its premises report -
+  the guard, the taken arm and the untaken arm - with max and spends one more
+  on itself.
 
   The value found at budget n is allowed to depend on n. It has to be: the
   arm the model skips answers something different at every budget, and that
@@ -5163,24 +5225,26 @@ Proof.
     assert (Hmod_and : σ ⊨ (Φ ∧ pc)) by (apply models_and; assumption).
     destruct (IH Γc v_con Hmod_and Henv Hcon Hevalc) as [h1 Hh1].
     destruct Htot as [h2 Hh2].
-    exists (Datatypes.S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    destruct Hguard as [h0 Hh0].
+    exists (Datatypes.S (Nat.max h0 (Nat.max h1 h2))). intros n Hn. destruct n as [| m]; [lia |].
     destruct (Hh1 m ltac:(lia)) as [et' [Het' Hcet']].
     destruct (Hh2 m ltac:(lia)) as [ef' Hef'].
     exists (EIf ec' et' ef'). split.
     + eapply Eval_If;
-        [ simpl; apply Hguard | exact Hpc | simpl; exact Het' | simpl; exact Hef' ].
+        [ simpl; apply Hh0; lia | exact Hpc | simpl; exact Het' | simpl; exact Hef' ].
     + apply Cont_If_True; [exact Hmc' | exact Hcet'].
   - (* the model takes the else-arm *)
     assert (Hpcmod : σ ⊨ (¬ pc)) by (eapply models_not_cond_pc; eassumption).
     assert (Hmod_and : σ ⊨ (Φ ∧ ¬ pc)) by (apply models_and; assumption).
     destruct (IH Γc v_con Hmod_and Henv Hcon Hevalc) as [h1 Hh1].
     destruct Htot as [h2 Hh2].
-    exists (Datatypes.S (Nat.max h1 h2)). intros n Hn. destruct n as [| m]; [lia |].
+    destruct Hguard as [h0 Hh0].
+    exists (Datatypes.S (Nat.max h0 (Nat.max h1 h2))). intros n Hn. destruct n as [| m]; [lia |].
     destruct (Hh1 m ltac:(lia)) as [ef' [Hef' Hcef']].
     destruct (Hh2 m ltac:(lia)) as [et' Het'].
     exists (EIf ec' et' ef'). split.
     + eapply Eval_If;
-        [ simpl; apply Hguard | exact Hpc | simpl; exact Het' | simpl; exact Hef' ].
+        [ simpl; apply Hh0; lia | exact Hpc | simpl; exact Het' | simpl; exact Hef' ].
     + apply Cont_If_False; [exact Hmnc' | exact Hcef'].
 Qed.
 
@@ -5307,7 +5371,7 @@ Section CompletenessNonVacuity.
   Lemma witness_progressive : progressive σ Sv Φ · live_branch (ELit l').
   Proof.
     eapply Prog_Then with (ec' := EVar x) (pc := PCVar x).
-    - intros n. apply Eval_SymVar. reflexivity.
+    - exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_SymVar. reflexivity.
     - exact guard_judged.
     - exact guard_judged.
     - reflexivity.
@@ -5321,7 +5385,7 @@ Section CompletenessNonVacuity.
   Lemma witness_progressive_solver_free : progressive σ Sv Φ · live_branch (ELit l').
   Proof.
     eapply Prog_Then with (ec' := EVar x) (pc := PCVar x).
-    - intros n. apply Eval_SymVar. reflexivity.
+    - exists 1%nat. intros n Hn. destruct n as [| m]; [lia |]. apply Eval_SymVar. reflexivity.
     - exact guard_judged.
     - exact guard_judged.
     - reflexivity.
@@ -5343,12 +5407,13 @@ Section CompletenessNonVacuity.
     - apply Eval_Lit.
   Qed.
 
-  (** The budget the recursion computes here is one, and this is what it
-      derives: the taken arm reaches its literal, the looping arm runs the
-      budget to zero and Rule Out-Of-Fuel answers, and the concretion never
-      looks at that answer. *)
-  Lemma witness_budget_is_one :
-    eval (Fin 1) Φ · live_branch (EIf (EVar x) (ELit l') (EBot BUndefined))
+  (** The budget the recursion computes here is two, and this is what it
+      derives: Rule If spends one level, the guard and the taken arm spend the
+      second one on a rule that finishes, and the looping arm spends it on
+      Rule App-Spine, whose premises then answer by Rule Out-Of-Fuel. The
+      concretion never looks at that answer. *)
+  Lemma witness_budget_is_two :
+    eval (Fin 2) Φ · live_branch (EIf (EVar x) (ELit l') (EBot BUndefined))
     /\ contains σ Sv (EIf (EVar x) (ELit l') (EBot BUndefined)) (ELit l').
   Proof.
     split.
@@ -5356,26 +5421,41 @@ Section CompletenessNonVacuity.
       + apply Eval_SymVar. reflexivity.
       + reflexivity.
       + apply Eval_Lit.
-      + apply Eval_OutOfFuel.
+      + unfold self_app. eapply Eval_AppSpine with (ef' := EBot BUndefined);
+          [apply self_app_fun_not_whnf | reflexivity | apply Eval_OutOfFuel
+          | apply Eval_OutOfFuel].
     - apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
   Qed.
 
-  (** And every budget works, which is what completeness_upward claims. The
-      value changes with the budget; the concretion does not. *)
-  Lemma witness_every_budget : forall n,
+  (** And every budget from two on works, which is what completeness_upward
+      claims. The value changes with the budget; the concretion does not. *)
+  Lemma witness_every_budget : forall n, (2 <= n)%nat ->
     exists v, eval (Fin n) Φ · live_branch v /\ contains σ Sv v (ELit l').
   Proof.
-    intros n. destruct n as [| m].
-    - destruct (self_app_has_value_at_every_budget 0%nat (Φ ∧ ¬ PCVar x) ·) as [vf Hvf].
-      exists (EIf (EVar x) (ELit l') vf). split.
-      + eapply Eval_If with (pc_c := PCVar x);
-          [apply Eval_SymVar; reflexivity | reflexivity | apply Eval_Lit | exact Hvf].
-      + apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
-    - destruct (self_app_has_value_at_every_budget m (Φ ∧ ¬ PCVar x) ·) as [vf Hvf].
-      exists (EIf (EVar x) (ELit l') vf). split.
-      + eapply Eval_If with (pc_c := PCVar x);
-          [apply Eval_SymVar; reflexivity | reflexivity | apply Eval_Lit | exact Hvf].
-      + apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
+    intros n Hn. destruct n as [| [| m]]; [lia | lia |].
+    destruct (self_app_has_value_at_every_budget (Datatypes.S m) (Φ ∧ ¬ PCVar x) ·)
+      as [vf Hvf].
+    exists (EIf (EVar x) (ELit l') vf). split.
+    - eapply Eval_If with (pc_c := PCVar x);
+        [apply Eval_SymVar; reflexivity | reflexivity | apply Eval_Lit | exact Hvf].
+    - apply Cont_If_True; [exact guard_judged | apply Cont_Lit].
+  Qed.
+
+  (** Below two the bound is too tight. At Fin 0 the whole program answers
+      undefined, and at Fin 1 Rule If has its premises at Fin 0, where the
+      guard has no formula to read. *)
+  Lemma witness_budget_below_two_misses : forall n v,
+    (n < 2)%nat -> eval (Fin n) Φ · live_branch v -> ~ contains σ Sv v (ELit l').
+  Proof.
+    intros n v Hn Hv. destruct n as [| [| m]]; [| | lia].
+    - inversion Hv; subst. intros Hc. inversion Hc; subst; kill_denote.
+    - exfalso. unfold live_branch in Hv. inversion Hv; subst.
+      + no_con_head.
+      + match goal with
+        | [ Hc : eval _ _ _ (EVar x) ?c, Hp : expr_to_pc _ ?c = Some _ |- _ ] =>
+            inversion Hc; subst; simpl in Hp; discriminate Hp
+        end.
+      + rewrite (models_sat σ Φ HmodPhi) in *. discriminate.
   Qed.
 
   (** The budget is not decoration: at the unlimited budget this program has
@@ -5413,9 +5493,10 @@ Section CompletenessNonVacuity.
       | Φ0 Γ0 ec0 et0 ef0 ec' pc e_con Hguard Hmnc Hmnc' Hpc Htot Hns ]; subst.
     - discriminate Hnotif.
     - (* the model takes the literal arm, so the stuck arm must be budget-total *)
+      destruct Hguard as [hg Hg].
       assert (Hec : ec' = EVar x)
-        by (eapply eval_symvar_fin_same with (k := 0%nat) (Γ := ·);
-            [reflexivity | exact HsatPhi | apply (Hguard 1%nat)]).
+        by (eapply eval_symvar_fin_same with (k := hg) (Γ := ·);
+            [reflexivity | exact HsatPhi | apply (Hg (Datatypes.S hg)); lia]).
       subst ec'. simpl in Hpc. injection Hpc as Hpc. subst pc.
       destruct Htot as [h Hh].
       destruct (Hh (Datatypes.S h) ltac:(lia)) as [v Hv].
@@ -5423,9 +5504,10 @@ Section CompletenessNonVacuity.
     - (* the model takes the stuck arm, so the stuck arm is the leaf, and the
          leaf has to be the concretion's counterpart. The other arm's literal
          is the concretion here, and applying a literal is not a literal. *)
+      destruct Hguard as [hg Hg].
       assert (Hec : ec' = EVar x)
-        by (eapply eval_symvar_fin_same with (k := 0%nat) (Γ := ·);
-            [reflexivity | exact HsatPhi | apply (Hguard 1%nat)]).
+        by (eapply eval_symvar_fin_same with (k := hg) (Γ := ·);
+            [reflexivity | exact HsatPhi | apply (Hg (Datatypes.S hg)); lia]).
       subst ec'. simpl in Hpc. injection Hpc as Hpc. subst pc.
       inversion Hns as [ Φ1 Γ1 e1 ec1 Hnotif1 Hcont1 Hleaf | | ]; subst.
       + unfold stuck_arm in Hcont1. inversion Hcont1; subst.

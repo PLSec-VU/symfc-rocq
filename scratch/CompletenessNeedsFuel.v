@@ -3,11 +3,10 @@ From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
 (* Every statement here is about the unlimited budget, eval Inf, which the
-   notation "Phi ; Gamma |- e ==> v" now means. The argument below is the
-   reason the budget alone does not buy completeness, so nothing here should
-   be restated at a finite budget: at Fin 0 every expression evaluates, stuck
-   ones included, and the counterexample stops being a counterexample without
-   becoming a proof. *)
+   notation "Phi ; Gamma |- e ==> v" now means. The finite budgets are
+   covered in scratch/DivergenceNeedsFuel.v, Section 5: at Fin 0 the program
+   answers only the undefined value, and at every greater budget it has no
+   value that contains the concrete one. *)
 
 (* A malformed application is stuck: no rule applies, and Rule Prune cannot
    rescue it while the path condition is satisfiable. *)
@@ -16,7 +15,7 @@ Lemma app_lit_stuck : forall Φ Γ l a v,
 Proof.
   intros Φ Γ l a v Hsat Heval.
   inversion Heval; subst; try discriminate.
-  - apply H1. apply Whnf_Solvable. apply Solvable_Lit.
+  - apply H2. apply Whnf_Solvable. apply Solvable_Lit.
   - congruence.
 Qed.
 
@@ -30,11 +29,12 @@ Qed.
    and Prune cannot fire because that branch is feasible.
 
    The then branch is a LITERAL on purpose.  A uniform depth bound does
-   not rescue this: at depth 1 both arms truncate, so the then arm yields
-   EBot BUndefined and contains (EBot BUndefined) (ELit l') is false,
-   while at any greater depth the stuck else arm has no derivation at all
-   and out-of-fuel cannot fire.  Fuel decrements uniformly, so no single
-   k gives the taken path enough depth AND the untaken arm little enough.
+   not rescue this: at depth 0 the whole program is EBot BUndefined, and
+   contains (EBot BUndefined) (ELit l') is false; at depth 1 the guard is
+   read at depth 0, no formula reads off it, and Rule If does not fire;
+   at any greater depth the stuck else arm has no derivation at all and
+   out-of-fuel cannot fire.  Fuel decrements uniformly, so no single k
+   gives the taken path enough depth AND the untaken arm little enough.
    Stuckness needs the EBot BUndefined fallback that fold_alts already
    has, not a bound. *)
 Section CompletenessFailsOnPlainEval.

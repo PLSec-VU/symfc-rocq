@@ -23,7 +23,7 @@ Proof.
   (* TWO goals: the EvOut case SURVIVES.  Coq cannot see a constructor
      clash between the rule's index CoO and the cofix term omega, so it
      keeps the case.  Compare FuelIndexFeasibility.v, where the index
-     Fin 0 clashes with Inf outright and inversion drops the case,
+     Spent clashes with Inf outright and inversion drops the case,
      leaving ONE goal.  That difference is the whole cost argument:
      with conat every existing inversion in the development grows a
      spurious case that must be discharged by hand. *)
