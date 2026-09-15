@@ -1113,7 +1113,7 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
   (** Rule Thunk: a thunk evaluates its expression in its own environment *)
   | Eval_Thunk : forall f Φ Γ Γ' e e',
       eval (dec f) Φ Γ' e e' ->
-      eval f Φ Γ (EThunk Γ' e) e'
+      eval (Live f) Φ Γ (EThunk Γ' e) e'
 
   (**
     Rule Out-Of-Fuel: a spent budget gives up and reports an undefined value.
@@ -1676,7 +1676,7 @@ Proof.
   - rewrite Hsat in H0. discriminate.
 Qed.
 
-Lemma eval_nullary_con : forall f Φ Γ d, eval f Φ Γ (ECon d) (ECon d).
+Lemma eval_nullary_con : forall f Φ Γ d, eval (Live f) Φ Γ (ECon d) (ECon d).
 Proof. intros f Φ Γ d. exact (Eval_Con f Φ Γ (ECon d) d [] eq_refl). Qed.
 
 (** Evaluation of constructors under a satisfiable path condition *)
@@ -2533,7 +2533,7 @@ Lemma var_chain_needs_bound : forall k n Φ,
 Proof.
   induction k as [| k IH]; intros n Φ H; destruct n as [| m];
     try (apply eval_fin_zero_inv in H; discriminate H).
-  - inversion H; subst.
+  - inversion H; subst; [| no_con_head].
     match goal with
     | [ Hl : lookup_env _ _ = Some _, Hv : eval _ _ _ _ _ |- _ ] =>
         rewrite var_chain_lookup_end in Hl; injection Hl as <- <-;
@@ -2543,7 +2543,7 @@ Proof.
     match goal with
     | [ Hv : eval (Fin 0) _ _ _ _ |- _ ] => apply eval_fin_zero_inv in Hv; discriminate Hv
     end.
-  - inversion H; subst.
+  - inversion H; subst; [| no_con_head].
     match goal with
     | [ Hl : lookup_env _ _ = Some _, Hv : eval _ _ _ _ _ |- _ ] =>
         rewrite var_chain_lookup_link in Hl; injection Hl as <- <-;
