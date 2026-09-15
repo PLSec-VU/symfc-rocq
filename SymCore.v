@@ -906,7 +906,7 @@ Lemma ite_cast : forall Γ ec e1 γ1 e2 γ2,
 Proof. reflexivity. Qed.
 
 (** ------------------------------------------------------------------------- *)
-(** Fuel: a depth bound carried by the reduction judgement                      *)
+(** Fuel: a depth bound carried by the reduction judgement                     *)
 (** ------------------------------------------------------------------------- *)
 
 (**
@@ -917,7 +917,8 @@ Proof. reflexivity. Qed.
   at a Live fuel f and passes dec f to each of its recursive premises. So a
   rule at Fin (S n) has its premises at Fin n, and at Fin 0, which is Spent,
   Rule Out-Of-Fuel is the only rule. A derivation at Fin n therefore nests at
-  most n ordinary rules, and the last one it reaches answers undefined.
+  most n ordinary rules, and any part of it that needs more ends in Rule
+  Out-Of-Fuel.
 
   dec Unlimited is Inf, so a derivation at Inf never runs down, and the rule
   set at Inf is exactly the rule set this judgement had before fuel existed.
