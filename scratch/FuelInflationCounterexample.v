@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore CostLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Arith.Wf_nat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -146,8 +146,32 @@ Proof.
   - exfalso. rewrite (if_thunk_not_ground _ Hshape) in H. discriminate.
 Qed.
 
-#[local] Instance fuel_reduce_prim_ite_contains : ReducePrimIteContains.
-Proof. exact model_reduce_prim_ite_contains. Qed.
+Lemma nest_scoped : forall k t, closed_term t -> closed_term (nest k t).
+Proof.
+  intros k t H. induction k as [| k IH]; simpl; [exact H |].
+  apply Scoped_Thunk; [apply Scoped_Env_Empty | exact IH].
+Qed.
+
+Lemma inflate_not_scoped : forall a, closed_term a -> closed_term (inflate_not a).
+Proof.
+  intros a. induction a; intros H;
+    try (exact (model_reduce_prim_scoped PNot (a :: nil) (Forall_cons _ H (Forall_nil _))));
+    try (exact (model_reduce_prim_scoped PNot _ (Forall_cons _ H (Forall_nil _)))).
+  - unfold closed_term in H. inversion H; subst.
+    destruct (inflate_not_if a1 a2 a3) as [Heq | [_ [_ Heq]]]; rewrite Heq.
+    + apply Scoped_If; [assumption | apply IHa2 | apply IHa3]; assumption.
+    + apply nest_scoped. assumption.
+  - exact H.
+Qed.
+
+#[local] Instance fuel_reduce_prim_scoped : ReducePrimScoped.
+Proof.
+  intros p args H.
+  destruct p; [exact (model_reduce_prim_scoped PAnd args H) | | exact (model_reduce_prim_scoped PIte args H)].
+  destruct args as [| a [| b rest]]; [exact (model_reduce_prim_scoped PNot _ H) | | exact (model_reduce_prim_scoped PNot _ H)].
+  cbn [reduce_prim fuel_solver fuel_reduce_prim].
+  exact (inflate_not_scoped a (Forall_inv H)).
+Qed.
 
 Lemma contains_thunk_right : forall σ S Γ e X,
   contains σ S (EThunk Γ e) X -> is_thunk X = true.
@@ -180,13 +204,14 @@ Proof.
 Qed.
 
 Lemma inflate_not_contains : forall σ S a_s a_c,
-  contains σ S a_s a_c -> contains σ S (inflate_not a_s) (inflate_not a_c).
+  closed_term a_c -> contains σ S a_s a_c -> contains σ S (inflate_not a_s) (inflate_not a_c).
 Proof.
-  intros σ S a_s. induction a_s; intros a_c H;
+  intros σ S a_s. induction a_s; intros a_c Hcl H;
     try (destruct (contains_plain_right _ _ _ _ H eq_refl eq_refl) as [Hi Ht];
          rewrite (inflate_not_plain a_c Hi Ht);
          rewrite inflate_not_plain by reflexivity;
-         exact (model_reduce_prim_contains σ S PNot _ _ (Forall2_cons _ _ H (Forall2_nil _)))).
+         exact (model_reduce_prim_contains σ S PNot _ _ (Forall_cons _ Hcl (Forall_nil _))
+                  (Forall2_cons _ _ H (Forall2_nil _)))).
   - assert (Hi : is_if a_c = false)
       by (apply flat_not_if; eapply contains_flat_instance; exact H).
     destruct (inflate_not_if a_s1 a_s2 a_s3) as [Heq | [Hc [Ht Heq]]]; rewrite Heq.
@@ -208,13 +233,13 @@ Qed.
 
 #[local] Instance fuel_reduce_prim_contains : ReducePrimContains.
 Proof.
-  intros σ S p args_s args_c H.
-  destruct p; [exact (model_reduce_prim_contains σ S PAnd _ _ H) | | exact (model_reduce_prim_contains σ S PIte _ _ H)].
+  intros σ S p args_s args_c Hcl H.
+  destruct p; [exact (model_reduce_prim_contains σ S PAnd _ _ Hcl H) | | exact (model_reduce_prim_contains σ S PIte _ _ Hcl H)].
   destruct H as [| a_s a_c rest_s rest_c Ha Hrest];
-    [exact (model_reduce_prim_contains σ S PNot _ _ (Forall2_nil _)) |].
+    [exact (model_reduce_prim_contains σ S PNot _ _ Hcl (Forall2_nil _)) |].
   destruct Hrest as [| b_s b_c rs rc Hb Hr].
-  - cbn [reduce_prim fuel_solver fuel_reduce_prim]. apply inflate_not_contains. exact Ha.
-  - exact (model_reduce_prim_contains σ S PNot _ _ (Forall2_cons _ _ Ha (Forall2_cons _ _ Hb Hr))).
+  - cbn [reduce_prim fuel_solver fuel_reduce_prim]. apply inflate_not_contains; [exact (Forall_inv Hcl) | exact Ha].
+  - exact (model_reduce_prim_contains σ S PNot _ _ Hcl (Forall2_cons _ _ Ha (Forall2_cons _ _ Hb Hr))).
 Qed.
 
 #[local] Instance fuel_laws : ConCoreLaws.
@@ -222,9 +247,10 @@ Proof.
   exact (@concore_laws model_sorts fuel_solver
     fuel_reduce_prim_solvable fuel_reduce_prim_saturated
     fuel_reduce_prim_concore model_cast_expr_concore
+    fuel_reduce_prim_scoped model_cast_expr_scoped
     model_models_sat model_prim_value_and
     fuel_reduce_prim_contains fuel_reduce_prim_denote fuel_reduce_prim_ground_value
-    fuel_reduce_prim_ite_contains model_cast_expr_contains
+    model_cast_expr_contains
     model_subst_coerc_contains_env model_subst_type_contains_env).
 Qed.
 
@@ -247,9 +273,11 @@ Proof.
   cbn [reduce_prim fuel_solver fuel_reduce_prim]. rewrite Hp.
   unfold model_reduce_prim.
   rewrite split_args_not_if by (constructor; [apply flat_not_if; exact Hf | constructor]).
-  unfold reduce_unbranched, op_spine. cbn [length model_arity Nat.eqb fold_left].
-  rewrite lift_flat by (simpl; rewrite Hf; reflexivity).
-  simpl. unfold fold_leaf. simpl. rewrite Hg. reflexivity.
+  unfold simplify_unbranched, simplify.
+  destruct (forallb smt_term (a :: nil) && negb (forallb smt_ground (a :: nil)));
+    cbn iota; unfold reduce_unbranched, op_spine; cbn [length model_arity Nat.eqb fold_left];
+    rewrite lift_flat by (simpl; rewrite Hf; reflexivity);
+    simpl; unfold fold_leaf; simpl; rewrite Hg; reflexivity.
 Qed.
 
 Definition gv : var := "g".
@@ -587,6 +615,13 @@ Qed.
 Lemma con_prog_concore : concore_expr con_prog.
 Proof. unfold con_prog, consumer, id_fun. repeat constructor. Qed.
 
+Lemma con_prog_closed : closed_program · con_prog.
+Proof.
+  split; [apply Scoped_Env_Empty |].
+  unfold con_prog, consumer, id_fun.
+  repeat constructor.
+Qed.
+
 Lemma con_prog_runs : · ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true.
 Proof.
   unfold eval_con, con_prog, consumer.
@@ -614,6 +649,7 @@ Theorem fuel_inflation_counterexample :
   contains_env sigma_all no_symvars · · /\
   contains sigma_all no_symvars sym_prog con_prog /\
   concore_expr con_prog /\
+  closed_program · con_prog /\
   budget_total pc_true · sym_prog /\
   (· ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true) /\
   (forall n, (7 <= n)%nat -> forall v_sym,
@@ -621,7 +657,7 @@ Theorem fuel_inflation_counterexample :
      ~ contains sigma_all no_symvars v_sym (@ELit model_sorts true)).
 Proof.
   refine (conj sigma_models_pc_true (conj (Cont_Env_Empty _ _) (conj prog_contains
-          (conj con_prog_concore (conj sym_prog_budget_total (conj con_prog_runs _)))))).
+          (conj con_prog_concore (conj con_prog_closed (conj sym_prog_budget_total (conj con_prog_runs _))))))).
   intros n Hn v Hv. replace n with (7 + (n - 7)) in Hv by lia.
   rewrite (sym_prog_runs_out _ _ Hv). apply bot_not_contains_lit.
 Qed.
@@ -629,9 +665,9 @@ Qed.
 Theorem target_completeness_is_false : ~ @target_completeness model_sorts fuel_solver.
 Proof.
   intros Htarget.
-  destruct fuel_inflation_counterexample as [Hm [Henv [Hc [Hcc [Hb [Hrun Hout]]]]]].
+  destruct fuel_inflation_counterexample as [Hm [Henv [Hc [Hcc [Hcl [Hb [Hrun Hout]]]]]]].
   destruct (Htarget pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
-              Hm Henv Hc Hcc Hb Hrun) as [h Hh].
+              Hm Henv Hc Hcc Hcl Hb Hrun) as [h Hh].
   destruct (Hh (7 + h) ltac:(lia)) as [v [Hv Hcv]].
   exact (Hout (7 + h) ltac:(lia) v Hv Hcv).
 Qed.
@@ -649,6 +685,12 @@ Proof.
 Qed.
 
 Print Assumptions lawful_instance_refutes_target.
+
+Definition ReducePrimBranch {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall p pre ec et ef post,
+    Forall (fun e => is_if e = false) pre ->
+    reduce_prim p (pre ++ EIf ec et ef :: post) =
+    EIf ec (reduce_prim p (pre ++ et :: post)) (reduce_prim p (pre ++ ef :: post)).
 
 Theorem fuel_solver_violates_reduce_prim_branch : ~ @ReducePrimBranch model_sorts fuel_solver.
 Proof.
@@ -673,6 +715,8 @@ Theorem fuel_solver_violates_reduce_prim_contains_k : ~ @ReducePrimContainsK mod
 Proof.
   intros Hlaw.
   destruct (Hlaw sigma_all no_symvars PNot (2 :: nil) (branch_arg :: nil) (thunk_arm :: nil)
+              (Forall_cons _ (Scoped_Thunk nil · (ECon "U") Scoped_Env_Empty (Scoped_Con nil "U"))
+                 (Forall_nil _))
               (Forall3_cons _ _ _ _ _ _ _ branch_arg_contains_k (Forall3_nil _)))
     as [k' [Hle Hc]].
   apply thunk_depth_contains_k in Hc.

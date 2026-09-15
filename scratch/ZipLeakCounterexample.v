@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore CostLaws Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Arith.Wf_nat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -128,25 +128,51 @@ Proof.
   - apply nest_concore. exact H.
 Qed.
 
-#[local] Instance wild_cast_expr_branch : CastExprBranch.
+Definition CastExprBranch {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall ec et ef γ, cast_expr (EIf ec et ef) γ = EIf ec (cast_expr et γ) (cast_expr ef γ).
+
+Definition ReducePrimBranch {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall p pre ec et ef post,
+    Forall (fun e => is_if e = false) pre ->
+    reduce_prim p (pre ++ EIf ec et ef :: post) =
+    EIf ec (reduce_prim p (pre ++ et :: post)) (reduce_prim p (pre ++ ef :: post)).
+
+Lemma wild_cast_expr_branch : CastExprBranch.
 Proof. intros ec et ef γ. reflexivity. Qed.
+
+Lemma nest_scoped : forall k t, closed_term t -> closed_term (nest k t).
+Proof.
+  intros k t H. induction k as [| k IH]; simpl; [exact H |].
+  apply Scoped_Thunk; [apply Scoped_Env_Empty | exact IH].
+Qed.
+
+#[local] Instance wild_cast_expr_scoped : CastExprScoped.
+Proof.
+  intros e γ H. change (closed_term (wild_cast e γ)).
+  induction e;
+    try (apply Scoped_App; [apply Scoped_Con | apply Scoped_Thunk; [apply Scoped_Env_Empty | exact H]]).
+  - unfold closed_term in H. inversion H; subst. simpl.
+    apply Scoped_If; [assumption | apply IHe2 | apply IHe3]; assumption.
+  - apply nest_scoped. exact H.
+Qed.
 
 #[local] Instance wild_laws : ConCoreLaws.
 Proof.
   exact (@concore_laws model_sorts wild_solver
     model_reduce_prim_solvable model_reduce_prim_saturated
     model_reduce_prim_concore wild_cast_expr_concore
+    model_reduce_prim_scoped wild_cast_expr_scoped
     model_models_sat model_prim_value_and
     model_reduce_prim_contains model_reduce_prim_denote model_reduce_prim_ground_value
-    model_reduce_prim_ite_contains wild_cast_expr_contains
+    wild_cast_expr_contains
     model_subst_coerc_contains_env model_subst_type_contains_env).
 Qed.
 
-#[local] Instance wild_reduce_prim_branch : ReducePrimBranch.
-Proof. exact model_reduce_prim_branch. Qed.
-
-#[local] Instance wild_symfc_laws : SymFCLaws.
-Proof. exact (symfc_laws wild_laws wild_reduce_prim_branch wild_cast_expr_branch). Qed.
+Lemma wild_reduce_prim_branch : ReducePrimBranch.
+Proof.
+  intros p pre ec et ef post H.
+  exact (split_args_branch (simplify_unbranched p) pre ec et ef post H).
+Qed.
 
 Inductive tower : expr -> Prop :=
   | Tower_Bot : tower (EBot BOutOfFuel)
@@ -165,9 +191,11 @@ Proof.
   cbn [reduce_prim wild_solver].
   unfold model_reduce_prim.
   rewrite split_args_not_if by (constructor; [apply flat_not_if; exact Hf | constructor]).
-  unfold reduce_unbranched, op_spine. cbn [length model_arity Nat.eqb fold_left].
-  rewrite lift_flat by (simpl; rewrite Hf; reflexivity).
-  simpl. unfold fold_leaf. simpl. rewrite Hg. reflexivity.
+  unfold simplify_unbranched, simplify.
+  destruct (forallb smt_term (a :: nil) && negb (forallb smt_ground (a :: nil)));
+    cbn iota; unfold reduce_unbranched, op_spine; cbn [length model_arity Nat.eqb fold_left];
+    rewrite lift_flat by (simpl; rewrite Hf; reflexivity);
+    simpl; unfold fold_leaf; simpl; rewrite Hg; reflexivity.
 Qed.
 
 Fixpoint nots (e : expr) : nat :=
@@ -590,6 +618,13 @@ Qed.
 Lemma con_prog_concore : concore_expr con_prog.
 Proof. unfold con_prog, consumer, arm_t, alts, id_fun. repeat constructor. Qed.
 
+Lemma con_prog_closed : closed_program · con_prog.
+Proof.
+  split; [apply Scoped_Env_Empty |].
+  unfold con_prog, consumer, arm_t, alts, id_fun.
+  repeat constructor.
+Qed.
+
 Lemma nest_eval_inf : forall i Φ Γ Γc,
   eval Inf Φ Γ (nest i (EThunk Γc id_fun)) (EThunk Γc id_fun).
 Proof.
@@ -710,6 +745,7 @@ Theorem zip_leak_counterexample :
   contains_env sigma_all no_symvars · · /\
   contains sigma_all no_symvars sym_prog con_prog /\
   concore_expr con_prog /\
+  closed_program · con_prog /\
   budget_total pc_true · sym_prog /\
   (· ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true) /\
   (forall n, (8 <= n)%nat -> forall v_sym,
@@ -717,7 +753,7 @@ Theorem zip_leak_counterexample :
      ~ contains sigma_all no_symvars v_sym (@ELit model_sorts true)).
 Proof.
   refine (conj eq_refl (conj (Cont_Env_Empty _ _) (conj prog_contains
-          (conj con_prog_concore (conj sym_prog_budget_total (conj con_prog_runs _)))))).
+          (conj con_prog_concore (conj con_prog_closed (conj sym_prog_budget_total (conj con_prog_runs _))))))).
   intros n Hn v Hv. replace n with (8 + (n - 8)) in Hv by lia.
   rewrite (sym_prog_runs_out _ _ Hv). apply bot_not_contains_lit.
 Qed.
@@ -725,9 +761,9 @@ Qed.
 Theorem target_completeness_is_false : ~ @target_completeness model_sorts wild_solver.
 Proof.
   intros Htarget.
-  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hb [Hrun Hout]]]]]].
+  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hcl [Hb [Hrun Hout]]]]]]].
   destruct (Htarget pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
-              Hm Henv Hc Hcc Hb Hrun) as [h Hh].
+              Hm Henv Hc Hcc Hcl Hb Hrun) as [h Hh].
   destruct (Hh (8 + h) ltac:(lia)) as [v [Hv Hcv]].
   exact (Hout (8 + h) ltac:(lia) v Hv Hcv).
 Qed.
@@ -735,9 +771,9 @@ Qed.
 Theorem existential_corollary_is_false : ~ @existential_corollary model_sorts wild_solver.
 Proof.
   intros Hex.
-  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hb [Hrun _]]]]]].
+  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hcl [Hb [Hrun _]]]]]]].
   destruct (Hex pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
-              Hm Henv Hc Hcc Hb Hrun) as [k [v [Hv Hcv]]].
+              Hm Henv Hc Hcc Hcl Hb Hrun) as [k [v [Hv Hcv]]].
   rewrite (sym_prog_value_is_bot k v Hv) in Hcv.
   exact (bot_not_contains_lit _ _ _ _ Hcv).
 Qed.
@@ -745,20 +781,22 @@ Qed.
 Theorem forall_form_lemma_is_false : ~ @forall_form_lemma model_sorts wild_solver.
 Proof.
   intros Hall.
-  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [_ [Hrun Hout]]]]]].
+  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hcl [_ [Hrun Hout]]]]]]].
   destruct (Hall · con_prog (@ELit model_sorts true) Hrun pc_true · sigma_all no_symvars sym_prog
-              Hm Henv Hc Hcc) as [h Hh].
+              Hm Henv Hc Hcc Hcl) as [h Hh].
   destruct (sym_prog_total h) as [v Hv].
   exact (Hout (8 + h) ltac:(lia) v Hv (Hh (8 + h) ltac:(lia) v Hv)).
 Qed.
 
 Theorem branch_lawful_instance_refutes_target :
-  @SymFCLaws model_sorts wild_solver
+  (@ConCoreLaws model_sorts wild_solver /\ @ReducePrimBranch model_sorts wild_solver
+     /\ @CastExprBranch model_sorts wild_solver)
   /\ ~ @target_completeness model_sorts wild_solver
   /\ ~ @existential_corollary model_sorts wild_solver
   /\ ~ @forall_form_lemma model_sorts wild_solver.
 Proof.
-  exact (conj wild_symfc_laws (conj target_completeness_is_false
+  exact (conj (conj wild_laws (conj wild_reduce_prim_branch wild_cast_expr_branch))
+           (conj target_completeness_is_false
            (conj existential_corollary_is_false forall_form_lemma_is_false))).
 Qed.
 
