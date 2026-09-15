@@ -171,6 +171,7 @@ Inductive bottom : Type :=
   | BRaise : expr -> bottom      (** raise e: error throw *)
   | BUnreachable : bottom        (** ∅: unreachable *)
   | BUndefined : bottom          (** ?: undefined behavior *)
+  | BOutOfFuel : bottom          (** ⊥ₖ: the evaluation budget ran out *)
 
 with expr : Type :=
   | EVar : var -> expr                            (** x: variable *)
@@ -252,6 +253,7 @@ with bottom_eqb (b1 b2 : bottom) {struct b1} : bool :=
   | BRaise e1, BRaise e2 => expr_eqb e1 e2
   | BUnreachable, BUnreachable => true
   | BUndefined, BUndefined => true
+  | BOutOfFuel, BOutOfFuel => true
   | _, _ => false
   end
 with env_eqb (Γ1 Γ2 : environment) {struct Γ1} : bool :=
@@ -1174,7 +1176,8 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (Live f) Φ Γ (EThunk Γ' e) e'
 
   (**
-    Rule Out-Of-Fuel: a spent budget gives up and reports an undefined value.
+    Rule Out-Of-Fuel: a spent budget gives up and reports the out-of-fuel
+    bottom. No concrete term is that bottom.
     It is the only rule at Spent, and no other rule concludes there, so an
     expression at Fin 0 has exactly one value.
 
@@ -1189,7 +1192,7 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
     no fuel, and every expression it evaluates goes through eval.
   *)
   | Eval_OutOfFuel : forall Φ Γ e,
-      eval Spent Φ Γ e (EBot BUndefined)
+      eval Spent Φ Γ e (EBot BOutOfFuel)
 
 with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> expr -> Prop :=
   (** Branch traversal: condition is converted to path condition *)
@@ -1575,7 +1578,7 @@ Qed.
 
   Unlimited budget only, which is why the fuel comes in as k0 with a k0 = Inf
   premise instead of being left free. At Fin 0 Rule Out-Of-Fuel takes the
-  solvable literal ELit l to EBot BUndefined, and no rule of Solvable accepts
+  solvable literal ELit l to EBot BOutOfFuel, and no rule of Solvable accepts
   a bottom. The premise is what lets the out-of-fuel case close by
   discriminate.
 *)
@@ -2269,7 +2272,7 @@ Qed.
   better answer, not the same answer.
 
   Worse: a larger budget can leave a term with NO value. A stuck term at
-  Fin 0 still has the undefined answer of Rule Out-Of-Fuel; at Fin 1 it has
+  Fin 0 still has the out-of-fuel answer of Rule Out-Of-Fuel; at Fin 1 it has
   nothing.
 
   What is true is eval_inf_has_budget above. Once a budget is large enough to
@@ -2279,8 +2282,8 @@ Qed.
   for a value that only Rule Out-Of-Fuel gave.
 *)
 Lemma bigger_budget_changes_the_value : forall Φ Γ d,
-  eval (Fin 0) Φ Γ (ECon d) (EBot BUndefined)
-  /\ ~ eval (Fin 1) Φ Γ (ECon d) (EBot BUndefined).
+  eval (Fin 0) Φ Γ (ECon d) (EBot BOutOfFuel)
+  /\ ~ eval (Fin 1) Φ Γ (ECon d) (EBot BOutOfFuel).
 Proof.
   intros Φ Γ d. split.
   - apply Eval_OutOfFuel.
@@ -2299,7 +2302,7 @@ Qed.
 Lemma bigger_budget_loses_the_value : forall Φ Γ x ea,
   sat Φ = true ->
   lookup_env Γ x = None ->
-  eval (Fin 0) Φ Γ (EApp (EVar x) ea) (EBot BUndefined)
+  eval (Fin 0) Φ Γ (EApp (EVar x) ea) (EBot BOutOfFuel)
   /\ (forall v, ~ eval (Fin 1) Φ Γ (EApp (EVar x) ea) v).
 Proof.
   intros Φ Γ x ea Hsat Hnone. split.
@@ -2459,18 +2462,18 @@ Lemma self_app_var_value_bounded : forall Γ,
   ResolvesToSelfApp Γ ->
   forall k Ψ, exists v,
     eval (Fin k) Ψ Γ (EVar self_app_var) v
-    /\ (v = EBot BUndefined \/ exists Γ0, v = EClos Γ0 self_app_var self_app_body).
+    /\ (v = EBot BOutOfFuel \/ exists Γ0, v = EClos Γ0 self_app_var self_app_body).
 Proof.
   intros Γ HR. induction HR as [Γa Γb Hl | Γa Γb Hl HR IH];
     intros k Ψ; destruct k as [| k].
-  - exists (EBot BUndefined). split; [apply Eval_OutOfFuel | left; reflexivity].
+  - exists (EBot BOutOfFuel). split; [apply Eval_OutOfFuel | left; reflexivity].
   - destruct k as [| k].
-    + exists (EBot BUndefined).
+    + exists (EBot BOutOfFuel).
       split; [eapply Eval_Var; [exact Hl | apply Eval_OutOfFuel] | left; reflexivity].
     + exists (EClos Γb self_app_var self_app_body). split.
       * eapply Eval_Var; [exact Hl |]. simpl. unfold self_app_fun. apply Eval_Lam.
       * right. exists Γb. reflexivity.
-  - exists (EBot BUndefined). split; [apply Eval_OutOfFuel | left; reflexivity].
+  - exists (EBot BOutOfFuel). split; [apply Eval_OutOfFuel | left; reflexivity].
   - destruct (IH k Ψ) as [v [Hv Hshape]].
     exists v. split; [eapply Eval_Var; [exact Hl | exact Hv] | exact Hshape].
 Qed.
@@ -2482,11 +2485,11 @@ Lemma self_app_state_has_value_at_every_budget : forall k Ψ Γ e,
   SelfAppState Γ e -> exists v, eval (Fin k) Ψ Γ e v.
 Proof.
   induction k as [| k IH]; intros Ψ Γ e HL.
-  - exists (EBot BUndefined). apply Eval_OutOfFuel.
+  - exists (EBot BOutOfFuel). apply Eval_OutOfFuel.
   - inversion HL; subst.
     + destruct k as [| k].
-      * exists (EBot BUndefined). unfold self_app.
-        eapply Eval_AppSpine with (ef' := EBot BUndefined);
+      * exists (EBot BOutOfFuel). unfold self_app.
+        eapply Eval_AppSpine with (ef' := EBot BOutOfFuel);
           [apply self_app_fun_comp | apply Eval_OutOfFuel
           | apply Eval_OutOfFuel].
       * destruct (IH Ψ Γ (EApp (EClos Γ self_app_var self_app_body) self_app_fun)
@@ -2500,8 +2503,8 @@ Proof.
                  (SA_Var _ (self_app_extend_fun Γ1 Γ))) as [v Hv].
       exists v. apply Eval_AppAbs. simpl. exact Hv.
     + destruct (self_app_var_value_bounded Γ H k Ψ) as [vf [Hvf [Hbot | [Γ0 Hclos]]]].
-      * subst vf. exists (EBot BUndefined). unfold self_app_body.
-        eapply Eval_AppSpine with (ef' := EBot BUndefined).
+      * subst vf. exists (EBot BOutOfFuel). unfold self_app_body.
+        eapply Eval_AppSpine with (ef' := EBot BOutOfFuel).
         -- apply self_app_var_comp. exact H.
         -- simpl. exact Hvf.
         -- destruct k as [| k]; [apply Eval_OutOfFuel | apply Eval_AppBot].
@@ -2529,7 +2532,7 @@ Qed.
     budget and no value at all at the unlimited budget. *)
 Lemma bounded_evaluation_is_not_unbounded : forall Φ Γ,
   sat Φ = true ->
-  eval (Fin 0) Φ Γ self_app (EBot BUndefined)
+  eval (Fin 0) Φ Γ self_app (EBot BOutOfFuel)
   /\ (forall n, exists v, eval (Fin n) Φ Γ self_app v)
   /\ (forall v, ~ (Φ ; Γ ⊢ self_app ⇓ v)).
 Proof.
@@ -2546,7 +2549,7 @@ Lemma eval_fin_does_not_imply_eval_inf :
 Proof.
   intros Hconv.
   destruct (bounded_evaluation_is_not_unbounded pc_true · sat_pc_true) as [Hfin [_ Hinf]].
-  apply (Hinf (EBot BUndefined)). apply (Hconv 0%nat). exact Hfin.
+  apply (Hinf (EBot BOutOfFuel)). apply (Hconv 0%nat). exact Hfin.
 Qed.
 
 (**
@@ -2563,11 +2566,11 @@ Lemma dec_remaining : forall n, dec (Remaining n) = Fin n.
 Proof. reflexivity. Qed.
 
 Lemma eval_fin_zero_inv : forall Φ Γ e v,
-  eval (Fin 0) Φ Γ e v -> v = EBot BUndefined.
+  eval (Fin 0) Φ Γ e v -> v = EBot BOutOfFuel.
 Proof. intros Φ Γ e v H. inversion H. reflexivity. Qed.
 
 Lemma eval_fin_zero_iff : forall Φ Γ e v,
-  eval (Fin 0) Φ Γ e v <-> v = EBot BUndefined.
+  eval (Fin 0) Φ Γ e v <-> v = EBot BOutOfFuel.
 Proof.
   intros Φ Γ e v. split; [apply eval_fin_zero_inv |].
   intros Hv. subst v. apply Eval_OutOfFuel.
