@@ -839,6 +839,12 @@ Definition delay (Γ : environment) (e : expr) : expr :=
 Lemma delay_delay : forall Γ Γ' e, delay Γ (delay Γ' e) = delay Γ' e.
 Proof. intros Γ Γ' e. destruct e; reflexivity. Qed.
 
+Lemma delay_thunk : forall Γ e, is_thunk e = true -> delay Γ e = e.
+Proof. intros Γ e H. destruct e; try discriminate H. reflexivity. Qed.
+
+Lemma delay_not_thunk : forall Γ e, is_thunk e = false -> delay Γ e = EThunk Γ e.
+Proof. intros Γ e H. destruct e; try discriminate H; reflexivity. Qed.
+
 Lemma map_delay_delay : forall Γ Γ' args,
   map (delay Γ) (map (delay Γ') args) = map (delay Γ') args.
 Proof.
