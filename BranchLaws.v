@@ -16,3 +16,15 @@ cast_expr_branch : forall ec et ef γ,
   cast_expr (EIf ec et ef) γ = EIf ec (cast_expr et γ) (cast_expr ef γ).
 
 End BranchLaws.
+
+Inductive SymFCLaws {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  symfc_laws : ConCoreLaws -> ReducePrimBranch -> CastExprBranch -> SymFCLaws.
+
+Existing Class SymFCLaws.
+
+#[export] Instance concore_laws_of_symfc_laws `{laws : SymFCLaws} : ConCoreLaws.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_branch_of_laws `{laws : SymFCLaws} : ReducePrimBranch.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance cast_expr_branch_of_laws `{laws : SymFCLaws} : CastExprBranch.
+Proof. destruct laws; assumption. Qed.

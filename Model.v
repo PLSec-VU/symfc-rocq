@@ -9,7 +9,7 @@
   of the application first, so the reducer answers a branch of folded terms.
 *)
 
-From SymCoreTheory Require Import SymCore ConCore.
+From SymCoreTheory Require Import SymCore ConCore BranchLaws.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 
@@ -92,10 +92,25 @@ Fixpoint fold_leaves (e : expr) : expr :=
 Definition op_spine (p : model_primop) (args : list expr) : expr :=
   fold_left EApp args (EPrimOp p).
 
-Definition model_reduce_prim (p : model_primop) (args : list expr) : expr :=
+Definition reduce_unbranched (p : model_primop) (args : list expr) : expr :=
   if Nat.eqb (length args) (model_arity p)
   then fold_leaves (lift_branches (op_spine p args))
   else ELit false.
+
+Fixpoint split_arg (k : expr -> expr) (a : expr) : expr :=
+  match a with
+  | EIf c t f => EIf c (split_arg k t) (split_arg k f)
+  | _ => k a
+  end.
+
+Fixpoint split_args (k : list expr -> expr) (args : list expr) : expr :=
+  match args with
+  | nil => k nil
+  | a :: rest => split_arg (fun a' => split_args (fun rest' => k (a' :: rest')) rest) a
+  end.
+
+Definition model_reduce_prim (p : model_primop) (args : list expr) : expr :=
+  split_args (reduce_unbranched p) args.
 
 Definition model_sat (Φ : path_condition) : bool := true.
 Definition erase_cast (e : expr) (γ : coercion) : expr := e.
@@ -461,11 +476,12 @@ Proof.
   - exact Hc.
 Qed.
 
-#[export] Instance model_reduce_prim_contains : ReducePrimContains.
+Lemma unbranched_contains : forall σ S p args_s args_c,
+  Forall2 (contains σ S) args_s args_c ->
+  contains σ S (reduce_unbranched p args_s) (reduce_unbranched p args_c).
 Proof.
   intros σ S p args_s args_c HF.
-  change (contains σ S (model_reduce_prim p args_s) (model_reduce_prim p args_c)).
-  unfold model_reduce_prim. rewrite <- (Forall2_length HF).
+  unfold reduce_unbranched. rewrite <- (Forall2_length HF).
   destruct (Nat.eqb (length args_s) (model_arity p)) eqn:Hlen; [| apply Cont_Lit].
   apply Nat.eqb_eq in Hlen.
   assert (Hc : contains σ S (op_spine p args_s) (op_spine p args_c))
@@ -495,11 +511,12 @@ Proof.
   intros S args pcs H. induction H; constructor; [eapply denotes_flat; eassumption | assumption].
 Qed.
 
-#[export] Instance model_reduce_prim_denote : ReducePrimDenote.
+Lemma unbranched_denote : forall σ S (p : primop) args ls,
+  Forall2 (denote σ S) args ls ->
+  denote σ S (reduce_unbranched p args) (prim_value p ls).
 Proof.
   intros σ S p args ls HF.
-  change (denote σ S (model_reduce_prim p args) (prim_value p ls)).
-  unfold model_reduce_prim.
+  unfold reduce_unbranched.
   destruct (denote_args σ S args ls HF) as [pcs [Hds Hvs]].
   destruct (Nat.eqb (length args) (model_arity p)) eqn:Hlen.
   - rewrite (lift_flat _ (op_spine_flat p args (denotes_all_flat S args pcs Hds))),
@@ -529,22 +546,22 @@ Proof.
     destruct (smt_ground T) eqn:Hg; [eexists; reflexivity | congruence].
 Qed.
 
-#[export] Instance model_reduce_prim_ground_value : ReducePrimGroundValue.
+Lemma unbranched_ground_value : forall p args,
+  smt_ground (reduce_unbranched p args) = true ->
+  exists l, reduce_unbranched p args = ELit l.
 Proof.
   intros p args H.
-  change (smt_ground (model_reduce_prim p args) = true) in H.
-  change (exists l, model_reduce_prim p args = ELit l).
-  unfold model_reduce_prim in *.
+  unfold reduce_unbranched in *.
   destruct (Nat.eqb (length args) (model_arity p));
     [apply fold_leaves_ground; exact H | eexists; reflexivity].
 Qed.
 
-#[export] Instance model_reduce_prim_saturated : ReducePrimSaturated.
+Lemma unbranched_saturated : forall p args p0 args0,
+  unspool_app (reduce_unbranched p args) nil = (EPrimOp p0, args0) ->
+  length args0 = model_arity p0.
 Proof.
   intros p args p0 args0 H.
-  change (unspool_app (model_reduce_prim p args) nil = (EPrimOp p0, args0)) in H.
-  change (length args0 = model_arity p0).
-  unfold model_reduce_prim in H.
+  unfold reduce_unbranched in H.
   destruct (Nat.eqb (length args) (model_arity p)) eqn:Hlen; [| discriminate H].
   apply Nat.eqb_eq in Hlen.
   revert H. generalize (leaves_lift_spine p args).
@@ -565,10 +582,10 @@ Proof.
   simpl. apply IH; [apply Solvable_AppPrim; [exact Hop | exact Hh | exact Ha] | exact Hop].
 Qed.
 
-#[export] Instance model_reduce_prim_solvable : ReducePrimSolvable.
+Lemma unbranched_solvable : forall Γ p args,
+  Forall (Solvable Γ) args -> Solvable Γ (reduce_unbranched p args).
 Proof.
-  intros Γ p args HF.
-  change (Solvable Γ (model_reduce_prim p args)). unfold model_reduce_prim.
+  intros Γ p args HF. unfold reduce_unbranched.
   destruct (Nat.eqb (length args) (model_arity p)); [| apply Solvable_Lit].
   assert (Hs : Solvable Γ (op_spine p args))
     by (apply solvable_op_spine; [apply Solvable_PrimOp | reflexivity | exact HF]).
@@ -576,10 +593,10 @@ Proof.
   unfold fold_leaf. destruct (smt_ground (op_spine p args)); [apply Solvable_Lit | exact Hs].
 Qed.
 
-#[export] Instance model_reduce_prim_concore : ReducePrimConcore.
+Lemma unbranched_concore : forall p args,
+  Forall concore_expr args -> concore_expr (reduce_unbranched p args).
 Proof.
-  intros p args HF.
-  change (concore_expr (model_reduce_prim p args)). unfold model_reduce_prim.
+  intros p args HF. unfold reduce_unbranched.
   destruct (Nat.eqb (length args) (model_arity p)); [| apply Con_Lit].
   assert (Hc : concore_expr (op_spine p args))
     by (apply concore_fold_left_app; [exact HF | apply Con_PrimOp]).
@@ -603,12 +620,14 @@ Proof.
     change (negb (pc_value σ pc) = true) in Hm. apply negb_true_iff in Hm. rewrite Hm. exact Hl.
 Qed.
 
-#[export] Instance model_reduce_prim_ite_contains : ReducePrimIteContains.
+Lemma unbranched_ite_contains : forall σ S ec et ef pt pf l,
+  denotes S et pt -> denotes S ef pf ->
+  contains σ S (EIf ec et ef) (ELit l) ->
+  contains σ S (reduce_unbranched PIte (ec :: et :: ef :: nil)) (ELit l).
 Proof.
   intros σ S ec et ef pt pf l Ht Hf Hc.
   destruct (ite_selects_arm σ S ec et ef pt pf l Ht Hf Hc) as [pc [Hdc Hv]].
-  change (contains σ S (model_reduce_prim PIte (ec :: et :: ef :: nil)) (ELit l)).
-  unfold model_reduce_prim.
+  unfold reduce_unbranched.
   replace (Nat.eqb (length (ec :: et :: ef :: nil)) (model_arity PIte)) with true by reflexivity.
   assert (Hflat : flat (op_spine PIte (ec :: et :: ef :: nil)) = true).
   { apply op_spine_flat.
@@ -629,7 +648,172 @@ Proof.
     + exists (PCPrim op_ite (pc :: pt :: pf :: nil)). split; [exact Hd | exact Hv].
 Qed.
 
+Lemma split_arg_not_if : forall k a, is_if a = false -> split_arg k a = k a.
+Proof. intros k a H. destruct a; simpl in *; congruence. Qed.
+
+Lemma split_args_not_if : forall k args,
+  Forall (fun a => is_if a = false) args -> split_args k args = k args.
+Proof.
+  intros k args H. revert k. induction H as [| a args Ha _ IH]; intros k; [reflexivity |].
+  cbn [split_args]. rewrite split_arg_not_if by exact Ha. apply IH.
+Qed.
+
+Lemma split_args_top : forall k args,
+  split_args k args = k args \/ is_if (split_args k args) = true.
+Proof.
+  intros k args. revert k. induction args as [| a rest IH]; intros k; [left; reflexivity |].
+  cbn [split_args]. destruct (is_if a) eqn:Ha.
+  - destruct a; simpl in Ha; try discriminate. right. reflexivity.
+  - rewrite split_arg_not_if by exact Ha. apply (IH (fun rest' => k (a :: rest'))).
+Qed.
+
+Lemma split_args_branch : forall k pre ec et ef post,
+  Forall (fun e => is_if e = false) pre ->
+  split_args k (pre ++ EIf ec et ef :: post) =
+  EIf ec (split_args k (pre ++ et :: post)) (split_args k (pre ++ ef :: post)).
+Proof.
+  intros k pre ec et ef post H. revert k.
+  induction H as [| a pre Ha _ IH]; intros k; [reflexivity |].
+  cbn [app split_args]. rewrite !split_arg_not_if by exact Ha. apply IH.
+Qed.
+
+Lemma flat_all_not_if : forall args,
+  Forall (fun a => flat a = true) args -> Forall (fun a => is_if a = false) args.
+Proof. intros args H. eapply Forall_impl; [| exact H]. exact flat_not_if. Qed.
+
+Lemma contains_picks_top : forall σ S e X,
+  contains σ S e X -> exists L, picks σ S e L /\ contains σ S L X.
+Proof.
+  intros σ S e. induction e; intros X H;
+    try (eexists; split; [apply picks_leaf; reflexivity | exact H]).
+  destruct (contains_if_inv σ S _ _ _ X H) as [[Hm Hc] | [Hm Hc]].
+  - destruct (IHe2 X Hc) as [L [Hp HL]]. exists L. split; [apply picks_then |]; assumption.
+  - destruct (IHe3 X Hc) as [L [Hp HL]]. exists L. split; [apply picks_else |]; assumption.
+Qed.
+
+Lemma contains_args_picks : forall σ S args_s args_c,
+  Forall2 (contains σ S) args_s args_c ->
+  exists ls, Forall2 (picks σ S) args_s ls /\ Forall2 (contains σ S) ls args_c.
+Proof.
+  intros σ S args_s args_c H.
+  induction H as [| a c args_s args_c Ha _ [ls [Hp Hc]]]; [exists nil; split; constructor |].
+  destruct (contains_picks_top σ S a c Ha) as [L [HpL HcL]].
+  exists (L :: ls). split; constructor; assumption.
+Qed.
+
+Lemma picks_split_arg : forall σ S K a L Y,
+  picks σ S a L -> contains σ S (K L) Y -> contains σ S (split_arg K a) Y.
+Proof.
+  intros σ S K a L Y H. induction H; intros HK;
+    [rewrite split_arg_not_if by assumption; exact HK
+    | apply Cont_If_True; auto
+    | apply Cont_If_False; auto].
+Qed.
+
+Lemma picks_split_args : forall σ S args ls,
+  Forall2 (picks σ S) args ls ->
+  forall k Y, contains σ S (k ls) Y -> contains σ S (split_args k args) Y.
+Proof.
+  intros σ S args ls H.
+  induction H as [| a L args ls Ha _ IH]; intros k Y Hk; [exact Hk |].
+  cbn [split_args]. apply (picks_split_arg σ S _ a L Y Ha).
+  apply (IH (fun rest' => k (L :: rest'))). exact Hk.
+Qed.
+
+Lemma contains_instances_not_if : forall σ S args_s args_c,
+  Forall2 (contains σ S) args_s args_c -> Forall (fun a => is_if a = false) args_c.
+Proof.
+  intros σ S args_s args_c H. induction H; constructor; [| assumption].
+  apply flat_not_if. eapply contains_flat_instance. eassumption.
+Qed.
+
+#[export] Instance model_reduce_prim_contains : ReducePrimContains.
+Proof.
+  intros σ S p args_s args_c HF.
+  change (contains σ S (model_reduce_prim p args_s) (model_reduce_prim p args_c)).
+  unfold model_reduce_prim.
+  rewrite (split_args_not_if _ args_c (contains_instances_not_if σ S _ _ HF)).
+  destruct (contains_args_picks σ S _ _ HF) as [ls [Hp Hc]].
+  apply (picks_split_args σ S _ _ Hp). apply unbranched_contains. exact Hc.
+Qed.
+
+#[export] Instance model_reduce_prim_denote : ReducePrimDenote.
+Proof.
+  intros σ S p args ls HF.
+  change (denote σ S (model_reduce_prim p args) (prim_value p ls)).
+  unfold model_reduce_prim.
+  destruct (denote_args σ S args ls HF) as [pcs [Hds _]].
+  rewrite (split_args_not_if _ args (flat_all_not_if _ (denotes_all_flat S args pcs Hds))).
+  apply unbranched_denote. exact HF.
+Qed.
+
+#[export] Instance model_reduce_prim_ground_value : ReducePrimGroundValue.
+Proof.
+  intros p args H.
+  change (smt_ground (model_reduce_prim p args) = true) in H.
+  change (exists l, model_reduce_prim p args = ELit l).
+  unfold model_reduce_prim in *.
+  destruct (split_args_top (reduce_unbranched p) args) as [E | E].
+  - rewrite E in *. apply unbranched_ground_value. exact H.
+  - destruct (split_args (reduce_unbranched p) args); simpl in E, H; discriminate.
+Qed.
+
+#[export] Instance model_reduce_prim_saturated : ReducePrimSaturated.
+Proof.
+  intros p args p0 args0 H.
+  change (unspool_app (model_reduce_prim p args) nil = (EPrimOp p0, args0)) in H.
+  change (length args0 = model_arity p0).
+  unfold model_reduce_prim in H.
+  destruct (split_args_top (reduce_unbranched p) args) as [E | E].
+  - rewrite E in H. exact (unbranched_saturated p args p0 args0 H).
+  - destruct (split_args (reduce_unbranched p) args); simpl in E, H; discriminate.
+Qed.
+
+#[export] Instance model_reduce_prim_solvable : ReducePrimSolvable.
+Proof.
+  intros Γ p args HF.
+  change (Solvable Γ (model_reduce_prim p args)). unfold model_reduce_prim.
+  assert (Hflat : Forall (fun a => flat a = true) args)
+    by (eapply Forall_impl; [| exact HF]; apply solvable_flat).
+  rewrite (split_args_not_if _ args (flat_all_not_if _ Hflat)).
+  apply unbranched_solvable. exact HF.
+Qed.
+
+#[export] Instance model_reduce_prim_concore : ReducePrimConcore.
+Proof.
+  intros p args HF.
+  change (concore_expr (model_reduce_prim p args)). unfold model_reduce_prim.
+  assert (Hflat : Forall (fun a => flat a = true) args)
+    by (eapply Forall_impl; [| exact HF]; apply concore_flat).
+  rewrite (split_args_not_if _ args (flat_all_not_if _ Hflat)).
+  apply unbranched_concore. exact HF.
+Qed.
+
+#[export] Instance model_reduce_prim_ite_contains : ReducePrimIteContains.
+Proof.
+  intros σ S ec et ef pt pf l Ht Hf Hc.
+  change (contains σ S (model_reduce_prim PIte (ec :: et :: ef :: nil)) (ELit l)).
+  unfold model_reduce_prim.
+  destruct (ite_selects_arm σ S ec et ef pt pf l Ht Hf Hc) as [pc [Hdc _]].
+  assert (Hflat : Forall (fun a => flat a = true) (ec :: et :: ef :: nil))
+    by (repeat constructor; eapply denotes_flat; eassumption).
+  rewrite (split_args_not_if _ _ (flat_all_not_if _ Hflat)).
+  exact (unbranched_ite_contains σ S ec et ef pt pf l Ht Hf Hc).
+Qed.
+
 #[export] Instance model_laws : ConCoreLaws.
+Proof. constructor; exact _. Qed.
+
+#[export] Instance model_reduce_prim_branch : ReducePrimBranch.
+Proof.
+  intros p pre ec et ef post H.
+  exact (split_args_branch (reduce_unbranched p) pre ec et ef post H).
+Qed.
+
+#[export] Instance model_cast_expr_branch : CastExprBranch.
+Proof. intros ec et ef γ. reflexivity. Qed.
+
+#[export] Instance model_symfc_laws : SymFCLaws.
 Proof. constructor; exact _. Qed.
 
 (** ========================================================================= *)
