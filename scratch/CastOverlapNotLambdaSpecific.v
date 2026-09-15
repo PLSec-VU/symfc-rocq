@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* Whnf of a cast is exactly Whnf of what is under it. *)
 Lemma whnf_cast_inv : forall Γ e γ, Whnf Γ (ECast e γ) -> Whnf Γ e.
 Proof. intros Γ e γ H. inversion H; subst; [inversion H0 | no_con_head | assumption]. Qed.
@@ -25,3 +28,4 @@ Proof.
   exact (not_op_app_not_whnf Γ f a Hop Hcon).
 Qed.
 
+End Scratch.

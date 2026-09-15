@@ -2,6 +2,11 @@ From SymCoreTheory Require Import SymCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}.
+
 (* THIS FILE MUST FAIL TO COMPILE. Its failure is the regression check that
    the fold_alts rules still reject a scrutinee that hides a branch under an
    application.
@@ -53,3 +58,5 @@ Proof.
                 nested_if [EBot BUndefined] applied_if_head eq_refl) as H.
   unfold applied_if, nested_if in H. discriminate H.
 Qed.
+
+End Scratch.

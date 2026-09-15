@@ -5833,3 +5833,43 @@ Section CompletenessNonVacuity.
 End CompletenessNonVacuity.
 
 End ConCore.
+
+(** All laws at once, for developments that take every law as context. *)
+Inductive ConCoreLaws {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  concore_laws :
+    ReducePrimSolvable -> ReducePrimSaturated ->
+    ReducePrimConcore -> CastExprConcore ->
+    ModelsSat -> PrimValueAnd ->
+    ReducePrimContains -> ReducePrimDenote -> ReducePrimGroundValue ->
+    ReducePrimIteContains -> CastExprContains ->
+    SubstCoercContainsEnv -> SubstTypeContainsEnv ->
+    ConCoreLaws.
+
+Existing Class ConCoreLaws.
+
+#[export] Instance reduce_prim_solvable_of_laws `{laws : ConCoreLaws} : ReducePrimSolvable.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_saturated_of_laws `{laws : ConCoreLaws} : ReducePrimSaturated.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_concore_of_laws `{laws : ConCoreLaws} : ReducePrimConcore.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance cast_expr_concore_of_laws `{laws : ConCoreLaws} : CastExprConcore.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance models_sat_of_laws `{laws : ConCoreLaws} : ModelsSat.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance prim_value_and_of_laws `{laws : ConCoreLaws} : PrimValueAnd.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_contains_of_laws `{laws : ConCoreLaws} : ReducePrimContains.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_denote_of_laws `{laws : ConCoreLaws} : ReducePrimDenote.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_ground_value_of_laws `{laws : ConCoreLaws} : ReducePrimGroundValue.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_ite_contains_of_laws `{laws : ConCoreLaws} : ReducePrimIteContains.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance cast_expr_contains_of_laws `{laws : ConCoreLaws} : CastExprContains.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance subst_coerc_contains_env_of_laws `{laws : ConCoreLaws} : SubstCoercContainsEnv.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance subst_type_contains_env_of_laws `{laws : ConCoreLaws} : SubstTypeContainsEnv.
+Proof. destruct laws; assumption. Qed.

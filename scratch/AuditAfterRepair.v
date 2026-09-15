@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* Which audit results survive the repair, once mechanically adapted to the
    new signatures? *)
 
@@ -96,3 +99,5 @@ Proof.
                 (Cont_Var_Sym sigma (only "x") "x" (only_self "x"))).
   discriminate.
 Qed.
+
+End Scratch.

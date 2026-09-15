@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* ==========================================================================
    HISTORY OF THIS FILE - READ THIS FIRST
 
@@ -281,3 +284,5 @@ Qed.
    OperatorRestrictionPreservation.v - but it never paid for the rule, and
    it is not what paid for the rule in the end.
    ========================================================================== *)
+
+End Scratch.

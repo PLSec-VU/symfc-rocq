@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List Arith.PeanoNat.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* What this file recorded before, and what it records now.
 
    BEFORE: merge was an axiom, and the development assumed
@@ -235,3 +238,5 @@ Print Assumptions con_clause_refutes_merge_fold_alts_equiv.
 Print Assumptions bot_clause_refutes_merge_fold_alts_equiv.
 Print Assumptions merge_fold_alts_sound_is_false.
 Print Assumptions merge_fold_alts_equiv_is_false.
+
+End Scratch.

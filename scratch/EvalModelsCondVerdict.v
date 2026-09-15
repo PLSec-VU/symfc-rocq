@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (**
   Why models_cond is defined the way it is in ConCore.v §9, and why
   eval_models_cond carries a sym_free_env hypothesis.
@@ -207,3 +210,5 @@ Proof.
             (unary_app_evaluates p x _ Harity)).
   exists (PCPrim p [PCVar x]). split; [apply unary_app_denotes; exact Hsx | exact Hsat].
 Qed.
+
+End Scratch.

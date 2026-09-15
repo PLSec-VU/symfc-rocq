@@ -2,6 +2,9 @@ From SymCoreTheory Require Import ConCore SymCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 Definition bindx (x:var) : environment :=
   ExtendEnv x (MkClosure EmptyEnv (EBot BUndefined)) EmptyEnv.
 
@@ -62,3 +65,5 @@ Proof.
   - apply (eval_models_not_cond Phi EmptyEnv ec (EBot BUnreachable) sigma Hev) in H4.
     kill_total sigma EmptyEnv (EBot BUnreachable) H4. discriminate.
 Qed.
+
+End Scratch.

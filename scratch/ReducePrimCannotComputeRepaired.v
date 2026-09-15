@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* The old refutation, mechanically repaired everywhere the repair is
    possible, so that the ONE step which is now genuinely unavailable stands
    alone.  The three cases where reduce_prim returns a literal, a variable or
@@ -40,3 +43,5 @@ Proof.
        goal. *)
     inversion Hcont.
 Abort.
+
+End Scratch.

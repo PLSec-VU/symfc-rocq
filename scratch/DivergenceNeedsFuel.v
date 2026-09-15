@@ -3,6 +3,9 @@ From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 Open Scope string_scope.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* ========================================================================= *)
 (* Why the completeness theorem needs a depth bound.                          *)
 (*                                                                            *)
@@ -568,3 +571,5 @@ Section RealEvalDepths.
       + congruence.
   Qed.
 End RealEvalDepths.
+
+End Scratch.

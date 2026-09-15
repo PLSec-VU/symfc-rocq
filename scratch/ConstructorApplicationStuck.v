@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* Nullary constructor: a case on it works. *)
 Lemma nullary_case_works : forall Γ l,
   pc_true ; Γ ⊢ ECase (ECon "D") [Alt "D" [] (ELit l)] ⇓ ELit l.
@@ -43,3 +46,5 @@ Proof.
       destruct (string_dec "y" "y"); [reflexivity | congruence].
     + simpl. apply Eval_Thunk. apply Eval_Lit.
 Qed.
+
+End Scratch.

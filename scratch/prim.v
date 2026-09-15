@@ -2,6 +2,9 @@ From SymCoreTheory Require Import ConCore SymCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* 1. Every Solvable term is already a ConCore term. *)
 Lemma solvable_concore : forall G e, Solvable G e -> concore_expr e.
 Proof.
@@ -53,3 +56,5 @@ Proof.
     pose proof (reduce_prim_solvable EmptyEnv p [EIf c t f]) as HS.
     rewrite Heq in HS. inversion HS.
 Qed.
+
+End Scratch.

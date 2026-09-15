@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* ==========================================================================
    Applying a cast whose coercion is not an arrow is stuck.
 
@@ -152,3 +155,5 @@ Proof.
     exact (concrete_app_cast_non_arrow_stuck σ S Γs Γc eb γ ea e_con v_con
              Hfree Hcont Hdec Hc).
 Qed.
+
+End Scratch.

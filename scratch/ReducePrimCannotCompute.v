@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* If reduce_prim COMPUTES -- returns a literal when given a literal --
    then it is either a constant function or the identity.  A real
    primitive (negation, increment, addition) is neither. *)
@@ -32,3 +35,5 @@ Proof.
     specialize (Hcont (fun _ => l)). simpl in Hcont.
     inversion Hcont.
 Qed.
+
+End Scratch.

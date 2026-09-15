@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* Determinism restricted to actual ConCore programs -- the only thing the
    soundness theorem ever evaluates concretely. *)
 Definition ConcoreEvalDeterministic : Prop :=
@@ -55,3 +58,5 @@ Proof. exact concore_eval_deterministic. Qed.
 Lemma concore_program_determinism : forall e v1 v2,
   concore_expr e -> ⊢ᶜ e ⇓ᶜ v1 -> ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
 Proof. exact concore_eval_deterministic_top. Qed.
+
+End Scratch.

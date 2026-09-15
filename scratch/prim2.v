@@ -2,6 +2,9 @@ From SymCoreTheory Require Import ConCore SymCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* On a Solvable term, `contains` is plain syntactic equality. *)
 Lemma solvable_contains_eq : forall G es,
   Solvable G es -> forall sigma ec, contains sigma es ec -> es = ec.
@@ -41,3 +44,5 @@ Proof.
     apply Cont_If_False; [exact Hfalse | apply Cont_Lit]. }
   rewrite <- Hs1, Hs2. reflexivity.
 Qed.
+
+End Scratch.

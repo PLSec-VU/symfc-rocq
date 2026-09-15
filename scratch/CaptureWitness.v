@@ -2,6 +2,11 @@ From SymCoreTheory Require Import SymCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}.
+
 (* The Eval_Var transport obstacle, stated on SymCore alone.
 
    Rule Var evaluates the closure body in the STORED environment Γ', but the
@@ -26,3 +31,5 @@ Qed.
    value that must be re-read in G is exactly the captured one. *)
 Lemma capture_value : forall Phi, Phi ; Gp ⊢ EVar "y" ⇓ EVar "y".
 Proof. intros. apply Eval_SymVar. reflexivity. Qed.
+
+End Scratch.

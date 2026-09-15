@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* Every statement here is about the unlimited budget, eval Inf, which the
    notation "Phi ; Gamma |- e ==> v" now means. The finite budgets are
    covered in scratch/DivergenceNeedsFuel.v, Section 5: at Fin 0 the program
@@ -98,3 +101,5 @@ Proof.
     end.
   - congruence.
 Qed.
+
+End Scratch.

@@ -3,6 +3,11 @@ From Stdlib Require Import Strings.String.
 From Stdlib Require Import Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}.
+
 (* ==========================================================================
    The proposed restriction on concore_expr IS preserved by evaluation, and
    the proof needs no new contract on cast_expr.
@@ -420,3 +425,5 @@ End AbstractSolverContracts.
    function type while failing this test, and a well typed program would be
    rejected. As the syntax stands, it cannot.
    ========================================================================== *)
+
+End Scratch.

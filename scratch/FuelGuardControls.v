@@ -21,6 +21,9 @@ Require Import SymCoreTheory.ConCore.
 Require Import Coq.Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (** Part A: the fuel-polymorphic pair. It takes the fuel as a parameter, asks
     nothing of it, recurses at (dec k) in every eval case and at the fuel it
     was handed in every fold_alts case, and the guard checker accepts it -
@@ -66,3 +69,5 @@ Fail Fixpoint guard_control (k0 : fuel) (Φ : path_condition) (Γ : environment)
   (e v : expr) (Heval : eval k0 Φ Γ e v) {struct Heval} :
   sat Φ = true -> concrete_env Γ -> concore_expr e -> concore_expr v :=
   fun Hsat Henv Hcon => guard_control k0 Φ Γ e v Heval Hsat Henv Hcon.
+
+End Scratch.

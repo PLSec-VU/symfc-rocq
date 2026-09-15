@@ -2,6 +2,9 @@ From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String Lists.List.
 Import ListNotations.
 
+Section Scratch.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
 (* γ_ok  : (Int -> String) ~ (Word -> Text)   -- both sides are arrows *)
 Definition g_ok : coercion :=
   MkCoercion (TyArrow (TyVar "Int")  (TyVar "String"))
@@ -45,3 +48,5 @@ Proof.
   inversion H; subst; try discriminate.
   congruence.
 Qed.
+
+End Scratch.
