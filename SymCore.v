@@ -322,11 +322,15 @@ Definition extend_env (Γ : environment) (x : var) (Γ' : environment) (e : expr
   ExtendEnv x (MkClosure Γ' e) Γ.
 
 (** Multi-variable environment extension for pattern matching: Γ{x⃗ ↦ (Γ', e⃗)} (Fig. 3, fold-alts) *)
+Definition missing_field : expr := EBot BUndefined.
+
 Fixpoint extend_env_multi (Γ : environment) (xs : list var) (args : list expr) (Γ_arg : environment) : environment :=
   match xs, args with
   | x :: xs', a :: args' =>
       extend_env (extend_env_multi Γ xs' args' Γ_arg) x Γ_arg a
-  | _, _ => Γ
+  | x :: xs', [] =>
+      extend_env (extend_env_multi Γ xs' [] Γ_arg) x Γ_arg missing_field
+  | [], _ => Γ
   end.
 
 

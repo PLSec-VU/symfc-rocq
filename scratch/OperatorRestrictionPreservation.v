@@ -159,7 +159,7 @@ Proof.
   induction xs as [| x xs' IH]; intros ea Γ Γ_arg HΓ HΓ_arg Hea.
   - simpl. assumption.
   - destruct ea as [| a ea'].
-    + simpl. assumption.
+    + simpl. apply concrete_env_extend; [apply IH; auto | assumption | constructor].
     + simpl. apply concrete_env_extend.
       * apply IH; [assumption | assumption | inversion Hea; subst; assumption].
       * assumption.

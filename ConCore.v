@@ -422,7 +422,7 @@ Proof.
   induction xs as [| x xs' IH]; intros ea Γ Γ_arg HΓ HΓ_arg Hea.
   - simpl. assumption.
   - destruct ea as [| a ea'].
-    + simpl. assumption.
+    + simpl. apply concrete_env_extend; [apply IH; auto | assumption | constructor].
     + simpl. apply concrete_env_extend.
       * apply IH; [assumption | assumption | inversion Hea; subst; assumption].
       * assumption.
@@ -2430,7 +2430,8 @@ Proof.
   - inversion Hxs as [| x0 xs0 Hx Hxs' ]; subst.
     destruct args_s as [| a args_s']; destruct args_c as [| ac args_c'];
       try (inversion Hargs; fail).
-    + simpl. exact Henv.
+    + simpl. apply Cont_Env_Extend;
+        [exact Hx | exact Hargenv | apply Cont_Bot | constructor | apply IH; auto].
     + simpl. inversion Hargs as [| a0 ac0 args_s'0 args_c'0 Hcont_a Hargs' Heq1 Heq2]; subst.
       inversion Hconcore as [| ac1 args_c'1 Hcon_a Hconcore' ]; subst.
       apply Cont_Env_Extend.
@@ -4375,6 +4376,36 @@ Section FieldsAreLexical.
   Proof. intros Hv. discriminate (shadowed_field_reader_value_is_A _ Hv). Qed.
 
 End FieldsAreLexical.
+
+(** ------------------------------------------------------------------------- *)
+(** 12.8 A pattern variable with no field reads the undefined value           *)
+(** ------------------------------------------------------------------------- *)
+
+Section PatternLongerThanConstructor.
+
+  Definition fieldless_reader : expr :=
+    ECase (ECon "D") (Alt "D" ("z" :: nil) (EVar "z") :: nil).
+
+  Lemma fieldless_reader_concore : concore_expr fieldless_reader.
+  Proof. repeat constructor. Qed.
+
+  Theorem fieldless_reader_is_undefined : ⊢ᶜ fieldless_reader ⇓ᶜ EBot BUndefined.
+  Proof.
+    unfold eval_con, fieldless_reader.
+    eapply Eval_Case; [apply eval_nullary_con |].
+    simpl. eapply FoldAlts_Con; [reflexivity | reflexivity |].
+    simpl. eapply Eval_Var; [reflexivity | apply Eval_Bot].
+  Qed.
+
+  Corollary fieldless_reader_no_free_variable : forall x,
+    ~ (⊢ᶜ fieldless_reader ⇓ᶜ EVar x).
+  Proof.
+    intros x Hv.
+    discriminate (concore_eval_deterministic_top fieldless_reader _ _
+                    fieldless_reader_concore Hv fieldless_reader_is_undefined).
+  Qed.
+
+End PatternLongerThanConstructor.
 
 (** ========================================================================= *)
 (** 13. Completeness of Symbolic Execution                                    *)
