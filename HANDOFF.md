@@ -401,10 +401,7 @@ Read a file's theorem names with `grep -n '^Theorem\|^Lemma' scratch/<file>.v`.
 
 ## 10. Open items and honest limits
 
-1. **The scope laws need the user's approval.** We added `ReducePrimScoped` and `CastExprScoped` beyond the approved plan.
-   - `CastExprScoped` is proved necessary.
-   - For `ReducePrimScoped` we only argued by analogy.
-   - Both hold for any real solver. Confirm them with the user before presenting them as settled.
+1. **The scope laws are settled.** `ReducePrimScoped` and `CastExprScoped` say that `reduce-prim` and `cast` do not create free variables. The user accepted them as common sense for any real solver. `CastExprScoped` is proved necessary (`scratch/SoundnessNeedsScopeLaws.v`). `ReducePrimScoped` is kept by analogy.
 2. **Determinism holds only at `Inf`**, and only for concrete runs. Section 6.1 explains why.
 3. **`merge_keeps` is weaker than "merge never loses an instance".** Merging can lose the instance of a variable outside `S`. No theorem needs the strong form, and the paper must not claim it.
 4. **A branch whose guard is a lambda-bound variable has no instance** (`scratch/BoundGuardHasNoInstance.v`). The theorems say nothing about such terms. Source programs contain no branches, so this does not affect programs users write.
