@@ -19,7 +19,7 @@ When this document is not enough, section 11 tells you how to ask Rocq directly.
 
 ## 1. Status
 
-- **`main` is `610f214`.** All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
+- **The Rocq development was last changed in `610f214`.** All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
 - **The main theorems are closed.** `Print Assumptions` says "Closed under the global context" for each. The laws enter only as section arguments.
 - **The laws have a model.** `Model.v` builds a concrete solver with `lit := bool`, real `and`, `not` and `ite`, and a reducer that simplifies. It proves every law.
 - **Every theorem is non-vacuous.** `NonVacuity.v` checks, inside the model, that each theorem has an instance where all hypotheses hold and the conclusion says something. One instance runs through an else-branch. One has a looping arm the model does not take. A second solver, `pruning_solver`, makes Rule Prune fire.
