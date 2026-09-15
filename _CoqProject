@@ -6,3 +6,4 @@ CostLaws.v
 Completeness.v
 Model.v
 ApplicationRules.v
+NonVacuity.v
