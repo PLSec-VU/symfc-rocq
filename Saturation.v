@@ -436,12 +436,48 @@ Proof.
   intros rest' Hrest'. apply Hk. constructor; assumption.
 Qed.
 
+Lemma model_fold_leaf_saturated : forall e,
+  saturated e -> saturated (fold_leaf e).
+Proof.
+  intros e He. unfold fold_leaf. destruct (smt_ground e); [exact I | exact He].
+Qed.
+
+Lemma model_rewrite_prim_saturated : forall p args r,
+  Forall saturated args -> rewrite_prim p args = Some r -> saturated r.
+Proof.
+  intros p args r Hargs Hr.
+  destruct p; destruct args as [| a [| b [| c [| d rest]]]]; simpl in Hr; try discriminate.
+  - destruct (is_false_lit a); destruct (is_false_lit b); inversion Hr; exact I.
+  - inversion Hargs as [| a0 r0 Ha Hbc]; subst.
+    inversion Hbc as [| b0 r1 Hb Hc']; subst.
+    inversion Hc' as [| c0 r2 Hc _]; subst.
+    destruct (lit_of a) as [[|] |]; [| | destruct (expr_eqb b c)];
+      inversion Hr; subst; apply model_fold_leaf_saturated; assumption.
+Qed.
+
+Lemma model_simplify_saturated : forall p args r,
+  Forall saturated args -> simplify p args = Some r -> saturated r.
+Proof.
+  intros p args r Hargs Hs. unfold simplify in Hs.
+  destruct (forallb smt_term args); destruct (forallb smt_ground args); try discriminate.
+  exact (model_rewrite_prim_saturated p args r Hargs Hs).
+Qed.
+
+Lemma model_simplify_unbranched_saturated : forall p args,
+  Forall saturated args -> saturated (simplify_unbranched p args).
+Proof.
+  intros p args Hargs. unfold simplify_unbranched.
+  destruct (simplify p args) as [r |] eqn:Hs.
+  - exact (model_simplify_saturated p args r Hargs Hs).
+  - exact (model_reduce_unbranched_saturated p args Hargs).
+Qed.
+
 #[export] Instance model_reduce_prim_keeps_saturation : ReducePrimKeepsSaturation.
 Proof.
   intros p args _ Hargs.
   change (saturated (model_reduce_prim p args)). unfold model_reduce_prim.
   apply model_split_args_saturated; [| exact Hargs].
-  apply model_reduce_unbranched_saturated.
+  apply model_simplify_unbranched_saturated.
 Qed.
 
 #[export] Instance model_cast_expr_keeps_saturation : CastExprKeepsSaturation.
