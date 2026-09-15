@@ -17,6 +17,11 @@ From Stdlib Require Import Lia.
 From Stdlib Require Import Arith.PeanoNat.
 Import ListNotations.
 
+Section ConCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}.
+
 (** ========================================================================= *)
 (** 1. Syntactic Restriction: ConCore as an Inductive Subset of SymCore       *)
 (** ========================================================================= *)
@@ -329,8 +334,15 @@ Qed.
 Definition eval_con (Γ : environment) (e : expr) (v : expr) : Prop :=
   eval Inf pc_true Γ e v.
 
+End ConCore.
+
 Notation "Γ '⊢ᶜ' e '⇓ᶜ' v" := (eval_con Γ e v) (at level 70, no associativity).
 Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con · e v) (at level 70, no associativity).
+
+Section ConCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}.
 
 (** ------------------------------------------------------------------------- *)
 (** 8.1 SMT & Grisette Solver Behaviors for Concrete Evaluation               *)
@@ -345,9 +357,12 @@ Notation "'⊢ᶜ' e '⇓ᶜ' v" := (eval_con · e v) (at level 70, no associati
   concore_expr excludes EIf, so an unconditional version would say the theory
   solver never returns a branch, not even when an argument is itself a branch.
 *)
-Axiom reduce_prim_concore : forall p args,
+Class ReducePrimConcore : Prop :=
+reduce_prim_concore : forall p args,
   Forall concore_expr args ->
   concore_expr (reduce_prim p args).
+
+Context {reduce_prim_concore_law : ReducePrimConcore}.
 
 (**
   State merging does nothing to a concrete term.
@@ -374,9 +389,12 @@ Proof.
   intros Γ e H. rewrite (merge_concore_id Γ e H). exact H.
 Qed.
 
-Axiom cast_expr_concore : forall e γ,
+Class CastExprConcore : Prop :=
+cast_expr_concore : forall e γ,
   concore_expr e ->
   concore_expr (cast_expr e γ).
+
+Context {cast_expr_concore_law : CastExprConcore}.
 
 (** ------------------------------------------------------------------------- *)
 (** 8.2 Mutual Induction Scheme for Big-Step Semantics                        *)
@@ -721,15 +739,8 @@ Proof. intros S x _. reflexivity. Qed.
 (** 9.0 The SMT Value of a Formula                                            *)
 (** ------------------------------------------------------------------------- *)
 
-(**
-  The SMT theory's own reading of a primitive operation: the literal the
-  solver gives to that operation applied to literal arguments. It is external
-  to this development in exactly the way lit and primop already are.
-*)
-Parameter prim_value : primop -> list lit -> lit.
-
-(** The literal the SMT theory reads as truth. External in the same way. *)
-Parameter lit_true : lit.
+(** prim_value and lit_true, the SMT theory's reading of primitive operations
+    and of truth, are fields of SymCoreSorts. *)
 
 Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
   match pc with
@@ -755,17 +766,29 @@ Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
 Definition models (σ : valuation) (Φ : path_condition) : Prop :=
   pc_value σ Φ = lit_true.
 
+End ConCore.
+
 Notation "σ '⊨' Φ" := (models σ Φ) (at level 70, no associativity).
+
+Section ConCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}
+  {reduce_prim_concore_law : ReducePrimConcore} {cast_expr_concore_law : CastExprConcore}.
 
 (** `sat` reports satisfiability, so a formula with a model is satisfiable.
     This is the one fact left relating the model to the `sat` oracle, and it
     stays assumed: `sat` is the solver and nothing here computes it. *)
-Axiom models_sat : forall σ Φ,
+Class ModelsSat : Prop :=
+models_sat : forall σ Φ,
   σ ⊨ Φ -> sat Φ = true.
 
 (** The SMT theory reads op_and as conjunction against the true literal. *)
-Axiom prim_value_and : forall l1 l2,
+Class PrimValueAnd : Prop :=
+prim_value_and : forall l1 l2,
   prim_value op_and (l1 :: l2 :: nil) = lit_true <-> l1 = lit_true /\ l2 = lit_true.
+
+Context {models_sat_law : ModelsSat} {prim_value_and_law : PrimValueAnd}.
 
 (** The SMT theory reads ∧ as conjunction. *)
 Lemma models_and_iff : forall σ Φ1 Φ2,
@@ -1068,6 +1091,8 @@ Proof.
   - exists es1, es2. reflexivity.
 Qed.
 
+End ConCore.
+
 Ltac kill_denote :=
   match goal with
   | [ Hun : unspool_app ?e (@nil expr) = (EPrimOp _, _),
@@ -1078,6 +1103,39 @@ Ltac kill_denote :=
 Notation instantiates := contains.
 Notation instantiates_alt := contains_alt.
 Notation instantiates_env := contains_env.
+
+(**
+  Taking apart a derivation that is fixed at the unlimited budget.
+
+  `inversion` on a hypothesis of the form eval Inf ... already drops Rule
+  Out-Of-Fuel, because that rule writes Spent in its conclusion and Spent
+  cannot unify with Inf. `destruct` and `induction` do not: they first
+  generalise the fuel index into a variable, so Rule Out-Of-Fuel comes back as
+  a case and every recursive premise arrives at dec f instead of Inf.
+
+  The two tactics below keep the index. They name it, remember the equation
+  that says the name is Inf, use that equation to kill the out-of-fuel case,
+  and inject it to fix f at Unlimited in every other case. Use them for any
+  lemma that is true only at the unlimited budget.
+*)
+Ltac inf_induction H :=
+  let k := fresh "kf" in
+  let Hk := fresh "Hkf" in
+  remember Inf as k eqn:Hk in H;
+  induction H; try discriminate Hk; try (injection Hk as Hk); subst.
+
+Ltac inf_destruct H :=
+  let k := fresh "kf" in
+  let Hk := fresh "Hkf" in
+  remember Inf as k eqn:Hk in H;
+  revert Hk; destruct H; intro Hk; try discriminate Hk; try (injection Hk as Hk); subst.
+
+Section ConCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
+  {reduce_prim_solvable_law : ReducePrimSolvable}
+  {reduce_prim_saturated_law : ReducePrimSaturated}
+  {reduce_prim_concore_law : ReducePrimConcore} {cast_expr_concore_law : CastExprConcore}
+  {models_sat_law : ModelsSat} {prim_value_and_law : PrimValueAnd}.
 
 (** An environment matched by concretion binds no symbolic variable. This is
     the scoping fact that makes models_cond_total applicable; it is PROVED
@@ -1111,7 +1169,8 @@ Qed.
 (** ------------------------------------------------------------------------- *)
 
 (** SMT solver behavior: primitive operations preserve concretion *)
-Axiom reduce_prim_contains : forall σ S p args_s args_c,
+Class ReducePrimContains : Prop :=
+reduce_prim_contains : forall σ S p args_s args_c,
   Forall2 (contains σ S) args_s args_c ->
   contains σ S (reduce_prim p args_s) (reduce_prim p args_c).
 
@@ -1122,7 +1181,8 @@ Axiom reduce_prim_contains : forall σ S p args_s args_c,
   to its concrete counterpart only by being syntactically the same term, so
   reduce_prim would be forced never to compute.
 *)
-Axiom reduce_prim_denote : forall σ S p args ls,
+Class ReducePrimDenote : Prop :=
+reduce_prim_denote : forall σ S p args ls,
   Forall2 (denote σ S) args ls ->
   denote σ S (reduce_prim p args) (prim_value p ls).
 
@@ -1132,7 +1192,8 @@ Axiom reduce_prim_denote : forall σ S p args ls,
   reducer that returned an unevaluated closed application would simply have
   stopped early.
 *)
-Axiom reduce_prim_ground_value : forall p args,
+Class ReducePrimGroundValue : Prop :=
+reduce_prim_ground_value : forall p args,
   smt_ground (reduce_prim p args) = true ->
   exists l, reduce_prim p args = ELit l.
 
@@ -1155,45 +1216,28 @@ Axiom reduce_prim_ground_value : forall p args,
     instance op_and l1 l2. One term cannot keep the head op_and for one
     model and the head op_not for another.
 *)
-Axiom reduce_prim_ite_contains : forall σ S ec et ef pt pf l,
+Class ReducePrimIteContains : Prop :=
+reduce_prim_ite_contains : forall σ S ec et ef pt pf l,
   denotes S et pt ->
   denotes S ef pf ->
   contains σ S (EIf ec et ef) (ELit l) ->
   contains σ S (reduce_prim op_ite (ec :: et :: ef :: nil)) (ELit l).
 
+Context {reduce_prim_contains_law : ReducePrimContains}
+  {reduce_prim_denote_law : ReducePrimDenote}
+  {reduce_prim_ground_value_law : ReducePrimGroundValue}
+  {reduce_prim_ite_contains_law : ReducePrimIteContains}.
+
 (** Grisette state merging soundness (Lemma A.4 in the paper) is now the
     lemma merge_contains in Section 9.3, proved from the definition of merge. *)
 
 (** Coercion cast simplification preserves concretion (Lemma A.5 in the paper) *)
-Axiom cast_expr_contains : forall σ S es ec γ,
+Class CastExprContains : Prop :=
+cast_expr_contains : forall σ S es ec γ,
   contains σ S es ec ->
   contains σ S (cast_expr es γ) (cast_expr ec γ).
 
-(**
-  Taking apart a derivation that is fixed at the unlimited budget.
-
-  `inversion` on a hypothesis of the form eval Inf ... already drops Rule
-  Out-Of-Fuel, because that rule writes Spent in its conclusion and Spent
-  cannot unify with Inf. `destruct` and `induction` do not: they first
-  generalise the fuel index into a variable, so Rule Out-Of-Fuel comes back as
-  a case and every recursive premise arrives at dec f instead of Inf.
-
-  The two tactics below keep the index. They name it, remember the equation
-  that says the name is Inf, use that equation to kill the out-of-fuel case,
-  and inject it to fix f at Unlimited in every other case. Use them for any
-  lemma that is true only at the unlimited budget.
-*)
-Ltac inf_induction H :=
-  let k := fresh "kf" in
-  let Hk := fresh "Hkf" in
-  remember Inf as k eqn:Hk in H;
-  induction H; try discriminate Hk; try (injection Hk as Hk); subst.
-
-Ltac inf_destruct H :=
-  let k := fresh "kf" in
-  let Hk := fresh "Hkf" in
-  remember Inf as k eqn:Hk in H;
-  revert Hk; destruct H; intro Hk; try discriminate Hk; try (injection Hk as Hk); subst.
+Context {cast_expr_contains_law : CastExprContains}.
 
 (** Every rule other than App-Prim is excluded here, by solvability or by Rule
     Prune being unreachable under a model.
@@ -1229,13 +1273,18 @@ Qed.
 
 
 (** Substitution on coercions and types preserves concretion under matched environments *)
-Axiom subst_coerc_contains_env : forall σ S Γs Γc γ,
+Class SubstCoercContainsEnv : Prop :=
+subst_coerc_contains_env : forall σ S Γs Γc γ,
   contains_env σ S Γs Γc ->
   contains σ S (ECoercion (subst_coerc Γs γ)) (ECoercion (subst_coerc Γc γ)).
 
-Axiom subst_type_contains_env : forall σ S Γs Γc τ,
+Class SubstTypeContainsEnv : Prop :=
+subst_type_contains_env : forall σ S Γs Γc τ,
   contains_env σ S Γs Γc ->
   contains σ S (EType (subst_type Γs τ)) (EType (subst_type Γc τ)).
+
+Context {subst_coerc_contains_env_law : SubstCoercContainsEnv}
+  {subst_type_contains_env_law : SubstTypeContainsEnv}.
 
 (** ------------------------------------------------------------------------- *)
 (** 9.1 Proven Lemmas on SMT Models, Inversion, and Contexts                 *)
@@ -1795,7 +1844,7 @@ Proof.
       by (eapply solvable_spine_args; [exact Hsolv | constructor | eassumption]).
     match goal with
     | [ HF : Forall2 (eval _ Φ Γ) args args' |- _ ] =>
-        clear -HF Hsargs Hsat;
+        clear -HF Hsargs Hsat reduce_prim_solvable_law;
         induction HF as [| a0 a0' tl tl' Ha Htl IH];
         [ constructor
         | inversion Hsargs as [| b0 btl Hsa Hstl]; subst;
@@ -4805,12 +4854,12 @@ Lemma contains_preserves_solver_free_mut :
   /\ (forall σ S Γs Γc, contains_env σ S Γs Γc -> solver_free_env Γs -> solver_free_env Γc).
 Proof.
   split; intros σ S.
-  - apply (contains_mut σ S
+  - apply (contains_mut _ σ S
              (fun es ec _ => solver_free es -> solver_free ec)
              (fun a ac _ => True)
              (fun Γs Γc _ => solver_free_env Γs -> solver_free_env Γc));
       try sf_case.
-  - apply (contains_env_mut σ S
+  - apply (contains_env_mut _ σ S
              (fun es ec _ => solver_free es -> solver_free ec)
              (fun a ac _ => True)
              (fun Γs Γc _ => solver_free_env Γs -> solver_free_env Γc));
@@ -5782,3 +5831,5 @@ Section CompletenessNonVacuity.
   Qed.
 
 End CompletenessNonVacuity.
+
+End ConCore.

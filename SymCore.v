@@ -20,6 +20,13 @@ Import ListNotations.
 Open Scope string_scope.
 Open Scope Z_scope.
 
+(**
+  The parameters of this development are the fields of classes: three here
+  and four in ConCore.v. Every section takes the classes as context, so each
+  definition and theorem holds for every instance. Model.v gives one.
+*)
+Section SymCore.
+
 (** ========================================================================= *)
 (** 1. Variables and Data Constructors (§3.1)                                  *)
 (** ========================================================================= *)
@@ -31,15 +38,17 @@ Definition dcon : Set := string.
 (** 2. Literals and Primitive Operations (§3.1)                                *)
 (** ========================================================================= *)
 
-(** Literals mirror those found in SMT solvers; axiomatized from external SMT (§3.1) *)
-Axiom lit : Set.
+Class SymCoreSorts : Type := {
 
-(** Primitive operations mirror SMT solver primitives; axiomatized from external SMT (§3.1) *)
-Axiom primop : Set.
+(** Literals mirror those found in SMT solvers; a parameter from external SMT (§3.1) *)
+lit : Set;
+
+(** Primitive operations mirror SMT solver primitives; a parameter from external SMT (§3.1) *)
+primop : Set;
 
 (** SMT boolean primitives for path condition connectives *)
-Axiom op_and : primop.
-Axiom op_not : primop.
+op_and : primop;
+op_not : primop;
 
 (**
   SMT if-then-else. This is the solver's own three-place term, not the
@@ -47,13 +56,13 @@ Axiom op_not : primop.
   solvable arms into this term, which is the point at which a branch stops
   being a tree the evaluator walks and becomes a formula the solver reads.
 *)
-Parameter op_ite : primop.
+op_ite : primop;
 
 (** Arity of a primitive operation: the number of arguments it is applied to (§3.1) *)
-Axiom primop_arity : primop -> nat.
+primop_arity : primop -> nat;
 
 (** if-then-else takes a condition and two arms *)
-Axiom op_ite_arity : primop_arity op_ite = 3%nat.
+op_ite_arity : primop_arity op_ite = 3%nat;
 
 (**
   Literals and primitive operations have decidable equality.
@@ -63,18 +72,31 @@ Axiom op_ite_arity : primop_arity op_ite = 3%nat.
   the definition can run. Equality of expressions is built from these two
   and from tycon_eq_dec below.
 *)
-Parameter lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2}.
-Parameter primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2}.
+lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2};
+primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2};
+
+(** Type Constructors (e.g. Int, Bool, SMT.BitVec), used by Section 3; left abstract *)
+tycon : Set;
+
+(** Type constructors have decidable equality; merge compares whole types *)
+tycon_eq_dec : forall (t1 t2 : tycon), {t1 = t2} + {t1 <> t2};
+
+(**
+  The SMT theory's own reading of a primitive operation: the literal the
+  solver gives to that operation applied to literal arguments. It is external
+  to this development in exactly the way lit and primop already are.
+*)
+prim_value : primop -> list lit -> lit;
+
+(** The literal the SMT theory reads as truth. External in the same way. *)
+lit_true : lit
+}.
+
+Context {sorts : SymCoreSorts}.
 
 (** ========================================================================= *)
 (** 3. Types and Coercions in System FC / SymCore (§3.1)                      *)
 (** ========================================================================= *)
-
-(** Type Constructors (e.g. Int, Bool, SMT.BitVec); left abstract *)
-Parameter tycon : Set.
-
-(** Type constructors have decidable equality; merge compares whole types *)
-Parameter tycon_eq_dec : forall (t1 t2 : tycon), {t1 = t2} + {t1 <> t2}.
 
 (** System FC Types with arrow types for higher-order coercions *)
 Inductive type_fc : Set :=
@@ -177,7 +199,12 @@ with environment : Type :=
   | ExtendEnv : var -> closure -> environment -> environment.
                                                   (** Γ{x ↦ (Γ', e)}: substitution map *)
 
+End SymCore.
+
 Notation "'·'" := EmptyEnv.
+
+Section SymCore.
+Context {sorts : SymCoreSorts}.
 
 (**
   Syntactic equality of expressions, as a test the merge definition can run.
@@ -347,9 +374,6 @@ Inductive path_condition : Set :=
   | PCLit  : lit -> path_condition
   | PCPrim : primop -> list path_condition -> path_condition.
 
-(** SMT satisfiability oracle SAT(Φ) (Fig. 3, Rule Prune); axiomatized from SMT solver *)
-Axiom sat : path_condition -> bool.
-
 (** Conjunction of path conditions: Φ1 ∧ Φ2 *)
 Definition pc_and (Φ1 Φ2 : path_condition) : path_condition :=
   PCPrim op_and [Φ1; Φ2].
@@ -358,12 +382,13 @@ Definition pc_and (Φ1 Φ2 : path_condition) : path_condition :=
 Definition pc_not (Φ : path_condition) : path_condition :=
   PCPrim op_not [Φ].
 
+End SymCore.
+
 Notation "Φ1 '∧' Φ2" := (pc_and Φ1 Φ2) (at level 40, left associativity).
 Notation "'¬' Φ" := (pc_not Φ) (at level 35, right associativity).
 
-(** Canonical trivially satisfiable path condition (Top / True) *)
-Axiom pc_true : path_condition.
-Axiom sat_pc_true : sat pc_true = true.
+Section SymCore.
+Context {sorts : SymCoreSorts}.
 
 (** Convert a solvable expression into a path condition formula *)
 Fixpoint expr_to_pc (Γ : environment) (e : expr) : option path_condition :=
@@ -394,18 +419,30 @@ Fixpoint unspool_app (e : expr) (args : list expr) : (expr * list expr) :=
   | _ => (e, args)
   end.
 
-(** Theory-specific primitive reduction: reduce-prim(⊗ e⃗) (Fig. 3, Rule App-Prim); axiomatized from SMT solver *)
-Axiom reduce_prim : primop -> list expr -> expr.
+Class SymCoreSolver : Type := {
+
+(** SMT satisfiability oracle SAT(Φ) (Fig. 3, Rule Prune); a parameter from the SMT solver *)
+sat : path_condition -> bool;
+
+(** Canonical trivially satisfiable path condition (Top / True) *)
+pc_true : path_condition;
+sat_pc_true : sat pc_true = true;
+
+(** Theory-specific primitive reduction: reduce-prim(⊗ e⃗) (Fig. 3, Rule App-Prim); a parameter from the SMT solver *)
+reduce_prim : primop -> list expr -> expr;
 
 (** Cast simplification: cast(e, γ) (Fig. 3, Rule Cast) *)
-Parameter cast_expr : expr -> coercion -> expr.
+cast_expr : expr -> coercion -> expr;
+
+(** Type and Coercion substitution under environment Γ (Fig. 3, Rules Type and Coercion) *)
+subst_coerc : environment -> coercion -> coercion;
+subst_type : environment -> type_fc -> type_fc
+}.
+
+Context {solver : SymCoreSolver}.
 
 (** Leaf expression merging is Section 8.1 below, a definition rather than an
     assumption. It needs Solvable and the spine helpers, which come first. *)
-
-(** Type and Coercion substitution under environment Γ (Fig. 3, Rules Type and Coercion) *)
-Parameter subst_coerc : environment -> coercion -> coercion.
-Parameter subst_type : environment -> type_fc -> type_fc.
 
 (** ========================================================================= *)
 (** 7. Solvable and WHNF Definitions in Prop (§3.2)                            *)
@@ -505,12 +542,17 @@ Inductive Whnf (Γ : environment) : expr -> Prop :=
       Whnf Γ ef ->
       Whnf Γ (EIf ec et ef).
 
+End SymCore.
+
 (** Closes the Whnf_Con / Eval_Con case of an inversion on an expression
     whose spine head is visibly not a data constructor. *)
 Ltac no_con_head :=
   match goal with
   | [ H : unspool_app _ _ = (ECon _, _) |- _ ] => simpl in H; discriminate H
   end.
+
+Section SymCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 
 (** ------------------------------------------------------------------------- *)
 (** 7.1 expr_to_pc Reads a Formula Off the Syntax Alone                       *)
@@ -805,6 +847,8 @@ Lemma make_con_app_is_con_app : forall d args,
   is_con_app (make_con_app d args) = true.
 Proof. intros d args. exact (unspool_is_con_app _ _ _ _ (make_con_app_unspool d args)). Qed.
 
+End SymCore.
+
 Ltac no_con_value :=
   match goal with
   | [ H : make_con_app ?d ?args = _ |- _ ] =>
@@ -812,6 +856,9 @@ Ltac no_con_value :=
       pose proof (make_con_app_is_con_app d args) as Hc;
       rewrite H in Hc; simpl in Hc; discriminate Hc
   end.
+
+Section SymCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 
 (** A spine rebuilt from its head and arguments is the spine it came from *)
 Lemma unspool_fold_left : forall e acc h args,
@@ -977,7 +1024,12 @@ Inductive live_fuel := Unlimited | Remaining (n : nat).
 
 Inductive fuel := Spent | Live (f : live_fuel).
 
+End SymCore.
+
 Notation Inf := (Live Unlimited).
+
+Section SymCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 
 Definition Fin (n : nat) : fuel :=
   match n with O => Spent | S m => Live (Remaining m) end.
@@ -1182,8 +1234,13 @@ with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> ex
       is_bot e = false ->
       fold_alts f Φ Γ e alts (EBot BUndefined).
 
+End SymCore.
+
 (** Notation for big-step reduction: Φ; Γ ⊢ e ⇓ e' *)
 Notation "Φ ';' Γ '⊢' e '⇓' e'" := (eval Inf Φ Γ e e') (at level 70, no associativity).
+
+Section SymCore.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 
 (** ========================================================================= *)
 (** 10. Metatheory of SymCore (§3.2, §3.3)                                     *)
@@ -1387,9 +1444,12 @@ Qed.
   branches is left free to distribute over that branch and return an EIf -
   which Whnf_If already accepts as a value.
 *)
-Axiom reduce_prim_solvable : forall Γ p args,
+Class ReducePrimSolvable : Prop :=
+reduce_prim_solvable : forall Γ p args,
   Forall (Solvable Γ) args ->
   Solvable Γ (reduce_prim p args).
+
+Context {reduce_prim_solvable_law : ReducePrimSolvable}.
 
 (**
   SMT terms are always fully-formed application trees: an SMT solver has no
@@ -1400,9 +1460,12 @@ Axiom reduce_prim_solvable : forall Γ p args,
   already-saturated primitive (Rule App-Prim never fires on it) get stuck
   rather than silently re-reducing with the wrong number of arguments.
 *)
-Axiom reduce_prim_saturated : forall p args p0 args0,
+Class ReducePrimSaturated : Prop :=
+reduce_prim_saturated : forall p args p0 args0,
   unspool_app (reduce_prim p args) [] = (EPrimOp p0, args0) ->
   length args0 = primop_arity p0.
+
+Context {reduce_prim_saturated_law : ReducePrimSaturated}.
 
 (** WHNF follows directly from being solvable *)
 Lemma reduce_prim_whnf : forall Γ p args,
@@ -2577,3 +2640,5 @@ Proof.
 Qed.
 
 
+
+End SymCore.
