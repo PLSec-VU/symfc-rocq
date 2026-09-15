@@ -48,7 +48,7 @@ Section CompletenessFailsOnPlainEval.
   Definition stuck_else : expr := EApp (ELit l) (ELit l).
   Definition e_sym     : expr := EIf (EVar x) (ELit l') stuck_else.
 
-  (* The hypotheses of concore_completeness are all met. *)
+  (* The concretion and the concrete run that completeness asks for both hold. *)
   Lemma premises_hold :
     contains σ S e_sym (ELit l')
     /\ · ⊢ᶜ ELit l' ⇓ᶜ ELit l'.
