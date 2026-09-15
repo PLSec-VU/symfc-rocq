@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore.
+From SymCoreTheory Require Import SymCore ConCore Completeness.
 From Stdlib Require Import Strings.String Lists.List Arith.PeanoNat Lia.
 Import ListNotations.
 
@@ -182,6 +182,170 @@ Lemma find_alt_saturated : forall d alts xs ep,
 Proof.
   intros d alts xs ep H. induction H as [| [d' xs' b] rest Hb _ IH]; simpl; [discriminate |].
   destruct (string_dec d d'); [intro Heq; injection Heq as <- <-; exact Hb | exact IH].
+Qed.
+
+Class ReducePrimKeepsSaturation : Prop :=
+reduce_prim_keeps_saturation : forall p args,
+  length args = primop_arity p -> Forall saturated args ->
+  saturated (reduce_prim p args).
+
+Class CastExprKeepsSaturation : Prop :=
+cast_expr_keeps_saturation : forall e γ,
+  saturated e -> saturated (cast_expr e γ).
+
+Context {reduce_prim_law : ReducePrimKeepsSaturation} {cast_expr_law : CastExprKeepsSaturation}.
+
+Lemma ite_leaf_saturated : forall Γ ec et ef,
+  saturated ec -> saturated et -> saturated ef -> saturated (ite_leaf Γ ec et ef).
+Proof.
+  intros Γ ec et ef Hc Ht Hf. unfold ite_leaf.
+  destruct (decompose_con_app et) as [[d1 a1] |] eqn:E1;
+  destruct (decompose_con_app ef) as [[d2 a2] |] eqn:E2.
+  1: destruct (andb _ _);
+    [ apply make_con_app_saturated; apply zip_if_saturated;
+        [exact Hc | exact (decompose_con_app_saturated _ _ _ Ht E1)
+                  | exact (decompose_con_app_saturated _ _ _ Hf E2)]
+    | exact (conj Hc (conj Ht Hf)) ].
+  all: destruct (solvable_dec Γ et); [destruct (solvable_dec Γ ef) |].
+  all: try (apply reduce_prim_keeps_saturation;
+            [rewrite op_ite_arity; reflexivity | repeat constructor; assumption]).
+  all: try exact (conj Hc (conj Ht Hf)).
+  all: destruct et; try exact (conj Hc (conj Ht Hf)); destruct ef; try exact (conj Hc (conj Ht Hf)).
+  all: repeat (match goal with
+               | |- saturated (if ?b then _ else _) => destruct b
+               | |- saturated (match ?x with _ => _ end) => destruct x
+               end; try exact (conj Hc (conj Ht Hf)); try exact Ht).
+  all: exact (conj (proj1 Ht) (conj Hc (conj (proj2 Ht) (proj2 Hf)))).
+Qed.
+
+Lemma ite_saturated : forall et Γ ec ef,
+  saturated ec -> saturated et -> saturated ef -> saturated (ite Γ ec et ef).
+Proof.
+  induction et; intros Γ ec ef Hc Ht Hf;
+    try (rewrite ite_leaf_of by (left; reflexivity); apply ite_leaf_saturated; assumption).
+  destruct ef;
+    try (rewrite ite_leaf_of by (right; reflexivity); apply ite_leaf_saturated; assumption).
+  rewrite ite_cast. destruct (dec_eqb coercion_eq_dec c c0).
+  - exact (IHet Γ ec ef Hc Ht Hf).
+  - exact (conj Hc (conj Ht Hf)).
+Qed.
+
+Lemma merge_saturated : forall Γ e, saturated e -> saturated (merge Γ e).
+Proof.
+  intros Γ e He. destruct e; try exact He.
+  destruct He as [Hc [Ht Hf]]. exact (ite_saturated _ Γ _ _ Hc Ht Hf).
+Qed.
+
+Definition saturates_value (f : fuel) (Φ : path_condition) (Γ : environment) (e v : expr) : Prop :=
+  saturated_env Γ -> spine_ok AtLeast 0 e -> saturated v.
+
+Definition saturates_fold (f : fuel) (Φ : path_condition) (Γ : environment) (e : expr)
+  (alts : list alt) (v : expr) : Prop :=
+  saturated_env Γ -> saturated e -> Forall saturated_alt alts -> saturated v.
+
+Lemma eval_saturates_at_least : forall f Φ Γ e v,
+  eval f Φ Γ e v -> saturates_value f Φ Γ e v.
+Proof.
+  apply (eval_nested_ind saturates_value saturates_fold); unfold saturates_value, saturates_fold.
+  - intros f Φ Γ x Γ' e e' Hl _ IH HΓ _.
+    destruct (lookup_saturated _ _ _ _ HΓ Hl) as [HΓ' He].
+    exact (IH HΓ' (exact_at_least e 0 He)).
+  - intros. exact I.
+  - intros. exact I.
+  - intros f Φ Γ e d args Hu HΓ He. apply make_con_app_saturated.
+    destruct (unspool_spine_ok e [] (ECon d) args AtLeast He (Forall_nil _) Hu) as [_ Hargs].
+    apply Forall_map. eapply Forall_impl; [| exact Hargs].
+    intros a Ha. exact (delay_saturated Γ a HΓ Ha).
+  - intros f Φ Γ e γ e' _ IH HΓ He.
+    apply cast_expr_keeps_saturation. exact (IH HΓ He).
+  - intros f Φ Γ Γ' x eb ea eb' _ IH HΓ He.
+    destruct He as [[HΓ' Hb] Ha].
+    apply IH; [apply extend_saturated; assumption | exact (exact_at_least eb 0 Hb)].
+  - intros f Φ Γ ef ea ef' er Hc _ IHf _ IHapp HΓ He.
+    destruct He as [Hf Ha].
+    assert (Hf0 : spine_ok AtLeast 0 ef).
+    { apply (spine_ok_any_count ef AtLeast 1 0); [| exact Hf].
+      inversion Hc; subst; try reflexivity; assumption. }
+    apply IHapp; [exact HΓ |]. split; [| exact Ha].
+    apply (at_least_more ef' 0 1); [lia |]. apply exact_at_least. exact (IHf HΓ Hf0).
+  - intros f Φ Γ b HΓ He. exact He.
+  - intros f Φ Γ ef ea p args args' Hu Hl HF HΓ He.
+    destruct (unspool_spine_ok _ [] _ _ AtLeast He (Forall_nil _) Hu) as [_ Hargs].
+    apply reduce_prim_keeps_saturation.
+    + rewrite <- (Forall2_length HF). exact Hl.
+    + clear -HF Hargs HΓ.
+      induction HF as [| a a' l l' [_ Ha] _ IH]; constructor; inversion Hargs; subst.
+      * apply Ha; [exact HΓ | apply exact_at_least; assumption].
+      * apply IH; assumption.
+  - intros f Φ Γ x e HΓ He. exact (conj HΓ He).
+  - intros f Φ Γ ef γ ea γ_a γ_r er _ _ IH HΓ He.
+    destruct He as [Hf Ha]. apply IH; [exact HΓ |].
+    split; [apply (at_least_more ef 0 1); [lia | exact Hf] | exact Ha].
+  - intros f Φ Γ e1 e2 ec et ef args er Hu _ IH HΓ He.
+    destruct (unspool_spine_ok _ [] _ _ AtLeast He (Forall_nil _) Hu) as [[Hc [Ht Hf]] Hargs].
+    apply IH; [exact HΓ |].
+    refine (conj Hc (conj _ _)); apply fold_left_spine_ok; try rewrite Nat.add_0_r; assumption.
+  - intros f Φ Γ b ea HΓ He. exact (proj1 He).
+  - intros f Φ Γ es alts es' er _ IHs _ IHf HΓ He.
+    apply alts_ok_forall in He. destruct He as [Hs Halts].
+    exact (IHf HΓ (merge_saturated Γ es' (IHs HΓ Hs)) Halts).
+  - intros f Φ Γ ec et ef ec' et' ef' pc_c _ IHc _ _ IHt _ IHf HΓ He.
+    destruct He as [Hc [Ht Hf]].
+    exact (conj (IHc HΓ Hc) (conj (IHt HΓ Ht) (IHf HΓ Hf))).
+  - intros. exact I.
+  - intros. exact I.
+  - intros. exact I.
+  - intros f Φ Γ Γ' e e' _ IH HΓ He.
+    destruct He as [HΓ' Hb]. exact (IH HΓ' (exact_at_least e 0 Hb)).
+  - intros. exact I.
+  - intros f Φ Γ ec et ef alts et' ef' pc_c _ _ IHt _ IHf HΓ He Halts.
+    destruct He as [Hc [Ht Hf]].
+    exact (conj Hc (conj (IHt HΓ Ht Halts) (IHf HΓ Hf Halts))).
+  - intros. exact I.
+  - intros f Φ Γ e d ea xs ep alts er Hd Hfind _ IH HΓ He Halts.
+    apply IH.
+    + apply extend_multi_saturated;
+        [exact HΓ | exact HΓ | exact (decompose_con_app_saturated _ _ _ He Hd)].
+    + exact (exact_at_least ep 0 (find_alt_saturated _ _ _ _ Halts Hfind)).
+  - intros f Φ Γ b alts HΓ He _. exact He.
+  - intros. exact I.
+Qed.
+
+Theorem eval_preserves_saturation : forall f Φ Γ e v,
+  saturated_env Γ -> saturated e -> eval f Φ Γ e v -> saturated v.
+Proof.
+  intros f Φ Γ e v HΓ He Hev.
+  exact (eval_saturates_at_least f Φ Γ e v Hev HΓ (exact_at_least e 0 He)).
+Qed.
+
+Theorem fold_alts_preserves_saturation : forall f Φ Γ e alts v,
+  saturated_env Γ -> saturated e -> Forall saturated_alt alts ->
+  fold_alts f Φ Γ e alts v -> saturated v.
+Proof.
+  intros f Φ Γ e alts v HΓ He Halts Hfold.
+  induction Hfold as [f Φ Γ ec et ef alts et' ef' pc_c _ _ IHt _ IHf
+                     | | f Φ Γ e d ea xs ep alts er Hd Hfind Hev | f Φ Γ b alts | ].
+  - destruct He as [Hc [Ht Hf]].
+    exact (conj Hc (conj (IHt HΓ Ht Halts) (IHf HΓ Hf Halts))).
+  - exact I.
+  - refine (eval_preserves_saturation _ _ _ _ _ _ (find_alt_saturated _ _ _ _ Halts Hfind) Hev).
+    apply extend_multi_saturated; [exact HΓ | exact HΓ |].
+    exact (decompose_con_app_saturated _ _ _ He Hd).
+  - exact He.
+  - exact I.
+Qed.
+
+Theorem saturated_prim_app_meets_arity : forall ef ea p args,
+  saturated (EApp ef ea) -> unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+  length args = primop_arity p.
+Proof. intros ef ea p args. apply saturated_prim_spine. Qed.
+
+Theorem evaluated_prim_app_not_partial : forall ef ea p args,
+  spine_ok AtLeast 0 (EApp ef ea) -> unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+  ~ length args < primop_arity p.
+Proof.
+  intros ef ea p args He Hu Hlt.
+  pose proof (at_least_prim_spine _ p args He Hu) as Hge. lia.
 Qed.
 
 End Saturation.
