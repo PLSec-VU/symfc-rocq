@@ -13,9 +13,11 @@
 
    Question 1 used to be answered here by a throwaway copy of the pair. The
    copy is gone because the answer graduated: concore_eval_closed_fix and
-   concore_fold_closed_fix in ConCore.v ARE that pair, fuel-polymorphic and
-   crutch-free, and they are part of the development rather than a sample of
-   it. Part A below just prints what they rest on. *)
+   concore_fold_closed_fix in ConCore.v ARE that pair, and they are part of
+   the development rather than a sample of it. They keep an "f0 = Inf"
+   premise for a different reason: Rule Out-Of-Fuel answers EBot BOutOfFuel,
+   and no ConCore expression is that bottom. Part A below just prints what
+   they rest on. *)
 Require Import SymCoreTheory.SymCore.
 Require Import SymCoreTheory.ConCore.
 Require Import Coq.Lists.List.
@@ -24,9 +26,8 @@ Import ListNotations.
 Section Scratch.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
 
-(** Part A: the fuel-polymorphic pair. It takes the fuel as a parameter, asks
-    nothing of it, recurses at (dec k) in every eval case and at the fuel it
-    was handed in every fold_alts case, and the guard checker accepts it -
+(** Part A: the pair. It takes the fuel as a parameter, recurses at (dec k)
+    in every eval case and at the fuel it was handed in every fold_alts case, and the guard checker accepts it -
     which is what ConCore.v compiling at all already says. The listing below
     shows it adds no assumption of its own. *)
 Print Assumptions concore_eval_closed_fix.
@@ -35,14 +36,14 @@ Print Assumptions concore_eval_closed_fix.
     admit one, so "eval Inf" is the old relation unchanged, and Fin 0 admits
     no other rule, so the literal does not evaluate to itself there. *)
 Example out_of_fuel_reachable : forall l,
-  eval (Fin 0) pc_true · (ELit l) (EBot BUndefined).
+  eval (Fin 0) pc_true · (ELit l) (EBot BOutOfFuel).
 Proof. intros l. apply Eval_OutOfFuel. Qed.
 
 Example dec_Inf_is_Inf : dec Unlimited = Inf.
 Proof. reflexivity. Qed.
 
 Example fin_zero_prunes_every_other_rule : forall Γ l v,
-  eval (Fin 0) pc_true Γ (ELit l) v -> v = EBot BUndefined.
+  eval (Fin 0) pc_true Γ (ELit l) v -> v = EBot BOutOfFuel.
 Proof.
   intros Γ l v H.
   inversion H; subst.

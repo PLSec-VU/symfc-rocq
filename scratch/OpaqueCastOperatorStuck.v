@@ -8,9 +8,9 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
 (* ==========================================================================
    Applying a cast whose coercion is not an arrow is stuck.
 
-   This is the fact that pays for deleting Rule App-Cast-Opaque. Figure 3
-   has five rules that can look at an application: App-Abs, App-Spine,
-   App-Prim, App-Cast and App-Bot. On the shape
+   This is the fact that pays for deleting Rule App-Cast-Opaque. Six rules
+   can look at an application: App-Abs, App-Spine, App-Prim, App-Cast,
+   App-If and App-Bot. On the shape
 
        (e ⊲ γ) ea      with γ not an arrow
 
@@ -22,7 +22,8 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
                spine is the cast;
      App-Cast  wants γ to split into an argument coercion and a result
                coercion, and this one does not split;
-     App-Spine now refuses EVERY cast operator, which is the change.
+     App-If    wants the spine head to be a branch;
+     App-Spine wants a computation, and no cast is one.
 
    So the term has no value. That holds for symbolic evaluation at any
    satisfiable path condition and, as a special case, for concrete
@@ -43,7 +44,7 @@ Proof.
     no_con_head.
   - (* Rule App-Spine: the operator is a cast *)
     match goal with
-    | [ H : is_cast (ECast eb γ) = false |- _ ] => discriminate H
+    | [ H : Comp _ (ECast eb γ) |- _ ] => inversion H
     end.
   - (* Rule App-Prim: the spine head is the cast, not a primitive *)
     match goal with
@@ -54,6 +55,11 @@ Proof.
     match goal with
     | [ H : decomp_coerc_arrow γ = Some _ |- _ ] =>
         rewrite Hdec in H; discriminate
+    end.
+  - (* Rule App-If: the spine head is the cast, not a branch *)
+    match goal with
+    | [ H : unspool_app (EApp (ECast eb γ) ea) [] = _ |- _ ] =>
+        simpl in H; injection H as Hh _; discriminate
     end.
   - (* Rule Prune: the path condition holds *)
     match goal with

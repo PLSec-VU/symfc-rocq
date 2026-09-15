@@ -27,9 +27,11 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
      Figure 3, not a deletion from it, and it costs the programs above their
      value.
 
-   Rule App-Spine now reads "is_cast ef = false" and Rule App-Cast-Opaque is
-   gone. So the last clause of that sentence has come due, and this file
-   pays it. Two of its lemmas flipped:
+   Rule App-Spine then read "is_cast ef = false", and Rule App-Cast-Opaque
+   went. Rule App-Spine now asks for a computation (Comp), and no cast is
+   one, so the guard still refuses every cast operator. So the last clause
+   of that sentence has come due, and this file pays it. Two of its lemmas
+   flipped:
 
      LEMMA 5 was only_app_cast_opaque_reduces_the_stepped_program, which
      said Rule App-Cast-Opaque is the only rule that reduces the stepped
@@ -40,11 +42,12 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
 
    LEMMA 8 changed shape without changing its meaning. It used to feed this
    program's stepped term to eval_con_app_whnf and observe that every
-   hypothesis held. eval_con_app_whnf's guard is now "is_cast fc = false",
-   which this operator fails, so the instance no longer exists. The lemma
-   now records that.
+   hypothesis held. That lemma is gone with the value test on operators, so
+   the instance no longer exists. The lemma now records that the operator is
+   a cast.
 
-   Everything else - lemmas 1, 2, 3, 4 and 7 - is unchanged and still true.
+   Lemmas 3 and 4 now state the operator test as Comp. Lemmas 1, 2 and 7 are
+   unchanged.
 
    What the file shows now: deleting the rule DOES cost this program its
    value, exactly as the old note predicted, and the cost is paid on both
@@ -102,17 +105,11 @@ Lemma stepped_program_fails_the_restriction :
 Proof. reflexivity. Qed.
 
 (* 3. Rule App-Spine really does take the first to the second: the written
-      operator is not a value, it is not a cast, and it evaluates to the
-      cast that fails the restriction. UNCHANGED, except that the guard the
-      operator passes is now the plain cast test. *)
-Lemma written_operator_is_not_a_value :
-  ~ Whnf env_with_cast (EVar "x").
-Proof.
-  intro H.
-  inversion H as [e0 Hsolv | | | | | | | ]; subst; [| no_con_head].
-  inversion Hsolv as [| y Hnone | |]; subst.
-  simpl in Hnone. discriminate.
-Qed.
+      operator is a computation, it is not a cast, and it evaluates to the
+      cast that fails the restriction. *)
+Lemma written_operator_is_a_computation :
+  Comp env_with_cast (EVar "x").
+Proof. apply Comp_Var. simpl. discriminate. Qed.
 
 Lemma written_operator_is_not_a_cast :
   is_cast (EVar "x") = false.
@@ -142,12 +139,11 @@ Proof.
   rewrite Heq. exact Hcast.
 Qed.
 
-(* 4. On that stepped term, Rule App-Spine cannot fire: a cast over a value
-      is a value - and, since the repair, it could not fire even if the body
-      under the cast were not a value. UNCHANGED. *)
-Lemma stepped_operator_is_a_value :
-  Whnf env_with_cast kept_cast.
-Proof. apply Whnf_Cast. eapply Whnf_Con. reflexivity. Qed.
+(* 4. On that stepped term, Rule App-Spine cannot fire: a cast is not a
+      computation, whatever sits under it. *)
+Lemma stepped_operator_is_not_a_computation :
+  ~ Comp env_with_cast kept_cast.
+Proof. intros H. inversion H. Qed.
 
 (* 5. FLIPPED. This used to read
 
@@ -196,6 +192,11 @@ Proof.
     | [ H : unspool_app (EApp (EVar "x") (ECon "E")) [] = _ |- _ ] =>
         simpl in H; injection H as Hh _; discriminate
     end.
+  - (* Rule App-If: the spine head is a variable, not a branch *)
+    match goal with
+    | [ H : unspool_app (EApp (EVar "x") (ECon "E")) [] = _ |- _ ] =>
+        simpl in H; injection H as Hh _; discriminate
+    end.
   - (* Rule Prune: pc_true is satisfiable *)
     rewrite sat_pc_true in *. discriminate.
 Qed.
@@ -228,12 +229,11 @@ Qed.
      held and the conclusion was the term only Rule App-Cast-Opaque
      reduced.
 
-     eval_con_app_whnf's guard is now "is_cast fc = false". This operator is
-     a cast, so the instance does not exist any more. And the soundness
-     proof never needs it: eval_app_spine_sound proves the concrete operator
-     is not a cast before it calls eval_con_app_whnf, from
-     contains_is_cast and eval_app_if_false. *)
-Lemma eval_con_app_whnf_excludes_this_instance :
+     eval_con_app_whnf is gone. The soundness proof never needs the
+     instance: eval_app_spine_sound takes a computation as operator, and
+     comp_contains in ConCore.v shows that its concretion is a computation
+     or a closure, never a cast. This operator is a cast. *)
+Lemma stepped_operator_is_a_cast :
   is_cast kept_cast = true.
 Proof. reflexivity. Qed.
 
@@ -275,9 +275,10 @@ Qed.
    concretely, because concretion changes which terms are values. A test on
    the constructor cannot, because concretion does not change a non-cast
    into a cast - contains_is_cast in ConCore.v - unless the term is a
-   branch, and an application with a branch in operator position has no
-   value anyway - eval_app_if_false. So the two sides stop on the same
-   shapes, and soundness never reaches the gap the old rule was patching.
+   branch. The guard is now Comp, and a branch is not a computation:
+   comp_contains in ConCore.v shows that the concretion of a computation is
+   a computation or a closure. So the two sides stop on the same shapes, and
+   soundness never reaches the gap the old rule was patching.
 
    The restriction on operator position is still worth having on its own -
    it is preserved by evaluation and it needs no new contract, see

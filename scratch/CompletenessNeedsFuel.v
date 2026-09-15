@@ -8,7 +8,7 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
 (* Every statement here is about the unlimited budget, eval Inf, which the
    notation "Phi ; Gamma |- e ==> v" now means. The finite budgets are
    covered in scratch/DivergenceNeedsFuel.v, Section 5: at Fin 0 the program
-   answers only the undefined value, and at every greater budget it has no
+   answers only the out-of-fuel bottom, and at every greater budget it has no
    value that contains the concrete one. *)
 
 (* A malformed application is stuck: no rule applies, and Rule Prune cannot
@@ -16,10 +16,7 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
 Lemma app_lit_stuck : forall Φ Γ l a v,
   sat Φ = true -> Φ ; Γ ⊢ EApp (ELit l) a ⇓ v -> False.
 Proof.
-  intros Φ Γ l a v Hsat Heval.
-  inversion Heval; subst; try discriminate.
-  - apply H2. apply Whnf_Solvable. apply Solvable_Lit.
-  - congruence.
+  exact app_lit_no_value_inf.
 Qed.
 
 (* The counterexample.
@@ -32,8 +29,8 @@ Qed.
    and Prune cannot fire because that branch is feasible.
 
    The then branch is a LITERAL on purpose.  A uniform depth bound does
-   not rescue this: at depth 0 the whole program is EBot BUndefined, and
-   contains (EBot BUndefined) (ELit l') is false; at depth 1 the guard is
+   not rescue this: at depth 0 the whole program is EBot BOutOfFuel, and
+   contains (EBot BOutOfFuel) (ELit l') is false; at depth 1 the guard is
    read at depth 0, no formula reads off it, and Rule If does not fire;
    at any greater depth the stuck else arm has no derivation at all and
    out-of-fuel cannot fire.  Fuel decrements uniformly, so no single k

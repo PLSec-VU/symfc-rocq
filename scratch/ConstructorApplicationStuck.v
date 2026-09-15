@@ -18,13 +18,13 @@ Proof.
 Qed.
 
 (* Applied constructor: it is a value, and its field is paired with the
-   environment it was written in. *)
+   environment it was written in, unless the field is a thunk already. *)
 Lemma applied_constructor_evaluates : forall Γ a,
-  pc_true ; Γ ⊢ EApp (ECon "D") a ⇓ EApp (ECon "D") (EThunk Γ a).
+  pc_true ; Γ ⊢ EApp (ECon "D") a ⇓ EApp (ECon "D") (delay Γ a).
 Proof. intros. exact (Eval_Con _ _ Γ (EApp (ECon "D") a) "D" [a] eq_refl). Qed.
 
 Lemma applied_constructor_value_is_unique : forall Γ a v,
-  pc_true ; Γ ⊢ EApp (ECon "D") a ⇓ v -> v = EApp (ECon "D") (EThunk Γ a).
+  pc_true ; Γ ⊢ EApp (ECon "D") a ⇓ v -> v = EApp (ECon "D") (delay Γ a).
 Proof.
   intros Γ a v H.
   exact (eval_con_spine_same pc_true Γ (EApp (ECon "D") a) "D" [a] v sat_pc_true eq_refl H).

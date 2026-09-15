@@ -30,12 +30,12 @@ Qed.
 (* ------------------------------------------------------------------- *)
 
 (* Counterexample 2 is no longer a counterexample. Rule App-Spine refuses
-   an operator whose coercion is an arrow, so the term keeps only the value
-   Rule App-Cast gives it. *)
+   every cast operator, because a cast is not a computation, so the term
+   keeps only the value Rule App-Cast gives it. *)
 Lemma ce2_term_has_one_value :
-  (forall Γ0 x body γ, cast_expr (EClos Γ0 x body) γ = EClos Γ0 x body) ->
+  (forall Γ0 x body γ, cast_expr (EThunk Γ0 (ELam x body)) γ = EThunk Γ0 (ELam x body)) ->
   forall v, · ⊢ᶜ EApp coerced_operator plain_operand ⇓ᶜ v ->
-  v = EClos (extend_env · "x" · coerced_operand) "z" (EVar "x").
+  v = EThunk (extend_env · "x" · coerced_operand) (ELam "z" (EVar "x")).
 Proof. exact casted_application_value_unique. Qed.
 
 (* But restricting only the EXPRESSION is still not enough. A ConCore

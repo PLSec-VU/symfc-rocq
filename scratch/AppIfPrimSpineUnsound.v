@@ -77,16 +77,22 @@ Qed.
 
 Lemma contains_keeps_not_if : forall σ S es ec,
   contains σ S es ec -> is_if es = false -> is_if ec = false.
-Proof. intros σ S es ec H Hif. destruct H; simpl in *; try reflexivity; discriminate. Qed.
+Proof.
+  intros σ S es ec H Hif. destruct H; simpl in *; try reflexivity; try discriminate.
+  all: match goal with
+    | [ Ht : is_thunk ?e = true |- _ ] => destruct e; try discriminate Ht; reflexivity
+    end.
+Qed.
 
 Lemma contains_keeps_is_con : forall σ S es ec,
   contains σ S es ec -> is_if es = false -> is_con ec = is_con es.
 Proof.
   intros σ S es ec H Hif. destruct H; simpl in *; try reflexivity; try discriminate.
-  match goal with
-  | [ Hu : unspool_app ?e _ = _, Hg : smt_ground ?e = false |- _ ] =>
-      destruct (cont_denote_is_app _ _ _ Hu Hg) as [? [? ->]]; reflexivity
-  end.
+  all: match goal with
+    | [ Ht : is_thunk ?e = true |- _ ] => destruct e; try discriminate Ht; reflexivity
+    | [ Hu : unspool_app ?e _ = _, Hg : smt_ground ?e = false |- _ ] =>
+        destruct (cont_denote_is_app _ _ _ Hu Hg) as [? [? ->]]; reflexivity
+    end.
 Qed.
 
 Lemma contains_flat_con_arg : forall σ S es ec,
@@ -96,6 +102,7 @@ Proof.
   - apply andb_prop in Hflat as [Hf Ha].
     rewrite (contains_keeps_is_con σ S a_s a_c H0 (flat_not_if a_s Ha)), (IHcontains1 Hf).
     reflexivity.
+  - destruct ec; try discriminate; reflexivity.
   - symmetry. destruct H2 as [pc [Hd _]].
     exact (expr_to_pc_no_con_arg · es pc (Hd · (sym_free_env_empty S))).
 Qed.
@@ -231,6 +238,18 @@ Proof.
   - exact model_subst_type_contains_env.
 Qed.
 
+(* The whole-spine counterexample. Rule App-If once pushed ONE argument into
+   the arms of a branch, and Rule App-Spine then applied the resulting
+   branch to the next argument. Under that rule the symbolic program below
+   had a value: (not D) reduced by Rule App-Prim to the constructor Result,
+   and the branch of two Result constructors then took true by Rule Con.
+   The concrete program (not D) true has no value, because not takes one
+   argument and gets two. OldSymbolicValue states that the symbolic program
+   has a value, and app_if_breaks_soundness shows that this refutes
+   soundness. Rule App-If now pushes the whole spine into the arms, so the
+   arms are (not D true), which is as stuck as the concrete program:
+   symbolic_program_has_no_value. *)
+
 Definition guard_var : var := "x"%string.
 Definition branch_operator : expr := EIf (EVar guard_var) (EPrimOp PNot) (EPrimOp PNot).
 Definition field_con : expr := ECon "D"%string.
@@ -239,43 +258,29 @@ Definition concrete_program : expr := EApp (EApp (EPrimOp PNot) field_con) (ELit
 Definition branch_symvars : symvars := fun y => String.eqb y guard_var.
 Definition branch_model : valuation := fun _ => true.
 
+Definition OldSymbolicValue : Prop :=
+  exists v, @eval model_sorts con_solver Inf (PCLit true) · symbolic_program v.
+
 Lemma negation_of_field_is_a_constructor :
   con_reduce_prim PNot (field_con :: nil) = ECon result_con.
 Proof. reflexivity. Qed.
 
-Lemma symbolic_program_has_value :
-  exists v, @eval model_sorts con_solver Inf (PCLit true) · symbolic_program v.
+Lemma over_applied_negation_is_stuck : forall Φ Γ v,
+  ~ @eval model_sorts con_solver Inf Φ Γ concrete_program v.
 Proof.
-  eexists. unfold symbolic_program, branch_operator.
-  eapply (@Eval_AppSpine model_sorts con_solver).
-  - apply Comp_App. reflexivity.
-  - apply Eval_AppIf. eapply Eval_If.
-    + apply Eval_SymVar. reflexivity.
-    + reflexivity.
-    + eapply Eval_AppPrim; [reflexivity | reflexivity |].
-      apply Forall2_cons; [eapply Eval_Con; reflexivity | apply Forall2_nil].
-    + eapply Eval_AppPrim; [reflexivity | reflexivity |].
-      apply Forall2_cons; [eapply Eval_Con; reflexivity | apply Forall2_nil].
-  - change (@reduce_prim model_sorts con_solver PNot [make_con_app "D" (map (delay ·) [])])
-      with (ECon result_con).
-    apply Eval_AppIf. eapply Eval_If.
-    + apply Eval_SymVar. reflexivity.
-    + reflexivity.
-    + eapply Eval_Con. reflexivity.
-    + eapply Eval_Con. reflexivity.
-Qed.
-
-Lemma concrete_program_is_stuck :
-  forall v, ~ @eval model_sorts con_solver Inf (PCLit true) · concrete_program v.
-Proof.
-  intros v H. unfold concrete_program, field_con in H.
+  intros Φ Γ v H. unfold concrete_program, field_con in H.
   inversion H; subst.
   - match goal with Hu : unspool_app _ _ = (ECon _, _) |- _ => simpl in Hu; discriminate Hu end.
   - match goal with Hc : Comp _ _ |- _ => inversion Hc as [| | | | ? ? Hh]; simpl in Hh; discriminate Hh end.
   - match goal with Hu : unspool_app _ _ = (EPrimOp _, _), Hl : length _ = _ |- _ =>
       simpl in Hu; injection Hu as <- <-; simpl in Hl; discriminate Hl end.
+  - match goal with Hu : unspool_app _ _ = (EIf _ _ _, _) |- _ => simpl in Hu; discriminate Hu end.
   - match goal with Hs : sat _ = false |- _ => discriminate Hs end.
 Qed.
+
+Lemma concrete_program_is_stuck :
+  forall v, ~ @eval model_sorts con_solver Inf (PCLit true) · concrete_program v.
+Proof. intros v. apply over_applied_negation_is_stuck. Qed.
 
 Lemma symbolic_program_contains_concrete_program :
   contains branch_model branch_symvars symbolic_program concrete_program.
@@ -290,6 +295,7 @@ Lemma concrete_program_concore : concore_expr concrete_program.
 Proof. repeat constructor. Qed.
 
 Theorem app_if_breaks_soundness :
+  OldSymbolicValue ->
   ~ (forall Φ Γs Γc σ S e_sym e_con v_sym,
        σ ⊨ Φ ->
        contains_env σ S Γs Γc ->
@@ -300,8 +306,7 @@ Theorem app_if_breaks_soundness :
          @eval model_sorts con_solver Inf (PCLit true) Γc e_con v_con /\
          contains σ S v_sym v_con).
 Proof.
-  intros Hsound.
-  destruct symbolic_program_has_value as [v_sym Hv].
+  intros [v_sym Hv] Hsound.
   assert (Hm : @models model_sorts branch_model (PCLit true)) by reflexivity.
   destruct (Hsound _ · · branch_model branch_symvars symbolic_program concrete_program
               v_sym Hm (Cont_Env_Empty _ _) symbolic_program_contains_concrete_program
@@ -309,4 +314,107 @@ Proof.
   exact (concrete_program_is_stuck v_con Hc).
 Qed.
 
+Theorem symbolic_program_has_no_value : ~ OldSymbolicValue.
+Proof.
+  intros [v H]. unfold symbolic_program, branch_operator, field_con in H.
+  inversion H; subst.
+  - match goal with Hu : unspool_app _ _ = (ECon _, _) |- _ => simpl in Hu; discriminate Hu end.
+  - match goal with Hc : Comp _ _ |- _ => inversion Hc as [| | | | ? ? Hh]; simpl in Hh; discriminate Hh end.
+  - match goal with Hu : unspool_app _ _ = (EPrimOp _, _) |- _ => simpl in Hu; discriminate Hu end.
+  - match goal with Hu : unspool_app _ _ = (EIf _ _ _, _) |- _ =>
+      simpl in Hu; injection Hu as <- <- <- <- end.
+    match goal with
+    | [ Hi : eval _ _ _ (EIf _ _ _) _ |- _ ] => inversion Hi; subst
+    end.
+    + match goal with Hu : unspool_app _ _ = (ECon _, _) |- _ => simpl in Hu; discriminate Hu end.
+    + match goal with
+      | [ Ht : eval _ (PCLit true ∧ _) _ _ _ |- _ ] =>
+          exact (over_applied_negation_is_stuck _ _ _ Ht)
+      end.
+    + match goal with Hs : sat _ = false |- _ => discriminate Hs end.
+  - match goal with Hs : sat _ = false |- _ => discriminate Hs end.
+Qed.
+
 Print Assumptions app_if_breaks_soundness.
+Print Assumptions symbolic_program_has_no_value.
+
+(* The double-thunk counterexample. Under the one-argument Rule App-If, the
+   program (if x then D else D) l1 l2 ran Rule Con twice on each arm: once
+   for D l1 and once more for the result applied to l2. The second run
+   wrapped the first field again, so the symbolic value held the field
+   (·, (·, l1)) where the concrete value holds (·, l1). OldThunkInversion is
+   the reading of contains that had no Cont_Thunk_Outer, and under it the
+   double-thunk value does not contain the concrete value. Rule App-If now
+   runs Rule Con once per arm, and double_thunk_regression shows the value
+   it computes. *)
+
+Section DoubleThunk.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
+
+Definition OldThunkInversion (σ : valuation) (S : symvars) : Prop :=
+  forall Γs es ec,
+    contains σ S (EThunk Γs es) ec ->
+    exists Γc ec', ec = EThunk Γc ec' /\ contains_env σ S Γs Γc /\ contains σ S es ec'.
+
+Definition double_thunk_program (x : var) (d : dcon) (l1 l2 : lit) : expr :=
+  EApp (EApp (EIf (EVar x) (ECon d) (ECon d)) (ELit l1)) (ELit l2).
+
+Definition double_thunk_concrete (d : dcon) (l1 l2 : lit) : expr :=
+  EApp (EApp (ECon d) (ELit l1)) (ELit l2).
+
+Definition double_thunk_con_value (d : dcon) (l1 l2 : lit) : expr :=
+  EApp (EApp (ECon d) (EThunk · (ELit l1))) (EThunk · (ELit l2)).
+
+Definition double_thunk_old_value (x : var) (d : dcon) (l1 l2 : lit) : expr :=
+  EIf (EVar x)
+    (EApp (EApp (ECon d) (EThunk · (EThunk · (ELit l1)))) (EThunk · (ELit l2)))
+    (EApp (EApp (ECon d) (EThunk · (EThunk · (ELit l1)))) (EThunk · (ELit l2))).
+
+Lemma double_thunk_concrete_value : forall d l1 l2,
+  · ⊢ᶜ double_thunk_concrete d l1 l2 ⇓ᶜ double_thunk_con_value d l1 l2.
+Proof.
+  intros d l1 l2.
+  exact (Eval_Con Unlimited pc_true · (double_thunk_concrete d l1 l2) d
+           (ELit l1 :: ELit l2 :: nil) eq_refl).
+Qed.
+
+Lemma double_thunk_old_value_misses : forall σ S x d l1 l2,
+  OldThunkInversion σ S ->
+  ~ contains σ S (double_thunk_old_value x d l1 l2) (double_thunk_con_value d l1 l2).
+Proof.
+  intros σ S x d l1 l2 Hold Hc.
+  assert (Harm : contains σ S
+            (EApp (EApp (ECon d) (EThunk · (EThunk · (ELit l1)))) (EThunk · (ELit l2)))
+            (double_thunk_con_value d l1 l2))
+    by (inversion Hc; subst; assumption).
+  inversion Harm as [| | | | | | | | f_s a_s f_c a_c Hf Ha | | | | | | | | ]; subst.
+  inversion Hf as [| | | | | | | | f_s' a_s' f_c' a_c' Hf' Ha' | | | | | | | | ]; subst.
+  destruct (Hold · _ _ Ha') as [Γc [ec' [Heq [_ Hinner]]]].
+  injection Heq as <- <-.
+  inversion Hinner; discriminate.
+Qed.
+
+Theorem double_thunk_regression : forall Φ σ S x d l1 l2,
+  models_cond σ S (EVar x) ->
+  exists v_sym,
+    Φ ; · ⊢ double_thunk_program x d l1 l2 ⇓ v_sym
+    /\ · ⊢ᶜ double_thunk_concrete d l1 l2 ⇓ᶜ double_thunk_con_value d l1 l2
+    /\ contains σ S v_sym (double_thunk_con_value d l1 l2).
+Proof.
+  intros Φ σ S x d l1 l2 Hx.
+  exists (EIf (EVar x) (double_thunk_con_value d l1 l2) (double_thunk_con_value d l1 l2)).
+  split; [| split; [apply double_thunk_concrete_value |]].
+  - eapply Eval_AppIf; [reflexivity |].
+    eapply Eval_If with (pc_c := PCVar x).
+    + apply Eval_SymVar. reflexivity.
+    + reflexivity.
+    + exact (Eval_Con Unlimited _ · (double_thunk_concrete d l1 l2) d (ELit l1 :: ELit l2 :: nil) eq_refl).
+    + exact (Eval_Con Unlimited _ · (double_thunk_concrete d l1 l2) d (ELit l1 :: ELit l2 :: nil) eq_refl).
+  - apply Cont_If_True; [exact Hx |].
+    repeat apply Cont_App; try apply Cont_Con;
+      apply Cont_Thunk; [apply Cont_Env_Empty | apply Cont_Lit | apply Cont_Env_Empty | apply Cont_Lit].
+Qed.
+
+End DoubleThunk.
+
+Print Assumptions double_thunk_regression.

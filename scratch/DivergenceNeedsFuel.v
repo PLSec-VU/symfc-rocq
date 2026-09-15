@@ -29,15 +29,13 @@ Definition loop_body : expr := EApp (EVar floop) (EVar floop).
 Definition w : expr := ELam floop loop_body.
 Definition omega : expr := EApp w w.
 
-(* ELam is not a WHNF constructor, so Rule App-Spine fires on (w w): the head
+(* A lambda is a computation, so Rule App-Spine fires on (w w): the head
    reduces by Rule Lam to a closure, and Rule App-Abs then unfolds the loop. *)
-Lemma w_not_whnf : forall Γ, ~ Whnf Γ w.
-Proof.
-  intros Γ H. inversion H; subst; [| no_con_head]. inversion H0.
-Qed.
+Lemma w_comp : forall Γ, Comp Γ w.
+Proof. intros Γ. apply Comp_Lam. Qed.
 
 Lemma eval_w : forall Φ Γ v,
-  sat Φ = true -> Φ ; Γ ⊢ w ⇓ v -> v = EClos Γ floop loop_body.
+  sat Φ = true -> Φ ; Γ ⊢ w ⇓ v -> v = EThunk Γ w.
 Proof.
   intros Φ Γ v Hsat H. inversion H; subst; [no_con_head | reflexivity | congruence].
 Qed.
@@ -74,19 +72,18 @@ Proof.
   destruct (string_dec floop floop); [reflexivity | contradiction].
 Qed.
 
-(* A name that resolves through the chain is bound, so it is not a value. *)
-Lemma resolves_var_not_whnf : forall Γ,
-  ResolvesToW Γ -> ~ Whnf Γ (EVar floop).
+(* A name that resolves through the chain is bound, so it is a computation. *)
+Lemma resolves_var_comp : forall Γ,
+  ResolvesToW Γ -> Comp Γ (EVar floop).
 Proof.
-  intros Γ HR H. inversion H; subst; [| no_con_head]. inversion H0; subst.
-  destruct HR; congruence.
+  intros Γ HR. apply Comp_Var. destruct HR; congruence.
 Qed.
 
 (* Whatever the chain length, f still denotes the loop closure. *)
 Lemma eval_loop_var : forall Φ Γ,
   ResolvesToW Γ ->
   sat Φ = true ->
-  forall v, Φ ; Γ ⊢ EVar floop ⇓ v -> exists Γ0, v = EClos Γ0 floop loop_body.
+  forall v, Φ ; Γ ⊢ EVar floop ⇓ v -> exists Γ0, v = EThunk Γ0 w.
 Proof.
   intros Φ Γ HR Hsat. induction HR.
   - intros v Hev. inversion Hev; subst.
@@ -107,13 +104,13 @@ Inductive LoopCfg : environment -> expr -> Prop :=
   | LC_Self : forall Γ,
       LoopCfg Γ omega
   | LC_ClosW : forall Γ Γ0,
-      LoopCfg Γ (EApp (EClos Γ0 floop loop_body) w)
+      LoopCfg Γ (EApp (EThunk Γ0 w) w)
   | LC_Var : forall Γ,
       ResolvesToW Γ ->
       LoopCfg Γ loop_body
   | LC_ClosVar : forall Γ Γ0,
       ResolvesToW Γ ->
-      LoopCfg Γ (EApp (EClos Γ0 floop loop_body) (EVar floop)).
+      LoopCfg Γ (EApp (EThunk Γ0 w) (EVar floop)).
 
 (* Every step out of a loop configuration lands in a loop configuration, so
    the derivation can never bottom out.  The induction is on the derivation,
@@ -137,22 +134,26 @@ Proof.
   - (* Rule App-Spine *)
     inversion HL; subst.
     + (* head is the literal lambda w; Rule Lam turns it into the closure *)
-      assert (Hef : ef' = EClos Γ floop loop_body)
+      assert (Hef : ef' = EThunk Γ w)
         by (apply (eval_w Φ Γ ef' Hsat); assumption).
       subst ef'. apply IHeval2; [reflexivity | exact Hsat | apply LC_ClosW].
-    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
-      apply Whnf_Clos.
+    + match goal with [ Hc : Comp _ (EThunk _ _) |- _ ] => inversion Hc; discriminate end.
     + (* head is f; the chain resolves it to the closure *)
       match goal with
       | [ HR : ResolvesToW Γ, He : eval _ Φ Γ (EVar floop) ef' |- _ ] =>
           destruct (eval_loop_var Φ Γ HR Hsat ef' He) as [Γ0 Hef]; subst ef';
           apply IHeval2; [reflexivity | exact Hsat | apply LC_ClosVar; exact HR]
       end.
-    + exfalso. match goal with [ Hn : ~ Whnf _ _ |- _ ] => apply Hn end.
-      apply Whnf_Clos.
+    + match goal with [ Hc : Comp _ (EThunk _ _) |- _ ] => inversion Hc; discriminate end.
   - (* Rule App-Prim *)
     inversion HL; subst; unfold omega, loop_body, w in H; simpl in H;
       injection H as ? ?; discriminate.
+  - (* Rule App-If *)
+    inversion HL; subst;
+      match goal with
+      | [ Hu : unspool_app _ _ = (EIf _ _ _, _) |- _ ] =>
+          unfold omega, loop_body, w in Hu; simpl in Hu; discriminate Hu
+      end.
   - (* Rule Prune *)
     congruence.
 Qed.
@@ -171,9 +172,8 @@ Theorem omega_unfolds_once : forall Φ Γ v,
   Φ ; extend_env Γ floop Γ w ⊢ loop_body ⇓ v -> Φ ; Γ ⊢ omega ⇓ v.
 Proof.
   intros Φ Γ v H. unfold omega.
-  eapply Eval_AppSpine with (ef' := EClos Γ floop loop_body).
-  - apply w_not_whnf.
-  - reflexivity.
+  eapply Eval_AppSpine with (ef' := EThunk Γ w).
+  - apply w_comp.
   - unfold w. apply Eval_Lam.
   - apply Eval_AppAbs. exact H.
 Qed.
@@ -246,7 +246,7 @@ Qed.
    Every rule costs one unit of depth; only depth zero truncates.
 
    App-Bot is here for a reason.  Without it a truncated head (EBot
-   BUndefined) in function position would block the next application, and
+   BOutOfFuel) in function position would block the next application, and
    the loop would have a value at some depths and none at others.
 
    SymCore.v now indexes the real relation by a fuel with the same
@@ -257,11 +257,11 @@ Qed.
 
    This local definition stays as the small model, readable without the
    other rules.  The real eval differs in two ways that do not change the
-   depths here: it carries all eighteen rules, Rule Prune and Rule App-Prim
+   depths here: it carries all twenty rules, Rule Prune and Rule App-Prim
    included, and its fold_alts spends no fuel. *)
 Inductive eval_k : nat -> path_condition -> environment -> expr -> expr -> Prop :=
   | EvalK_OutOfFuel : forall Φ Γ e,
-      eval_k 0 Φ Γ e (EBot BUndefined)
+      eval_k 0 Φ Γ e (EBot BOutOfFuel)
   | EvalK_Lit : forall k Φ Γ l,
       eval_k (S k) Φ Γ (ELit l) (ELit l)
   | EvalK_SymVar : forall k Φ Γ y,
@@ -272,14 +272,14 @@ Inductive eval_k : nat -> path_condition -> environment -> expr -> expr -> Prop 
       eval_k k Φ Γ' e e' ->
       eval_k (S k) Φ Γ (EVar y) e'
   | EvalK_Lam : forall k Φ Γ y e,
-      eval_k (S k) Φ Γ (ELam y e) (EClos Γ y e)
+      eval_k (S k) Φ Γ (ELam y e) (EThunk Γ (ELam y e))
   | EvalK_AppAbs : forall k Φ Γ Γ' y eb ea eb',
       eval_k k Φ (extend_env Γ' y Γ ea) eb eb' ->
-      eval_k (S k) Φ Γ (EApp (EClos Γ' y eb) ea) eb'
+      eval_k (S k) Φ Γ (EApp (EThunk Γ' (ELam y eb)) ea) eb'
   | EvalK_AppBot : forall k Φ Γ b ea,
       eval_k (S k) Φ Γ (EApp (EBot b) ea) (EBot b)
   | EvalK_AppSpine : forall k Φ Γ ef ea ef' er,
-      ~ Whnf Γ ef ->
+      Comp Γ ef ->
       eval_k k Φ Γ ef ef' ->
       eval_k k Φ Γ (EApp ef' ea) er ->
       eval_k (S k) Φ Γ (EApp ef ea) er
@@ -292,7 +292,7 @@ Inductive eval_k : nat -> path_condition -> environment -> expr -> expr -> Prop 
 
 (* At depth zero every expression truncates. *)
 Lemma eval_k_zero_inv : forall Φ Γ e v,
-  eval_k 0 Φ Γ e v -> v = EBot BUndefined.
+  eval_k 0 Φ Γ e v -> v = EBot BOutOfFuel.
 Proof.
   intros Φ Γ e v H. inversion H; subst. reflexivity.
 Qed.
@@ -313,19 +313,19 @@ Ltac kill_truncated_cond :=
   end.
 
 (* A truncated result never meets the completeness conclusion. *)
-Lemma bot_undefined_not_lit : forall σ Sv l,
-  ~ contains σ Sv (EBot BUndefined) (ELit l).
+Lemma bot_out_of_fuel_not_lit : forall σ Sv l,
+  ~ contains σ Sv (EBot BOutOfFuel) (ELit l).
 Proof.
   intros σ Sv l Hc. inversion Hc; subst; kill_denote.
 Qed.
 
 (* At depth 1 the loop truncates instead of blocking. *)
 Lemma omega_truncates_at_one : forall Φ Γ,
-  eval_k 1 Φ Γ omega (EBot BUndefined).
+  eval_k 1 Φ Γ omega (EBot BOutOfFuel).
 Proof.
   intros Φ Γ. unfold omega.
-  eapply EvalK_AppSpine with (ef' := EBot BUndefined).
-  - apply w_not_whnf.
+  eapply EvalK_AppSpine with (ef' := EBot BOutOfFuel).
+  - apply w_comp.
   - apply EvalK_OutOfFuel.
   - apply EvalK_OutOfFuel.
 Qed.
@@ -336,18 +336,18 @@ Lemma loop_var_value : forall Γ,
   ResolvesToW Γ ->
   forall k Ψ, exists v,
     eval_k k Ψ Γ (EVar floop) v
-    /\ (v = EBot BUndefined \/ exists Γ0, v = EClos Γ0 floop loop_body).
+    /\ (v = EBot BOutOfFuel \/ exists Γ0, v = EThunk Γ0 w).
 Proof.
   intros Γ HR. induction HR as [Γa Γb Hl | Γa Γb Hl HR IH];
     intros k Ψ; destruct k as [| k].
-  - exists (EBot BUndefined). split; [apply EvalK_OutOfFuel | left; reflexivity].
+  - exists (EBot BOutOfFuel). split; [apply EvalK_OutOfFuel | left; reflexivity].
   - destruct k as [| k].
-    + exists (EBot BUndefined).
+    + exists (EBot BOutOfFuel).
       split; [eapply EvalK_Var; [exact Hl | apply EvalK_OutOfFuel] | left; reflexivity].
-    + exists (EClos Γb floop loop_body). split.
+    + exists (EThunk Γb w). split.
       * eapply EvalK_Var; [exact Hl |]. unfold w. apply EvalK_Lam.
       * right. exists Γb. reflexivity.
-  - exists (EBot BUndefined). split; [apply EvalK_OutOfFuel | left; reflexivity].
+  - exists (EBot BOutOfFuel). split; [apply EvalK_OutOfFuel | left; reflexivity].
   - destruct (IH k Ψ) as [v [Hv Hshape]].
     exists v. split; [eapply EvalK_Var; [exact Hl | exact Hv] | exact Hshape].
 Qed.
@@ -359,18 +359,18 @@ Lemma loop_truncates_at_every_depth : forall k Ψ Γ e,
   LoopCfg Γ e -> exists v, eval_k k Ψ Γ e v.
 Proof.
   induction k as [| k IH]; intros Ψ Γ e HL.
-  - exists (EBot BUndefined). apply EvalK_OutOfFuel.
+  - exists (EBot BOutOfFuel). apply EvalK_OutOfFuel.
   - inversion HL; subst.
     + (* omega *)
       destruct k as [| k].
-      * exists (EBot BUndefined). unfold omega.
-        eapply EvalK_AppSpine with (ef' := EBot BUndefined);
-          [apply w_not_whnf | apply EvalK_OutOfFuel | apply EvalK_OutOfFuel].
-      * destruct (IH Ψ Γ (EApp (EClos Γ floop loop_body) w) (LC_ClosW Γ Γ))
+      * exists (EBot BOutOfFuel). unfold omega.
+        eapply EvalK_AppSpine with (ef' := EBot BOutOfFuel);
+          [apply w_comp | apply EvalK_OutOfFuel | apply EvalK_OutOfFuel].
+      * destruct (IH Ψ Γ (EApp (EThunk Γ w) w) (LC_ClosW Γ Γ))
           as [v Hv].
         exists v. unfold omega.
-        eapply EvalK_AppSpine with (ef' := EClos Γ floop loop_body);
-          [apply w_not_whnf | unfold w; apply EvalK_Lam | exact Hv].
+        eapply EvalK_AppSpine with (ef' := EThunk Γ w);
+          [apply w_comp | unfold w; apply EvalK_Lam | exact Hv].
     + (* the closure applied to w *)
       destruct (IH Ψ (extend_env Γ1 floop Γ w) loop_body
                    (LC_Var _ (resolves_extend_w Γ1 Γ))) as [v Hv].
@@ -378,18 +378,18 @@ Proof.
     + (* f f, with f resolving through the chain *)
       destruct (loop_var_value Γ H k Ψ) as [vf [Hvf [Hbot | [Γ0 Hclos]]]].
       * subst vf. destruct k as [| k].
-        -- exists (EBot BUndefined). unfold loop_body.
-           eapply EvalK_AppSpine with (ef' := EBot BUndefined);
-             [apply resolves_var_not_whnf; exact H | exact Hvf | apply EvalK_OutOfFuel].
-        -- exists (EBot BUndefined). unfold loop_body.
-           eapply EvalK_AppSpine with (ef' := EBot BUndefined);
-             [apply resolves_var_not_whnf; exact H | exact Hvf | apply EvalK_AppBot].
+        -- exists (EBot BOutOfFuel). unfold loop_body.
+           eapply EvalK_AppSpine with (ef' := EBot BOutOfFuel);
+             [apply resolves_var_comp; exact H | exact Hvf | apply EvalK_OutOfFuel].
+        -- exists (EBot BOutOfFuel). unfold loop_body.
+           eapply EvalK_AppSpine with (ef' := EBot BOutOfFuel);
+             [apply resolves_var_comp; exact H | exact Hvf | apply EvalK_AppBot].
       * subst vf.
-        destruct (IH Ψ Γ (EApp (EClos Γ0 floop loop_body) (EVar floop))
+        destruct (IH Ψ Γ (EApp (EThunk Γ0 w) (EVar floop))
                      (LC_ClosVar Γ Γ0 H)) as [v Hv].
         exists v. unfold loop_body.
-        eapply EvalK_AppSpine with (ef' := EClos Γ0 floop loop_body);
-          [apply resolves_var_not_whnf; exact H | exact Hvf | exact Hv].
+        eapply EvalK_AppSpine with (ef' := EThunk Γ0 w);
+          [apply resolves_var_comp; exact H | exact Hvf | exact Hv].
     + (* the closure applied to f *)
       destruct (IH Ψ (extend_env Γ1 floop Γ (EVar floop)) loop_body
                    (LC_Var _ (resolves_extend_var Γ1 Γ H))) as [v Hv].
@@ -408,7 +408,7 @@ Section BoundRescuesDivergence.
 
   Hypothesis Hchoose : models_cond σ Sv (EVar x).
 
-  Definition v_div : expr := EIf (EVar x) (ELit l') (EBot BUndefined).
+  Definition v_div : expr := EIf (EVar x) (ELit l') (EBot BOutOfFuel).
 
   (* Depth 2 works: the taken arm reaches ELit l', the untaken arm truncates. *)
   Theorem bound_rescues_divergence :
@@ -446,7 +446,7 @@ Section BoundRescuesDivergence.
   Theorem depth_zero_misses : forall v,
     eval_k 0 Φ · (EIf (EVar x) (ELit l') omega) v -> ~ contains σ Sv v (ELit l').
   Proof.
-    intros v H. inversion H; subst. apply bot_undefined_not_lit.
+    intros v H. inversion H; subst. apply bot_out_of_fuel_not_lit.
   Qed.
 
   Theorem depth_one_has_no_value :
@@ -477,8 +477,7 @@ Section BoundDoesNotRescueStuckness.
     intros k Ψ Γ v H. unfold stuck_arm in H.
     inversion H; subst.
     match goal with
-    | [ Hn : ~ Whnf _ (ELit _) |- _ ] =>
-        apply Hn; apply Whnf_Solvable; apply Solvable_Lit
+    | [ Hc : Comp _ (ELit _) |- _ ] => inversion Hc
     end.
   Qed.
 
@@ -488,7 +487,7 @@ Section BoundDoesNotRescueStuckness.
     eval_k k Φ · e_stuck v -> ~ contains σ Sv v (ELit l').
   Proof.
     intros k v H. unfold e_stuck in H. destruct k as [| k].
-    - inversion H; subst. apply bot_undefined_not_lit.
+    - inversion H; subst. apply bot_out_of_fuel_not_lit.
     - exfalso. inversion H; subst.
       destruct k as [| k].
       + kill_truncated_cond.
@@ -507,7 +506,7 @@ End BoundDoesNotRescueStuckness.
 (* 5. The same depths against the real eval                                   *)
 (* ------------------------------------------------------------------------- *)
 
-(* A guard read at Fin 0 is the undefined value, and no formula reads off it,
+(* A guard read at Fin 0 is the out-of-fuel bottom, and no formula reads off it,
    so Rule If has no derivation at Fin 1. *)
 Lemma real_if_blocked_at_one : forall Ψ Γ ec et ef v,
   sat Ψ = true -> eval (Fin 1) Ψ Γ (EIf ec et ef) v -> False.
@@ -538,15 +537,15 @@ Section RealEvalDepths.
       + apply Eval_SymVar. reflexivity.
       + reflexivity.
       + apply Eval_Lit.
-      + unfold omega. eapply Eval_AppSpine with (ef' := EBot BUndefined);
-          [apply w_not_whnf | reflexivity | apply Eval_OutOfFuel | apply Eval_OutOfFuel].
+      + unfold omega. eapply Eval_AppSpine with (ef' := EBot BOutOfFuel);
+          [apply w_comp | apply Eval_OutOfFuel | apply Eval_OutOfFuel].
     - apply Cont_If_True; [exact Hchoose | apply Cont_Lit].
   Qed.
 
   Theorem real_depth_zero_misses : forall v,
     eval (Fin 0) Φ · (EIf (EVar x) (ELit l') omega) v -> ~ contains σ Sv v (ELit l').
   Proof.
-    intros v H. apply eval_fin_zero_inv in H. subst v. apply bot_undefined_not_lit.
+    intros v H. apply eval_fin_zero_inv in H. subst v. apply bot_out_of_fuel_not_lit.
   Qed.
 
   Theorem real_depth_one_has_no_value :
@@ -559,7 +558,7 @@ Section RealEvalDepths.
     eval (Fin k) Φ · (e_stuck x l l') v -> ~ contains σ Sv v (ELit l').
   Proof.
     intros k v H. unfold e_stuck in H. destruct k as [| [| k]].
-    - apply eval_fin_zero_inv in H. subst v. apply bot_undefined_not_lit.
+    - apply eval_fin_zero_inv in H. subst v. apply bot_out_of_fuel_not_lit.
     - exfalso. exact (real_if_blocked_at_one Φ · _ _ _ v Hsat H).
     - exfalso. inversion H; subst.
       + no_con_head.

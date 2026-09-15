@@ -172,12 +172,13 @@ Proof.
   intros Phi G v Hsat H. unfold cxEc in H.
   inversion H; subst.
   - simpl in *; discriminate.
-  - match goal with [ Hw : ~ Whnf _ _ |- _ ] =>
-      apply Hw; apply Whnf_Solvable; apply Solvable_PrimOp end.
+  - match goal with [ Hc : Comp _ _ |- _ ] => inversion Hc end.
   - match goal with [ Hu : unspool_app _ _ = (EPrimOp _, _) |- _ ] =>
       simpl in Hu; injection Hu as Hp Ha; subst end.
     match goal with [ Hl : length _ = primop_arity _ |- _ ] =>
       simpl in Hl; rewrite op_ite_arity in Hl; discriminate end.
+  - match goal with [ Hu : unspool_app _ _ = (EIf _ _ _, _) |- _ ] =>
+      simpl in Hu; discriminate Hu end.
   - congruence.
 Qed.
 
