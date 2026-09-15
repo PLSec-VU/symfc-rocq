@@ -131,7 +131,7 @@ Proof. intros L H. unfold fold_leaf. destruct (smt_ground L); [reflexivity | exa
 
 Instance con_reduce_prim_contains : @ReducePrimContains model_sorts con_solver.
 Proof.
-  intros σ S p args_s args_c HF.
+  intros σ S p args_s args_c _ HF.
   change (contains σ S (con_reduce_prim p args_s) (con_reduce_prim p args_c)).
   unfold con_reduce_prim, reduce_unbranched. rewrite <- (Forall2_length HF).
   destruct (Nat.eqb (length args_s) (model_arity p)) eqn:Hlen; [| apply Cont_Lit].
@@ -203,7 +203,14 @@ Proof.
   destruct (has_con_arg (reduce_unbranched p args)); [apply Con_Con | exact H].
 Qed.
 
-Instance con_reduce_prim_ite_contains : @ReducePrimIteContains model_sorts con_solver.
+Definition ReducePrimIteContains {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall σ S ec et ef pt pf l,
+    denotes S et pt ->
+    denotes S ef pf ->
+    contains σ S (EIf ec et ef) (ELit l) ->
+    contains σ S (reduce_prim op_ite (ec :: et :: ef :: nil)) (ELit l).
+
+Lemma con_reduce_prim_ite_contains : @ReducePrimIteContains model_sorts con_solver.
 Proof.
   intros σ S ec et ef pt pf l Ht Hf Hc.
   pose proof (@unbranched_ite_contains σ S ec et ef pt pf l Ht Hf Hc) as H.
@@ -220,6 +227,20 @@ Proof.
   unfold con_reduce_prim; rewrite (answer_leaves_of_denote σ S _ _ Hden); exact H.
 Qed.
 
+Lemma answer_leaves_scoped : forall L e, scoped L e -> scoped L (answer_leaves e).
+Proof.
+  intros L e. induction e; intros H;
+    try (simpl; unfold answer_con_arg; destruct (has_con_arg _); [apply Scoped_Con | exact H]).
+  inversion H; subst. simpl. apply Scoped_If; auto.
+Qed.
+
+Instance con_reduce_prim_scoped : @ReducePrimScoped model_sorts con_solver.
+Proof.
+  intros p args H.
+  change (closed_term (con_reduce_prim p args)). unfold con_reduce_prim.
+  apply answer_leaves_scoped. exact (unbranched_scoped p args H).
+Qed.
+
 Instance con_laws : @ConCoreLaws model_sorts con_solver.
 Proof.
   constructor.
@@ -227,12 +248,13 @@ Proof.
   - exact con_reduce_prim_saturated.
   - exact con_reduce_prim_concore.
   - exact model_cast_expr_concore.
+  - exact con_reduce_prim_scoped.
+  - exact model_cast_expr_scoped.
   - exact model_models_sat.
   - exact model_prim_value_and.
   - exact con_reduce_prim_contains.
   - exact con_reduce_prim_denote.
   - exact con_reduce_prim_ground_value.
-  - exact con_reduce_prim_ite_contains.
   - exact model_cast_expr_contains.
   - exact model_subst_coerc_contains_env.
   - exact model_subst_type_contains_env.
@@ -294,6 +316,9 @@ Qed.
 Lemma concrete_program_concore : concore_expr concrete_program.
 Proof. repeat constructor. Qed.
 
+Lemma concrete_program_closed : closed_program · concrete_program.
+Proof. split; [constructor | repeat constructor]. Qed.
+
 Theorem app_if_breaks_soundness :
   OldSymbolicValue ->
   ~ (forall Φ Γs Γc σ S e_sym e_con v_sym,
@@ -301,6 +326,7 @@ Theorem app_if_breaks_soundness :
        contains_env σ S Γs Γc ->
        contains σ S e_sym e_con ->
        concore_expr e_con ->
+       closed_program Γc e_con ->
        @eval model_sorts con_solver Inf Φ Γs e_sym v_sym ->
        exists v_con,
          @eval model_sorts con_solver Inf (PCLit true) Γc e_con v_con /\
@@ -310,7 +336,7 @@ Proof.
   assert (Hm : @models model_sorts branch_model (PCLit true)) by reflexivity.
   destruct (Hsound _ · · branch_model branch_symvars symbolic_program concrete_program
               v_sym Hm (Cont_Env_Empty _ _) symbolic_program_contains_concrete_program
-              concrete_program_concore Hv) as [v_con [Hc _]].
+              concrete_program_concore concrete_program_closed Hv) as [v_con [Hc _]].
   exact (concrete_program_is_stuck v_con Hc).
 Qed.
 

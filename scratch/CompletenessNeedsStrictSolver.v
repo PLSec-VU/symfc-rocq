@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws Completeness Model.
+From SymCoreTheory Require Import SymCore ConCore Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat Lia.
 Import ListNotations.
 Open Scope string_scope.
@@ -56,14 +56,27 @@ Proof.
     eapply Cont_Denote; eassumption.
 Qed.
 
+Lemma stack_scoped : forall L c k t, scoped L c -> scoped L t -> scoped L (stack c k t).
+Proof. intros L c k t Hc Ht. induction k; simpl; [exact Ht | apply Scoped_If; assumption]. Qed.
+
+#[local] Instance stacking_cast_scoped : CastExprScoped.
+Proof.
+  intros e γ H. change (scoped nil (stacking_cast e γ)). unfold closed_term in H.
+  induction e; try exact H.
+  inversion H; subst. simpl.
+  apply Scoped_If; [assumption | apply stack_scoped; [assumption | apply IHe2; assumption] |].
+  apply IHe3. assumption.
+Qed.
+
 #[local] Instance stacking_laws : ConCoreLaws.
 Proof.
   exact (@concore_laws model_sorts stacking_solver
     model_reduce_prim_solvable model_reduce_prim_saturated
     model_reduce_prim_concore stacking_cast_concore
+    model_reduce_prim_scoped stacking_cast_scoped
     model_models_sat model_prim_value_and
     model_reduce_prim_contains model_reduce_prim_denote model_reduce_prim_ground_value
-    model_reduce_prim_ite_contains stacking_cast_contains
+    stacking_cast_contains
     model_subst_coerc_contains_env model_subst_type_contains_env).
 Qed.
 
@@ -145,6 +158,9 @@ Proof.
 Qed.
 
 Print Assumptions finding2_not_a_counterexample.
+
+Definition CastExprBranch {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall ec et ef γ, cast_expr (EIf ec et ef) γ = EIf ec (cast_expr et γ) (cast_expr ef γ).
 
 Theorem stacking_cast_violates_cast_expr_branch : ~ @CastExprBranch model_sorts stacking_solver.
 Proof.

@@ -23,7 +23,7 @@ Proof.
     by (apply reduce_prim_solvable; constructor; [exact HsolvV | constructor]).
   assert (Hcont : forall σ : valuation,
             contains σ (only x) (reduce_prim p [EVar x]) (ELit (g (σ x)))).
-  { intro σ. rewrite <- Hg. apply reduce_prim_contains.
+  { intro σ. rewrite <- Hg. apply reduce_prim_contains; [repeat constructor |].
     constructor; [| constructor]. apply Cont_Var_Sym. apply only_self. }
   destruct HsolvR as [l0 | y Hy | p0 | f a Hop Hf Ha].
   - left. exists l0. intro l.
