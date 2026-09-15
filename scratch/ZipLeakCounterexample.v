@@ -475,3 +475,184 @@ Proof.
   apply (walk_runs_out _ (leak_clos · J) _ _ _ (S (S (S (S k)))) v eq_refl) in H12;
     [exact H12 | lia].
 Qed.
+
+Lemma bot_not_contains_lit : forall σ S b l, ~ contains σ S (EBot b) (ELit l).
+Proof.
+  intros σ S b l H. inversion H.
+  match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end.
+Qed.
+
+Lemma nest_not_lam : forall i t, is_thunk t = true -> is_lam (nest i t) = false.
+Proof. intros i t Ht. destruct i; [destruct t; try discriminate |]; reflexivity. Qed.
+
+Lemma nest_value_total : forall i m Φ Γ Γc,
+  exists w, eval (Fin m) Φ Γ (nest i (EThunk Γc id_fun)) w
+    /\ (w = EBot BOutOfFuel \/ w = EThunk Γc id_fun).
+Proof.
+  induction i as [| i IH]; intros m Φ Γ Γc;
+    (destruct m as [| m]; [exists (EBot BOutOfFuel); split; [apply Eval_OutOfFuel | left; reflexivity] |]).
+  - destruct m as [| m].
+    + exists (EBot BOutOfFuel). split; [apply Eval_Thunk; apply Eval_OutOfFuel | left; reflexivity].
+    + exists (EThunk Γc id_fun). split; [apply Eval_Thunk; apply Eval_Lam | right; reflexivity].
+  - destruct (IH m Φ · Γc) as [w [Hw Hs]].
+    exists w. split; [cbn [nest]; apply Eval_Thunk; exact Hw | exact Hs].
+Qed.
+
+Lemma id_app_total : forall m Φ Γ Γc,
+  exists v, eval (Fin m) Φ Γ (EApp (EThunk Γc id_fun) (@ELit model_sorts true)) v.
+Proof.
+  intros m Φ Γ Γc. destruct m as [| [| [| m]]].
+  - exists (EBot BOutOfFuel). apply Eval_OutOfFuel.
+  - exists (EBot BOutOfFuel). unfold id_fun. apply Eval_AppAbs. apply Eval_OutOfFuel.
+  - exists (EBot BOutOfFuel). unfold id_fun. apply Eval_AppAbs.
+    eapply Eval_Var; [reflexivity | apply Eval_OutOfFuel].
+  - exists (@ELit model_sorts true). unfold id_fun. apply Eval_AppAbs.
+    eapply Eval_Var; [reflexivity | apply Eval_Lit].
+Qed.
+
+Lemma walk_total : forall i m Φ Γ Γc,
+  exists v, eval (Fin m) Φ Γ (EApp (nest (S i) (EThunk Γc id_fun)) (@ELit model_sorts true)) v.
+Proof.
+  intros i m Φ Γ Γc. destruct m as [| m]; [exists (EBot BOutOfFuel); apply Eval_OutOfFuel |].
+  destruct (nest_value_total (S i) m Φ Γ Γc) as [w [Hw [-> | ->]]].
+  - exists (EBot BOutOfFuel).
+    eapply Eval_AppSpine; [apply Comp_Thunk; apply nest_not_lam; reflexivity | exact Hw |].
+    destruct m; [apply Eval_OutOfFuel | apply Eval_AppBot].
+  - destruct (id_app_total m Φ Γ Γc) as [v Hv]. exists v.
+    eapply Eval_AppSpine; [apply Comp_Thunk; apply nest_not_lam; reflexivity | exact Hw | exact Hv].
+Qed.
+
+Lemma case_total : forall k J,
+  eval (Fin (S k)) (pc_true ∧ ¬ @PCLit model_sorts true) · junk J ->
+  eval (Fin (S (S (S (S k))))) pc_true · (ECase scrut alts)
+    (nest (5 * esize (leak_clos · J)) (leak_clos · J)).
+Proof.
+  intros k J HJ.
+  assert (Hplain : cast_expr J coerc0 = EApp (ECon wrap_con) (EThunk · J))
+    by (destruct (proj1 (junk_value_bound _ _ _ _ HJ)); reflexivity).
+  apply Eval_Case with
+    (es' := EIf (@ELit model_sorts true) (cast_expr (ECon unit_con) coerc0) (cast_expr J coerc0)).
+  - unfold scrut. apply Eval_If with (pc_c := @PCLit model_sorts true);
+      [apply Eval_Lit | reflexivity | |].
+    + unfold arm_t. apply Eval_Cast. cbn [dec Fin].
+      exact (Eval_Con (Remaining k) _ · (ECon unit_con) unit_con nil eq_refl).
+    + unfold arm_f. apply Eval_Cast. exact HJ.
+  - rewrite Hplain.
+    change (merge · (EIf (@ELit model_sorts true) (cast_expr (ECon unit_con) coerc0)
+                        (EApp (ECon wrap_con) (EThunk · J))))
+      with (EApp (ECon wrap_con) (EIf (@ELit model_sorts true) unit_field (EThunk · J))).
+    eapply FoldAlts_Con; [reflexivity | reflexivity |].
+    exact (Eval_Cast (Remaining (S (S k))) pc_true (leak_env · J) id_fun coerc0
+             (EThunk (leak_env · J) id_fun) (Eval_Lam _ _ _ _ _)).
+Qed.
+
+Lemma sym_prog_total : forall k, exists v, eval (Fin (8 + k)) pc_true · sym_prog v.
+Proof.
+  intros k.
+  destruct (junk_has_value · (pc_true ∧ ¬ @PCLit model_sorts true) (S k)) as [J HJ].
+  destruct (walk_total (5 * esize (leak_clos · J) - 1) (S (S (S (S (S k))))) pc_true
+              (extend_env · kv · (ECase scrut alts)) (leak_env · J)) as [v Hv].
+  exists v. unfold sym_prog, consumer.
+  apply Eval_AppSpine with (ef' := EThunk · (ELam kv (EApp (EVar kv) (@ELit model_sorts true))));
+    [apply Comp_Lam | apply Eval_Lam |].
+  apply Eval_AppAbs.
+  apply Eval_AppSpine with (ef' := nest (5 * esize (leak_clos · J)) (leak_clos · J));
+    [apply Comp_Var; discriminate | |].
+  - eapply Eval_Var; [reflexivity |]. exact (case_total k J HJ).
+  - pose proof (leak_clos_size · J) as Hsize.
+    replace (5 * esize (leak_clos · J)) with (S (5 * esize (leak_clos · J) - 1)) by lia.
+    exact Hv.
+Qed.
+
+Definition sigma_all : valuation := fun _ => true.
+Definition no_symvars : symvars := fun _ => false.
+
+Lemma lit_true_models_cond : models_cond sigma_all no_symvars (@ELit model_sorts true).
+Proof. exists (@PCLit model_sorts true). split; [intros Γ _; reflexivity | reflexivity]. Qed.
+
+Lemma alts_contains : Forall2 (contains_alt sigma_all no_symvars) alts alts.
+Proof.
+  unfold alts, id_fun. constructor; [| constructor].
+  apply Cont_Alt; [repeat constructor |].
+  apply Cont_Cast. apply Cont_Lam; [reflexivity | apply Cont_Var_Bound; reflexivity].
+Qed.
+
+Lemma prog_contains : contains sigma_all no_symvars sym_prog con_prog.
+Proof.
+  unfold sym_prog, con_prog, consumer, scrut.
+  apply Cont_App.
+  - apply Cont_Lam; [reflexivity |]. apply Cont_App; [apply Cont_Var_Bound; reflexivity | apply Cont_Lit].
+  - apply Cont_Case; [| exact alts_contains].
+    apply Cont_If_True; [exact lit_true_models_cond |].
+    unfold arm_t. apply Cont_Cast. apply Cont_Con.
+Qed.
+
+Lemma con_prog_concore : concore_expr con_prog.
+Proof. unfold con_prog, consumer, arm_t, alts, id_fun. repeat constructor. Qed.
+
+Lemma nest_eval_inf : forall i Φ Γ Γc,
+  eval Inf Φ Γ (nest i (EThunk Γc id_fun)) (EThunk Γc id_fun).
+Proof.
+  induction i as [| i IH]; intros Φ Γ Γc; cbn [nest];
+    apply Eval_Thunk; [apply Eval_Lam | apply IH].
+Qed.
+
+Lemma con_prog_runs :· ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true.
+Proof.
+  unfold eval_con, con_prog, consumer.
+  pose (clos_c := EThunk (ExtendEnv zv (MkClosure · unit_field) ·) id_fun).
+  apply Eval_AppSpine with (ef' := EThunk · (ELam kv (EApp (EVar kv) (@ELit model_sorts true))));
+    [apply Comp_Lam | apply Eval_Lam |].
+  apply Eval_AppAbs.
+  apply Eval_AppSpine with (ef' := nest (5 * esize clos_c) clos_c); [apply Comp_Var; discriminate | |].
+  - eapply Eval_Var; [reflexivity |].
+    apply Eval_Case with (es' := cast_expr (ECon unit_con) coerc0).
+    + unfold arm_t. apply Eval_Cast.
+      exact (Eval_Con Unlimited _ · (ECon unit_con) unit_con nil eq_refl).
+    + change (merge · (cast_expr (ECon unit_con) coerc0))
+        with (EApp (ECon wrap_con) unit_field).
+      eapply FoldAlts_Con; [reflexivity | reflexivity |].
+      exact (Eval_Cast Unlimited pc_true _ id_fun coerc0 clos_c (Eval_Lam _ _ _ _ _)).
+  - replace (5 * esize clos_c) with (S (5 * esize clos_c - 1)) by (simpl; lia).
+    eapply Eval_AppSpine; [apply Comp_Thunk; apply nest_not_lam; reflexivity | |].
+    + exact (nest_eval_inf _ pc_true _ _).
+    + unfold id_fun. apply Eval_AppAbs. eapply Eval_Var; [reflexivity | apply Eval_Lit].
+Qed.
+
+Lemma sym_prog_budget_total : budget_total pc_true · sym_prog.
+Proof.
+  exists 8. intros n Hn. replace n with (8 + (n - 8)) by lia. apply sym_prog_total.
+Qed.
+
+Theorem zip_leak_counterexample :
+  sigma_all ⊨ pc_true /\
+  contains_env sigma_all no_symvars · · /\
+  contains sigma_all no_symvars sym_prog con_prog /\
+  concore_expr con_prog /\
+  budget_total pc_true · sym_prog /\
+  (· ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true) /\
+  (forall n, (8 <= n)%nat -> forall v_sym,
+     eval (Fin n) pc_true · sym_prog v_sym ->
+     ~ contains sigma_all no_symvars v_sym (@ELit model_sorts true)).
+Proof.
+  refine (conj eq_refl (conj (Cont_Env_Empty _ _) (conj prog_contains
+          (conj con_prog_concore (conj sym_prog_budget_total (conj con_prog_runs _)))))).
+  intros n Hn v Hv. replace n with (8 + (n - 8)) in Hv by lia.
+  rewrite (sym_prog_runs_out _ _ Hv). apply bot_not_contains_lit.
+Qed.
+
+Theorem target_completeness_is_false : ~ @target_completeness model_sorts wild_solver.
+Proof.
+  intros Htarget.
+  destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hb [Hrun Hout]]]]]].
+  destruct (Htarget pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
+              Hm Henv Hc Hcc Hb Hrun) as [h Hh].
+  destruct (Hh (8 + h) ltac:(lia)) as [v [Hv Hcv]].
+  exact (Hout (8 + h) ltac:(lia) v Hv Hcv).
+Qed.
+
+Theorem branch_lawful_instance_refutes_target :
+  @SymFCLaws model_sorts wild_solver /\ ~ @target_completeness model_sorts wild_solver.
+Proof. exact (conj wild_symfc_laws target_completeness_is_false). Qed.
+
+Print Assumptions branch_lawful_instance_refutes_target.
