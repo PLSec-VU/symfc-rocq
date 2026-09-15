@@ -348,3 +348,130 @@ Proof.
     eapply Eval_AppSpine; [apply Comp_Lam | unfold junk_fun; apply Eval_Lam |].
     unfold junk_fun. apply Eval_AppAbs. exact Hv.
 Qed.
+
+Definition coerc0 : coercion := MkCoercion (TyCon tt) (TyCon tt) RoleNominal.
+Definition zv : var := "z".
+Definition wv : var := "w".
+Definition kv : var := "k".
+Definition unit_con : dcon := "U".
+Definition id_fun : expr := ELam wv (EVar wv).
+Definition arm_t : expr := ECast (ECon unit_con) coerc0.
+Definition arm_f : expr := ECast junk coerc0.
+Definition scrut : expr := EIf (@ELit model_sorts true) arm_t arm_f.
+Definition alts : list alt := Alt wrap_con (zv :: nil) (ECast id_fun coerc0) :: nil.
+Definition consumer : expr := ELam kv (EApp (EVar kv) (@ELit model_sorts true)).
+Definition sym_prog : expr := EApp consumer (ECase scrut alts).
+Definition con_prog : expr := EApp consumer (ECase arm_t alts).
+
+Definition unit_field : expr := EThunk · (ECon unit_con).
+Definition leak_env (Γ : environment) (J : expr) : environment :=
+  ExtendEnv zv (MkClosure Γ (EIf (@ELit model_sorts true) unit_field (EThunk · J))) Γ.
+Definition leak_clos (Γ : environment) (J : expr) : expr := EThunk (leak_env Γ J) id_fun.
+
+Lemma case_value : forall Φ Γ k v,
+  eval (Fin (S (S (S (S k))))) Φ Γ (ECase scrut alts) v ->
+  exists J, v = nest (5 * esize (leak_clos Γ J)) (leak_clos Γ J)
+    /\ eval (Fin (S k)) (Φ ∧ ¬ PCLit true) Γ junk J.
+Proof.
+  intros Φ Γ k v H. inversion H; subst; try kill_rule.
+  match goal with
+  | [ Hs : eval _ _ _ scrut ?w, Hf : fold_alts _ _ _ (merge _ ?w) _ _ |- _ ] =>
+      rewrite dec_remaining in Hs, Hf; unfold scrut in Hs;
+      inversion Hs; subst; try kill_rule
+  end.
+  match goal with
+  | [ Hc : eval _ _ _ (ELit _) ?c, Hp : expr_to_pc _ ?c = Some _,
+      Ht : eval _ _ _ arm_t _, Hj : eval _ _ _ arm_f _ |- _ ] =>
+      rewrite dec_remaining in Hc, Ht, Hj;
+      inversion Hc; subst; try kill_rule;
+      simpl in Hp; injection Hp as <-;
+      unfold arm_t in Ht; inversion Ht; subst; try kill_rule;
+      unfold arm_f in Hj; inversion Hj; subst; try kill_rule
+  end.
+  match goal with
+  | [ Hu : eval _ _ _ (ECon unit_con) _, Hj : eval _ _ _ junk ?J |- _ ] =>
+      rewrite dec_remaining in Hu, Hj; inversion Hu; subst; try kill_rule;
+      exists J; split; [| exact Hj];
+      assert (Hplain : cast_expr J coerc0 = EApp (ECon wrap_con) (EThunk · J))
+        by (destruct (proj1 (junk_value_bound _ _ _ _ Hj)); reflexivity)
+  end.
+  match goal with
+  | [ Hu : unspool_app (ECon unit_con) [] = (ECon _, _) |- _ ] =>
+      simpl in Hu; injection Hu as <- <-
+  end.
+  match goal with
+  | [ Hf : fold_alts _ _ _ _ _ _ |- _ ] =>
+      rewrite Hplain in Hf; cbn in Hf;
+      inversion Hf; subst
+  end.
+  - match goal with
+    | [ Hd : decompose_con_app _ = Some _, Hfind : find_alt _ alts = Some _,
+        Hb : eval _ _ _ _ v |- _ ] =>
+        cbn in Hd; injection Hd as <- <-; cbn in Hfind; injection Hfind as <- <-;
+        inversion Hb; subst; try kill_rule
+    end.
+    match goal with
+    | [ Hl : eval _ _ _ id_fun _ |- _ ] =>
+        rewrite dec_remaining in Hl; unfold id_fun in Hl; inversion Hl; subst; try kill_rule
+    end.
+    reflexivity.
+  - match goal with
+    | [ Hn : match decompose_con_app _ with _ => _ end |- _ ] => cbn in Hn; discriminate Hn
+    end.
+Qed.
+
+Lemma nots_le_esize : forall e, nots e <= esize e.
+Proof.
+  induction e; simpl; try lia.
+  destruct e1; simpl in *; lia.
+Qed.
+
+Lemma leak_clos_size : forall Γ J, nots J + 8 <= esize (leak_clos Γ J).
+Proof. intros Γ J. pose proof (nots_le_esize J) as HJ. simpl. lia. Qed.
+
+Lemma nest_walk : forall k m t Φ Γ v,
+  m <= k -> eval (Fin m) Φ Γ (nest k t) v -> v = EBot BOutOfFuel.
+Proof.
+  induction k as [| k IH]; intros m t Φ Γ v Hm H;
+    (destruct m as [| m]; [exact (eval_fin_zero_inv _ _ _ _ H) |]); [lia |].
+  cbn [nest] in H. inversion H; subst; try kill_rule.
+  match goal with [Hv : eval (dec _) _ _ (nest _ _) _ |- _] =>
+    rewrite dec_remaining in Hv; exact (IH m t Φ _ v ltac:(lia) Hv) end.
+Qed.
+
+Lemma walk_runs_out : forall j t Φ Γ a m v,
+  is_thunk t = true -> m <= S j ->
+  eval (Fin (S m)) Φ Γ (EApp (nest (S j) t) a) v -> v = EBot BOutOfFuel.
+Proof.
+  intros j t Φ Γ a m v Ht Hm H. cbn [nest] in H. inversion H; subst; try kill_rule.
+  - exfalso. destruct j; destruct t; simpl in *; congruence.
+  - match goal with
+    | [ Hw : eval _ _ _ (EThunk · (nest j t)) ?w, Hb : eval _ _ _ (EApp ?w a) v |- _ ] =>
+        rewrite dec_remaining in Hw, Hb;
+        pose proof (nest_walk (S j) m t Φ Γ w Hm Hw) as Hbot; subst w;
+        exact (app_bot_value _ _ _ _ _ Hb)
+    end.
+Qed.
+
+Lemma sym_prog_runs_out : forall k v,
+  eval (Fin (8 + k)) pc_true · sym_prog v -> v = EBot BOutOfFuel.
+Proof.
+  intros k v H. unfold sym_prog, consumer in H. inversion H; subst; try kill_rule.
+  match goal with [H6 : eval _ _ _ (ELam _ _) ?w, H8 : eval _ _ _ (EApp ?w _) _ |- _] =>
+    rewrite dec_remaining in H6, H8; inversion H6; subst; try kill_rule;
+    inversion H8; subst; try kill_rule end.
+  match goal with [Hb : eval _ _ _ (EApp (EVar kv) _) _ |- _] =>
+    rewrite dec_remaining in Hb; inversion Hb; subst; try kill_rule end.
+  match goal with [Hf : eval _ _ _ (EVar kv) ?w, Ha : eval _ _ _ (EApp ?w _) _ |- _] =>
+    rewrite dec_remaining in Hf, Ha; inversion Hf; subst;
+    try match goal with [Hl : lookup_env _ _ = None |- _] => discriminate Hl end;
+    try kill_rule end.
+  match goal with [Hl : lookup_env _ kv = Some _, He : eval (dec _) _ _ _ ?w |- _] =>
+    simpl in Hl; injection Hl as <- <-; rewrite dec_remaining in He;
+    destruct (case_value pc_true · k w He) as [J [-> HJ]] end.
+  destruct (junk_value_bound _ _ _ _ HJ) as [_ Hk].
+  pose proof (leak_clos_size · J) as Hsize.
+  replace (5 * esize (leak_clos · J)) with (S (5 * esize (leak_clos · J) - 1)) in H12 by lia.
+  apply (walk_runs_out _ (leak_clos · J) _ _ _ (S (S (S (S k)))) v eq_refl) in H12;
+    [exact H12 | lia].
+Qed.
