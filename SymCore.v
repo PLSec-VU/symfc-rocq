@@ -402,6 +402,9 @@ Definition pc_not (Φ : path_condition) : path_condition :=
 (** A model assigns every symbolic variable a literal value. *)
 Definition valuation : Type := var -> lit.
 
+(** The fixed set of symbolic variables of a run. *)
+Definition symvars : Type := var -> bool.
+
 (** The SMT value of a formula under a model. Moved here from ConCore.v so that
     Rule Case can read the truth value of a boolean scrutinee. *)
 Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
