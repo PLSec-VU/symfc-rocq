@@ -1,10 +1,19 @@
-From SymCoreTheory Require Import SymCore ConCore BranchLaws CostLaws Model.
+From SymCoreTheory Require Import SymCore ConCore CostLaws Model.
 From Stdlib Require Import Strings.String Lists.List Bool.Bool.
 Import ListNotations.
 Open Scope string_scope.
 
 Definition tt : @expr model_sorts := ELit true.
 Definition ff : @expr model_sorts := ELit false.
+
+Definition OldReducePrimContains {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall σ S p args_s args_c,
+    Forall2 (contains σ S) args_s args_c ->
+    contains σ S (reduce_prim p args_s) (reduce_prim p args_c).
+
+Lemma old_contains_implies_new : forall {sorts : SymCoreSorts} {solver : SymCoreSolver},
+  OldReducePrimContains -> ReducePrimContains.
+Proof. intros sorts solver H σ S p args_s args_c _. exact (H σ S p args_s args_c). Qed.
 
 Section AnyReducer.
 Context {solver : @SymCoreSolver model_sorts}.
@@ -80,7 +89,7 @@ Definition assign (a : var) (va : bool) (b : var) (vb : bool) : valuation :=
   fun v => if String.eqb v a then va else if String.eqb v b then vb else false.
 
 Section AndShortCircuit.
-Context {contains_law : ReducePrimContains} {denote_law : ReducePrimDenote}.
+Context (old_contains_law : OldReducePrimContains) {denote_law : ReducePrimDenote}.
 
 Theorem and_false_short_circuit_forbidden :
   @reduce_prim model_sorts solver PAnd (ff :: EVar "z" :: nil) <> ff.
@@ -88,7 +97,7 @@ Proof.
   intros Hshort.
   set (R := @reduce_prim model_sorts solver PAnd (EVar "x" :: EVar "z" :: nil)).
   assert (Hc : contains (fun _ => false) (only "x") R ff).
-  { rewrite <- Hshort. apply reduce_prim_contains.
+  { rewrite <- Hshort. apply old_contains_law.
     constructor; [exact (Cont_Var_Sym _ _ "x" eq_refl) |].
     constructor; [exact (Cont_Var_Bound _ _ "z" eq_refl) | constructor]. }
   assert (Hval : forall a b, exists pc, expr_to_pc · R = Some pc
@@ -125,7 +134,7 @@ Proof.
   intros Hsimp.
   set (R := @reduce_prim model_sorts solver PIte (EVar "z" :: EVar "y" :: tt :: nil)).
   assert (Hc : contains (fun _ => true) (only "y") R tt).
-  { rewrite <- Hsimp. apply reduce_prim_contains.
+  { rewrite <- Hsimp. apply old_contains_law.
     constructor; [exact (Cont_Var_Bound _ _ "z" eq_refl) |].
     constructor; [exact (Cont_Var_Sym _ _ "y" eq_refl) |].
     constructor; [apply Cont_Lit | constructor]. }
@@ -163,7 +172,7 @@ Proof.
   intros Hfold.
   set (R := @reduce_prim model_sorts solver PIte (EVar "x" :: EVar "z" :: EVar "w" :: nil)).
   assert (Hc : contains (fun _ => true) (only "x") R (EVar "z")).
-  { rewrite <- Hfold. apply reduce_prim_contains.
+  { rewrite <- Hfold. apply old_contains_law.
     constructor; [exact (Cont_Var_Sym _ _ "x" eq_refl) |].
     constructor; [exact (Cont_Var_Bound _ _ "z" eq_refl) |].
     constructor; [exact (Cont_Var_Bound _ _ "w" eq_refl) | constructor]. }
@@ -199,7 +208,7 @@ Definition same_arms_solver : @SymCoreSolver model_sorts :=
     model_sat (PCLit true) eq_refl same_arms_reduce_prim
     erase_cast keep_coercion keep_type.
 
-Theorem same_arms_breaks_contains : ~ @ReducePrimContains model_sorts same_arms_solver.
+Theorem same_arms_breaks_old_contains : ~ @OldReducePrimContains model_sorts same_arms_solver.
 Proof.
   intros Hlaw.
   pose proof (Hlaw (fun _ => true) (only "y") PIte
@@ -240,6 +249,37 @@ Proof.
 Qed.
 
 End SameArmsModel.
+
+Section RestrictedLawsAdmitSimplification.
+
+Theorem model_simplifies :
+  @reduce_prim model_sorts model_solver PAnd (ff :: EVar "z" :: nil) = ff /\
+  @reduce_prim model_sorts model_solver PAnd (EVar "z" :: ff :: nil) = ff /\
+  @reduce_prim model_sorts model_solver PIte (tt :: EVar "z" :: EVar "w" :: nil) = EVar "z" /\
+  @reduce_prim model_sorts model_solver PIte (ff :: EVar "z" :: EVar "w" :: nil) = EVar "w" /\
+  @reduce_prim model_sorts model_solver PIte (EVar "z" :: tt :: tt :: nil) = tt.
+Proof. repeat split. Qed.
+
+Theorem restricted_laws_admit_simplification :
+  @SymFCCostLaws model_sorts model_solver /\
+  @reduce_prim model_sorts model_solver PAnd (ff :: EVar "z" :: nil) = ff /\
+  @reduce_prim model_sorts model_solver PAnd (EVar "z" :: ff :: nil) = ff /\
+  @reduce_prim model_sorts model_solver PIte (tt :: EVar "z" :: EVar "w" :: nil) = EVar "z" /\
+  @reduce_prim model_sorts model_solver PIte (ff :: EVar "z" :: EVar "w" :: nil) = EVar "w" /\
+  @reduce_prim model_sorts model_solver PIte (EVar "z" :: tt :: tt :: nil) = tt.
+Proof. exact (conj model_symfc_cost_laws model_simplifies). Qed.
+
+Theorem model_violates_old_contains : ~ @OldReducePrimContains model_sorts model_solver.
+Proof.
+  intros Hold.
+  exact (@and_false_short_circuit_forbidden model_solver Hold model_reduce_prim_denote
+           (proj1 model_simplifies)).
+Qed.
+
+Print Assumptions restricted_laws_admit_simplification.
+Print Assumptions model_violates_old_contains.
+
+End RestrictedLawsAdmitSimplification.
 
 Section MergeLosesInstance.
 
