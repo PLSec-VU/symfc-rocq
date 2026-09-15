@@ -974,7 +974,7 @@ Definition valuation : Type := var -> lit.
   A fixed symvars makes concretion environment independent. The freshness
   discipline lives inside `contains` and `contains_env`, which require every
   binder in a related term or environment to be non-symbolic, so the soundness
-  statement needs no extra hypothesis of its own.
+  statement needs no freshness hypothesis of its own.
 *)
 Definition symvars : Type := var -> bool.
 
