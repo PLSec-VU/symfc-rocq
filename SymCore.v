@@ -89,7 +89,27 @@ tycon_eq_dec : forall (t1 t2 : tycon), {t1 = t2} + {t1 <> t2};
 prim_value : primop -> list lit -> lit;
 
 (** The literal the SMT theory reads as truth. External in the same way. *)
-lit_true : lit
+lit_true : lit;
+
+(**
+  The data constructors that Boolean control flow scrutinises. Rule Case turns
+  a scrutinee that is an SMT boolean formula into a match on these two, so a
+  program that compares symbolic values (for example inside Map.insert) reaches
+  a real branch. A concrete formula picks the True or False constructor; a
+  symbolic one folds both alternatives under the formula and its negation.
+*)
+dcon_true : dcon;
+dcon_false : dcon;
+
+(**
+  The SMT theory's reading of negation and if-then-else. These describe the
+  theory, not the solver, so they live here beside prim_value rather than in a
+  law class. They are what lets Rule Case read the truth value of a merged
+  boolean and select the arm the model takes.
+*)
+prim_value_not : forall l, prim_value op_not (l :: nil) = lit_true <-> l <> lit_true;
+prim_value_ite : forall c t f,
+  prim_value op_ite (c :: t :: f :: nil) = if lit_eq_dec c lit_true then t else f
 }.
 
 Context {sorts : SymCoreSorts}.
@@ -378,6 +398,57 @@ Definition pc_and (Φ1 Φ2 : path_condition) : path_condition :=
 (** Negation of a path condition: ¬Φ *)
 Definition pc_not (Φ : path_condition) : path_condition :=
   PCPrim op_not [Φ].
+
+(** A model assigns every symbolic variable a literal value. *)
+Definition valuation : Type := var -> lit.
+
+(** The SMT value of a formula under a model. Moved here from ConCore.v so that
+    Rule Case can read the truth value of a boolean scrutinee. *)
+Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
+  match pc with
+  | PCVar x => σ x
+  | PCLit l => l
+  | PCPrim p args => prim_value p (map (pc_value σ) args)
+  end.
+
+(** A formula mentions a variable. *)
+Fixpoint pc_has_var (pc : path_condition) : bool :=
+  match pc with
+  | PCVar _ => true
+  | PCLit _ => false
+  | PCPrim _ args => existsb pc_has_var args
+  end.
+
+(** Every primitive application in a formula has exactly its arity. *)
+Fixpoint pc_arities_ok (pc : path_condition) : bool :=
+  match pc with
+  | PCVar _ | PCLit _ => true
+  | PCPrim p args => andb (Nat.eqb (length args) (primop_arity p)) (forallb pc_arities_ok args)
+  end.
+
+(** The value of a formula with no variable, read against any model at all. *)
+Definition pc_closed_value (pc : path_condition) : lit := pc_value (fun _ => lit_true) pc.
+
+(** The constructor a literal boolean scrutinises to. *)
+Definition truth_constructor (l : lit) : dcon :=
+  if lit_eq_dec l lit_true then dcon_true else dcon_false.
+
+(** A formula with no variable has the same value under every model. *)
+Fixpoint pc_value_no_var (σ1 σ2 : valuation) (pc : path_condition) {struct pc} :
+  pc_has_var pc = false -> pc_value σ1 pc = pc_value σ2 pc.
+Proof.
+  destruct pc as [x | l | p args]; intros H; simpl in *.
+  - discriminate.
+  - reflexivity.
+  - f_equal. induction args as [| a args IH]; simpl in *; [reflexivity |].
+    apply orb_false_elim in H as [Ha Hargs].
+    rewrite (pc_value_no_var σ1 σ2 a Ha), (IH Hargs). reflexivity.
+Qed.
+
+(** So the value of a variable-free formula is its closed value. *)
+Lemma pc_value_closed : forall σ pc,
+  pc_has_var pc = false -> pc_value σ pc = pc_closed_value pc.
+Proof. intros σ pc H. exact (pc_value_no_var σ (fun _ => lit_true) pc H). Qed.
 
 End SymCore.
 
@@ -1248,18 +1319,51 @@ with fold_alts : fuel -> path_condition -> environment -> expr -> list alt -> ex
       fold_alts f Φ Γ (EBot b) alts (EBot b)
 
   (**
+    Kind 1: the scrutinee is a boolean formula with no variable, for example
+    true or not true. Its truth value is fixed, so the match picks the True or
+    the False alternative just as a constructor match would.
+  *)
+  | FoldAlts_GroundFormula : forall f Φ Γ e pc alts r,
+      expr_to_pc Γ e = Some pc ->
+      pc_has_var pc = false ->
+      fold_alts f Φ Γ (ECon (truth_constructor (pc_closed_value pc))) alts r ->
+      fold_alts f Φ Γ e alts r
+
+  (**
+    Kind 2: the scrutinee is a boolean formula that mentions a variable and
+    whose primitives all have their exact arity, for example and x y. The match
+    becomes a runtime branch: the True alternative folds under the path
+    condition strengthened by the formula, the False alternative under the
+    negation.
+  *)
+  | FoldAlts_SymbolicFormula : forall f Φ Γ e pc alts r1 r2,
+      expr_to_pc Γ e = Some pc ->
+      pc_has_var pc = true ->
+      pc_arities_ok pc = true ->
+      fold_alts f (Φ ∧ pc) Γ (ECon dcon_true) alts r1 ->
+      fold_alts f (Φ ∧ ¬ pc) Γ (ECon dcon_false) alts r2 ->
+      fold_alts f Φ Γ e alts (EIf e r1 r2)
+
+  (**
     Otherwise: undefined behaviour.
 
-    The first premise reads the head of the scrutinee's application spine and
-    demands that it is not a branch. Demanding only that the scrutinee itself
-    is not a branch would be too weak: it would let this rule answer
-    EApp (EIf ec et ef) a, a scrutinee that still has a branch to resolve, with
-    a bottom. Rule FoldAlts_If resolves branches, and it only sees a branch
-    that sits at the top. The premise as written implies is_if e = false
-    (is_if_false_of_spine_head), so nothing this rule used to reject is
-    accepted now.
+    The scrutinee is not a branch at its spine head, matches no alternative,
+    is not a bottom, and is neither a boolean formula nor a primitive
+    application. The last two extra premises are what keep this rule off the
+    boolean formulas that the two clauses above resolve, and off a primitive
+    application that does not convert to a formula (a solver that leaves a
+    branch inside a primitive), which is stuck rather than undefined.
+
+    Demanding only that the scrutinee itself is not a branch would be too weak:
+    it would let this rule answer EApp (EIf ec et ef) a, a scrutinee that still
+    has a branch to resolve, with a bottom. Rule FoldAlts_If resolves branches,
+    and it only sees a branch that sits at the top. The spine-head premise
+    implies is_if e = false (is_if_false_of_spine_head), so nothing this rule
+    used to reject is accepted now.
   *)
   | FoldAlts_Otherwise : forall f Φ Γ e alts,
+      expr_to_pc Γ e = None ->
+      is_op_app e = false ->
       is_if (fst (unspool_app e [])) = false ->
       (match decompose_con_app e with
        | Some (d, _) => find_alt d alts = None
@@ -1443,12 +1547,18 @@ Proof.
     | f0 Φ0 Γ0 ec et ef alts0 Hpc_none
     | f0 Φ0 Γ0 e0 d ea xs ep alts0 er0 Hdec Halt Heval_ep
     | f0 Φ0 Γ0 b alts0
-    | f0 Φ0 Γ0 e0 alts0 Hspine Hnoalt Hnotbot ]; subst.
+    | f0 Φ0 Γ0 e0 pc alts0 r0 Hpc Hnovar Hinner
+    | f0 Φ0 Γ0 e0 pc alts0 r1 r2 Hpc Hvar Har Hf1 Hf2
+    | f0 Φ0 Γ0 e0 alts0 Hpcnone Hop Hspine Hnoalt Hnotbot ]; subst.
   - simpl in Hunspool; injection Hunspool as Hh Ha; subst; reflexivity.
   - simpl in Hunspool; injection Hunspool as Hh Ha; subst; reflexivity.
   - exfalso. unfold decompose_con_app in Hdec. rewrite Hunspool in Hdec.
     destruct head; try discriminate Hdec; discriminate Hhead_if.
   - simpl in Hunspool; injection Hunspool as Hh Ha; subst; discriminate Hhead_if.
+  - exfalso. destruct head; try discriminate Hhead_if.
+    exact (solvable_unspool_not_if Γ e [] _ _ _ _ (expr_to_pc_solvable Γ e pc Hpc) Hunspool).
+  - exfalso. destruct head; try discriminate Hhead_if.
+    exact (solvable_unspool_not_if Γ e [] _ _ _ _ (expr_to_pc_solvable Γ e pc Hpc) Hunspool).
   - exfalso. rewrite Hunspool in Hspine. simpl in Hspine.
     rewrite Hspine in Hhead_if. discriminate Hhead_if.
 Qed.
@@ -1736,10 +1846,13 @@ Lemma fold_alts_bot_same : forall f Φ Γ b alts r,
   r = EBot b.
 Proof.
   intros f Φ Γ b alts r Hfold.
-  inversion Hfold; subst.
-  - simpl in H. discriminate.
-  - reflexivity.
-  - simpl in H1. discriminate.
+  inversion Hfold; subst; try reflexivity;
+    try (match goal with
+         | [ H : expr_to_pc _ (EBot _) = Some _ |- _ ] => simpl in H; discriminate
+         | [ H : decompose_con_app (EBot _) = Some _ |- _ ] =>
+             unfold decompose_con_app in H; simpl in H; discriminate
+         | [ H : is_bot (EBot _) = false |- _ ] => discriminate H
+         end).
 Qed.
 
 (** Branch folding on bottom is deterministic *)
@@ -2007,14 +2120,17 @@ Lemma fold_alts_if_some_inv : forall f Φ Γ ec et ef alts r pc_c,
     fold_alts f (Φ ∧ ¬ pc_c) Γ ef alts ef'.
 Proof.
   intros f Φ Γ ec et ef alts r pc_c Hpc Hfold.
-  remember (EIf ec et ef) as e eqn:Heq.
-  revert ec et ef Heq Hpc.
-  induction Hfold; intros ec0 et0 ef0 Heq Hpc; inversion Heq; subst.
-  - rewrite H in Hpc. inversion Hpc; subst.
-    exists et', ef'. auto.
-  - rewrite H in Hpc; discriminate.
-  - discriminate.
-  - simpl in H; discriminate.
+  inversion Hfold; subst;
+    try (match goal with
+         | [ H : expr_to_pc _ (EIf _ _ _) = Some _ |- _ ] => simpl in H; discriminate
+         | [ H : expr_to_pc _ ec = None |- _ ] => rewrite H in Hpc; discriminate
+         | [ H : decompose_con_app (EIf _ _ _) = Some _ |- _ ] =>
+             unfold decompose_con_app in H; simpl in H; discriminate
+         | [ H : is_if (fst (unspool_app (EIf _ _ _) [])) = false |- _ ] =>
+             simpl in H; discriminate
+         end).
+  match goal with [ H : expr_to_pc _ ec = Some _ |- _ ] => rewrite H in Hpc end.
+  inversion Hpc; subst. eauto.
 Qed.
 
 (** Inversion for fold_alts on if-expressions with invalid path condition *)
@@ -2024,13 +2140,15 @@ Lemma fold_alts_if_none_inv : forall f Φ Γ ec et ef alts r,
   r = EBot BUndefined.
 Proof.
   intros f Φ Γ ec et ef alts r Hpc Hfold.
-  remember (EIf ec et ef) as e eqn:Heq.
-  revert ec et ef Heq Hpc.
-  induction Hfold; intros ec0 et0 ef0 Heq Hpc; inversion Heq; subst.
-  - rewrite H in Hpc; discriminate.
-  - reflexivity.
-  - discriminate.
-  - simpl in H; discriminate.
+  inversion Hfold; subst; try reflexivity;
+    match goal with
+    | [ H : expr_to_pc _ ec = Some _ |- _ ] => rewrite H in Hpc; discriminate
+    | [ H : expr_to_pc _ (EIf _ _ _) = Some _ |- _ ] => simpl in H; discriminate
+    | [ H : decompose_con_app (EIf _ _ _) = Some _ |- _ ] =>
+        unfold decompose_con_app in H; simpl in H; discriminate
+    | [ H : is_if (fst (unspool_app (EIf _ _ _) [])) = false |- _ ] =>
+        simpl in H; discriminate
+    end.
 Qed.
 
 (** Inversion for fold_alts on matching constructor patterns *)
@@ -2043,18 +2161,31 @@ Lemma fold_alts_con_inv : forall f Φ Γ e alts r d ea xs ep,
   eval f Φ (extend_env_multi Γ xs ea Γ) ep r.
 Proof.
   intros f Φ Γ e alts r d ea xs ep Hdec Halt Hnot_if Hnot_bot Hfold.
-  inversion Hfold; subst.
-  - simpl in Hnot_if; discriminate.
-  - simpl in Hnot_if; discriminate.
-  - rewrite H in Hdec. inversion Hdec; subst.
-    rewrite H0 in Halt. inversion Halt; subst.
-    assumption.
-  - simpl in Hnot_bot; discriminate.
-  - rewrite Hdec in H0. rewrite Halt in H0. discriminate.
+  inversion Hfold; subst;
+    try (simpl in Hnot_if; discriminate);
+    try (simpl in Hnot_bot; discriminate);
+    try (match goal with
+         | [ H : expr_to_pc _ e = Some _ |- _ ] =>
+             exfalso; apply decompose_con_app_unspool in Hdec;
+             apply unspool_is_con_app in Hdec;
+             rewrite (solvable_not_con_app _ e (expr_to_pc_solvable _ e _ H)) in Hdec;
+             discriminate Hdec
+         | [ H : match decompose_con_app e with _ => _ end |- _ ] =>
+             rewrite Hdec in H; rewrite Halt in H; discriminate
+         end).
+  match goal with [ H : decompose_con_app e = Some _ |- _ ] => rewrite H in Hdec end.
+  inversion Hdec; subst.
+  match goal with [ H : find_alt _ _ = Some _ |- _ ] => rewrite H in Halt end.
+  inversion Halt; subst. assumption.
 Qed.
 
-(** Inversion for fold_alts on non-matching fallback expressions *)
+(** Inversion for fold_alts on non-matching fallback expressions. The extra
+    premises pin the scrutinee to Rule FoldAlts_Otherwise's own domain: it is
+    neither a boolean formula (expr_to_pc = None) nor a primitive application
+    (is_op_app = false), so the two new formula clauses cannot have fired. *)
 Lemma fold_alts_otherwise_same : forall f Φ Γ e alts r,
+  expr_to_pc Γ e = None ->
+  is_op_app e = false ->
   is_if e = false ->
   (match decompose_con_app e with
    | Some (d, _) => find_alt d alts = None
@@ -2064,48 +2195,118 @@ Lemma fold_alts_otherwise_same : forall f Φ Γ e alts r,
   fold_alts f Φ Γ e alts r ->
   r = EBot BUndefined.
 Proof.
-  intros f Φ Γ e alts r Hnot_if Hno_alt Hnot_bot Hfold.
-  inversion Hfold; subst.
-  - simpl in Hnot_if; discriminate.
-  - simpl in Hnot_if; discriminate.
-  - rewrite H in Hno_alt. rewrite H0 in Hno_alt. discriminate.
-  - simpl in Hnot_bot; discriminate.
-  - reflexivity.
+  intros f Φ Γ e alts r Hpc_none Hop Hnot_if Hno_alt Hnot_bot Hfold.
+  inversion Hfold; subst; try reflexivity;
+    try (simpl in Hnot_if; discriminate);
+    try (simpl in Hnot_bot; discriminate);
+    match goal with
+    | [ H : expr_to_pc _ e = Some _ |- _ ] => rewrite H in Hpc_none; discriminate
+    | [ H : decompose_con_app e = Some _ |- _ ] =>
+        rewrite H in Hno_alt;
+        match goal with [ Hf : find_alt _ _ = Some _ |- _ ] => rewrite Hf in Hno_alt; discriminate end
+    end.
+Qed.
+
+(** Inversion for fold_alts on a boolean formula with no variable: the fold
+    reduces to a match on the True or False constructor. *)
+Lemma fold_alts_ground_formula_inv : forall f Φ Γ e pc alts r,
+  expr_to_pc Γ e = Some pc -> pc_has_var pc = false ->
+  fold_alts f Φ Γ e alts r ->
+  fold_alts f Φ Γ (ECon (truth_constructor (pc_closed_value pc))) alts r.
+Proof.
+  intros f Φ Γ e pc alts r Hpc Hvar Hfold.
+  pose proof (expr_to_pc_solvable Γ e pc Hpc) as Hsolv.
+  inversion Hfold; subst;
+    try (exfalso; inversion Hsolv; fail);
+    try (match goal with
+         | [ H : decompose_con_app e = Some _ |- _ ] =>
+             exfalso; apply decompose_con_app_unspool in H;
+             apply unspool_is_con_app in H;
+             rewrite (solvable_not_con_app _ e Hsolv) in H; discriminate
+         | [ H : expr_to_pc _ e = None |- _ ] => rewrite H in Hpc; discriminate
+         | [ H : expr_to_pc _ e = Some ?pc0, Hv : pc_has_var ?pc0 = true |- _ ] =>
+             rewrite (expr_to_pc_functional e _ _ pc0 pc H Hpc) in Hv;
+             rewrite Hvar in Hv; discriminate
+         end).
+  match goal with
+  | [ H : expr_to_pc _ e = Some ?pc0,
+      Hrec : fold_alts _ _ _ (ECon (truth_constructor (pc_closed_value ?pc0))) _ _ |- _ ] =>
+      rewrite (expr_to_pc_functional e _ _ pc pc0 Hpc H); exact Hrec
+  end.
+Qed.
+
+(** Inversion for fold_alts on a boolean formula with a variable and correct
+    arities: the fold is a runtime branch of the two folded alternatives. *)
+Lemma fold_alts_symbolic_formula_inv : forall f Φ Γ e pc alts r,
+  expr_to_pc Γ e = Some pc -> pc_has_var pc = true -> pc_arities_ok pc = true ->
+  fold_alts f Φ Γ e alts r ->
+  exists r1 r2, r = EIf e r1 r2 /\
+    fold_alts f (Φ ∧ pc) Γ (ECon dcon_true) alts r1 /\
+    fold_alts f (Φ ∧ ¬ pc) Γ (ECon dcon_false) alts r2.
+Proof.
+  intros f Φ Γ e pc alts r Hpc Hvar Har Hfold.
+  pose proof (expr_to_pc_solvable Γ e pc Hpc) as Hsolv.
+  inversion Hfold; subst;
+    try (exfalso; inversion Hsolv; fail);
+    try (match goal with
+         | [ H : decompose_con_app e = Some _ |- _ ] =>
+             exfalso; apply decompose_con_app_unspool in H;
+             apply unspool_is_con_app in H;
+             rewrite (solvable_not_con_app _ e Hsolv) in H; discriminate
+         | [ H : expr_to_pc _ e = None |- _ ] => rewrite H in Hpc; discriminate
+         | [ H : expr_to_pc _ e = Some ?pc0, Hv : pc_has_var ?pc0 = false |- _ ] =>
+             exfalso; rewrite (expr_to_pc_functional e _ _ pc0 pc H Hpc) in Hv;
+             rewrite Hvar in Hv; discriminate
+         end).
+  match goal with
+  | [ H : expr_to_pc _ e = Some ?pc0,
+      Hf1 : fold_alts _ _ _ (ECon dcon_true) _ ?r1,
+      Hf2 : fold_alts _ _ _ (ECon dcon_false) _ ?r2 |- _ ] =>
+      rewrite (expr_to_pc_functional e _ _ pc pc0 Hpc H);
+      exists r1, r2; split; [reflexivity | split; assumption]
+  end.
 Qed.
 
 (** Alternative folding is completely deterministic given determinism of evaluation *)
 Lemma fold_alts_deterministic_given_eval :
   (forall f Φ Γ e v1 v2, eval f Φ Γ e v1 -> eval f Φ Γ e v2 -> v1 = v2) ->
-  forall f Φ Γ e alts r1 r2,
-    fold_alts f Φ Γ e alts r1 ->
-    fold_alts f Φ Γ e alts r2 ->
-    r1 = r2.
+  forall f Φ Γ e alts ra rb,
+    fold_alts f Φ Γ e alts ra ->
+    fold_alts f Φ Γ e alts rb ->
+    ra = rb.
 Proof.
-  intros Heval_det f Φ Γ e alts r1 r2 H1.
-  revert r2.
-  induction H1; intros r2 H2.
+  intros Heval_det f Φ Γ e alts ra rb H1.
+  revert rb.
+  induction H1; intros rb Hrb.
   - (* FoldAlts_If *)
-    apply (fold_alts_if_some_inv f Φ Γ ec et ef alts r2 pc_c) in H2; [| assumption].
-    destruct H2 as [et'2 [ef'2 [Heq2 [Hfold_t2 Hfold_f2]]]].
+    apply (fold_alts_if_some_inv f Φ Γ ec et ef alts rb pc_c) in Hrb; [| assumption].
+    destruct Hrb as [et'2 [ef'2 [Heq2 [Hfold_t2 Hfold_f2]]]].
     subst.
     f_equal.
     + apply IHfold_alts1. assumption.
     + apply IHfold_alts2. assumption.
   - (* FoldAlts_IfFail *)
-    apply (fold_alts_if_none_inv f Φ Γ ec et ef alts r2) in H2; [| assumption].
+    apply (fold_alts_if_none_inv f Φ Γ ec et ef alts rb) in Hrb; [| assumption].
     subst. reflexivity.
   - (* FoldAlts_Con *)
     assert (Hnot_if : is_if e = false).
     { destruct e; simpl in H; try discriminate; reflexivity. }
     assert (Hnot_bot : is_bot e = false).
     { destruct e; simpl in H; try discriminate; reflexivity. }
-    apply (fold_alts_con_inv f Φ Γ e alts r2 d ea xs ep H H0 Hnot_if Hnot_bot) in H2.
+    apply (fold_alts_con_inv f Φ Γ e alts rb d ea xs ep H H0 Hnot_if Hnot_bot) in Hrb.
     eapply Heval_det; eassumption.
   - (* FoldAlts_Bot *)
-    apply fold_alts_bot_same in H2. subst. reflexivity.
+    apply fold_alts_bot_same in Hrb. subst. reflexivity.
+  - (* FoldAlts_GroundFormula *)
+    apply (fold_alts_ground_formula_inv f Φ Γ e pc alts rb H H0) in Hrb.
+    apply IHfold_alts. exact Hrb.
+  - (* FoldAlts_SymbolicFormula *)
+    apply (fold_alts_symbolic_formula_inv f Φ Γ e pc alts rb H H0 H1) in Hrb.
+    destruct Hrb as [r1' [r2' [Heq2 [Hf1' Hf2']]]]. subst.
+    f_equal; [apply IHfold_alts1; assumption | apply IHfold_alts2; assumption].
   - (* FoldAlts_Otherwise *)
-    apply (fold_alts_otherwise_same f Φ Γ e alts r2
-             (is_if_false_of_spine_head e H) H0 H1) in H2.
+    apply (fold_alts_otherwise_same f Φ Γ e alts rb
+             H H0 (is_if_false_of_spine_head e H1) H2 H3) in Hrb.
     subst. reflexivity.
 Qed.
 
@@ -2266,7 +2467,9 @@ Proof.
     | k Φ Γ ec et ef alts Hpc_none
     | k Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
     | k Φ Γ b alts
-    | k Φ Γ e alts Hnotif Hnoalt Hnotbot
+    | k Φ Γ e pc alts r Hpc Hvar Hrec
+    | k Φ Γ e pc alts r1 r2 Hpc Hvar Har Hf1 Hf2
+    | k Φ Γ e alts Hpcnone Hop Hnotif Hnoalt Hnotbot
     ]; intros Hk0; subst k.
   - (* FoldAlts_If *)
     destruct (fold_alts_fin_of_inf_fix Inf (Φ ∧ pc_c) Γ et alts et' Hfold_t eq_refl)
@@ -2287,6 +2490,19 @@ Proof.
     eapply FoldAlts_Con; [exact Hdec | exact Halt |]. simpl. apply Hh. lia.
   - (* FoldAlts_Bot *)
     exists 0%nat. intros n _. apply FoldAlts_Bot.
+  - (* FoldAlts_GroundFormula *)
+    destruct (fold_alts_fin_of_inf_fix Inf Φ Γ
+                (ECon (truth_constructor (pc_closed_value pc))) alts r Hrec eq_refl) as [h Hh].
+    exists h. intros n Hn.
+    eapply FoldAlts_GroundFormula; [exact Hpc | exact Hvar | apply Hh; lia].
+  - (* FoldAlts_SymbolicFormula *)
+    destruct (fold_alts_fin_of_inf_fix Inf (Φ ∧ pc) Γ (ECon dcon_true) alts r1 Hf1 eq_refl)
+      as [h1 Hh1].
+    destruct (fold_alts_fin_of_inf_fix Inf (Φ ∧ ¬ pc) Γ (ECon dcon_false) alts r2 Hf2 eq_refl)
+      as [h2 Hh2].
+    exists (Nat.max h1 h2). intros n Hn.
+    eapply FoldAlts_SymbolicFormula;
+      [exact Hpc | exact Hvar | exact Har | apply Hh1; lia | apply Hh2; lia].
   - (* FoldAlts_Otherwise *)
     exists 0%nat. intros n _. apply FoldAlts_Otherwise; assumption.
 }
