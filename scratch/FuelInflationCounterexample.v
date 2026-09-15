@@ -422,3 +422,228 @@ Proof.
     eapply Eval_AppSpine; [apply Comp_Lam | unfold junk_fun; apply Eval_Lam |].
     unfold junk_fun. apply Eval_AppAbs. exact Hv.
 Qed.
+
+Definition kv : var := "k".
+Definition yv : var := "y".
+Definition id_fun : expr := ELam yv (EVar yv).
+Definition model_arm : expr := EIf (@ELit model_sorts true) id_fun junk.
+Definition consumer : expr := ELam kv (EApp (EVar kv) (@ELit model_sorts true)).
+Definition sym_prog : expr := EApp consumer (EApp (EPrimOp PNot) model_arm).
+Definition con_prog : expr := EApp consumer (EApp (EPrimOp PNot) id_fun).
+
+Lemma nest_walk : forall k m t Φ Γ v,
+  m <= k -> eval (Fin m) Φ Γ (nest k t) v -> v = EBot BOutOfFuel.
+Proof.
+  induction k as [| k IH]; intros m t Φ Γ v Hm H;
+    (destruct m as [| m]; [exact (eval_fin_zero_inv _ _ _ _ H) |]); [lia |].
+  cbn [nest] in H. inversion H; subst; try kill_rule.
+  match goal with [Hv : eval (dec _) _ _ (nest _ _) _ |- _] =>
+    rewrite dec_remaining in Hv; exact (IH m t Φ _ v ltac:(lia) Hv) end.
+Qed.
+
+Lemma arm_value : forall Φ Γ k v,
+  eval (Fin (S (S k))) Φ Γ model_arm v ->
+  exists J, v = EIf (@ELit model_sorts true) (EThunk Γ id_fun) J
+    /\ eval (Fin (S k)) (Φ ∧ ¬ PCLit true) Γ junk J.
+Proof.
+  intros Φ Γ k v H. unfold model_arm in H. inversion H; subst; try kill_rule.
+  match goal with
+  | [ Hc : eval _ _ _ (@ELit model_sorts true) ?c, Hp : expr_to_pc _ ?c = Some _,
+      Ht : eval _ _ _ id_fun ?t, Hj : eval _ _ _ junk ?j |- _ ] =>
+      rewrite dec_remaining in Hc, Ht, Hj;
+      inversion Hc; subst; try kill_rule;
+      simpl in Hp; injection Hp as <-;
+      unfold id_fun in Ht; inversion Ht; subst; try kill_rule;
+      exists j; split; [reflexivity | exact Hj]
+  end.
+Qed.
+
+Lemma prim_arm_value : forall Φ Γ k v,
+  eval (Fin (S (S (S k)))) Φ Γ (EApp (EPrimOp PNot) model_arm) v ->
+  exists J, v = nest (inflation J) (EThunk Γ id_fun)
+    /\ eval (Fin (S k)) (Φ ∧ ¬ PCLit true) Γ junk J.
+Proof.
+  intros Φ Γ k v H. inversion H; subst; try kill_rule.
+  match goal with [Hu : unspool_app _ _ = _ |- _] => simpl in Hu; injection Hu as <- <- end.
+  match goal with [Hf : Forall2 _ _ _ |- _] =>
+    inversion Hf as [| a w rest rest' Hw Hrest]; subst; inversion Hrest; subst end.
+  rewrite dec_remaining in Hw.
+  destruct (arm_value Φ Γ k w Hw) as [J [-> HJ]].
+  exists J. split; [reflexivity | exact HJ].
+Qed.
+
+Lemma sym_prog_runs_out : forall k v,
+  eval (Fin (7 + k)) pc_true · sym_prog v -> v = EBot BOutOfFuel.
+Proof.
+  intros k v H. unfold sym_prog, consumer in H. inversion H; subst; try kill_rule.
+  match goal with [H6 : eval _ _ _ (ELam _ _) ?w, H8 : eval _ _ _ (EApp ?w _) _ |- _] =>
+    rewrite dec_remaining in H6, H8; inversion H6; subst; try kill_rule;
+    inversion H8; subst; try kill_rule end.
+  match goal with [Hb : eval _ _ _ (EApp (EVar kv) _) _ |- _] =>
+    rewrite dec_remaining in Hb; inversion Hb; subst; try kill_rule end.
+  match goal with [Hf : eval _ _ _ (EVar kv) ?w, Ha : eval _ _ _ (EApp ?w _) _ |- _] =>
+    rewrite dec_remaining in Hf, Ha; inversion Hf; subst;
+    try match goal with [Hl : lookup_env _ _ = None |- _] => discriminate Hl end;
+    try kill_rule end.
+  match goal with [Hl : lookup_env _ kv = Some _, He : eval (dec _) _ _ _ ?w |- _] =>
+    simpl in Hl; injection Hl as <- <-; rewrite dec_remaining in He;
+    destruct (prim_arm_value pc_true · k w He) as [J [-> HJ]] end.
+  destruct (junk_value_bound _ _ _ _ HJ) as [_ Hk].
+  match goal with [Ha : eval _ _ _ (EApp (nest _ _) _) _ |- _] =>
+    change (nest (inflation J) (EThunk · id_fun))
+      with (EThunk · (nest (9 + 5 * nots J) (EThunk · id_fun))) in Ha;
+    inversion Ha; subst; try kill_rule end.
+  match goal with [Hw : eval _ _ _ (EThunk _ _) ?w, Hb : eval _ _ _ (EApp ?w _) _ |- _] =>
+    pose proof (nest_walk (10 + 5 * nots J) (S (S (S k))) (EThunk · id_fun) pc_true _ w
+                  ltac:(lia) Hw) as Hbot;
+    subst w; exact (app_bot_value _ _ _ _ _ Hb) end.
+Qed.
+
+Lemma bot_not_contains_lit : forall σ S b l, ~ contains σ S (EBot b) (ELit l).
+Proof.
+  intros σ S b l H. inversion H.
+  match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end.
+Qed.
+
+Lemma nest_not_lam : forall i t, is_thunk t = true -> is_lam (nest i t) = false.
+Proof. intros i t Ht. destruct i; [destruct t; try discriminate |]; reflexivity. Qed.
+
+Lemma nest_value_total : forall i m Φ Γ,
+  exists w, eval (Fin m) Φ Γ (nest i (EThunk · id_fun)) w
+    /\ (w = EBot BOutOfFuel \/ w = EThunk · id_fun).
+Proof.
+  induction i as [| i IH]; intros m Φ Γ;
+    (destruct m as [| m]; [exists (EBot BOutOfFuel); split; [apply Eval_OutOfFuel | left; reflexivity] |]).
+  - destruct m as [| m].
+    + exists (EBot BOutOfFuel). split; [apply Eval_Thunk; apply Eval_OutOfFuel | left; reflexivity].
+    + exists (EThunk · id_fun). split; [apply Eval_Thunk; apply Eval_Lam | right; reflexivity].
+  - destruct (IH m Φ ·) as [w [Hw Hs]].
+    exists w. split; [cbn [nest]; apply Eval_Thunk; exact Hw | exact Hs].
+Qed.
+
+Lemma id_app_total : forall m Φ Γ,
+  exists v, eval (Fin m) Φ Γ (EApp (EThunk · id_fun) (@ELit model_sorts true)) v.
+Proof.
+  intros m Φ Γ. destruct m as [| [| [| m]]].
+  - exists (EBot BOutOfFuel). apply Eval_OutOfFuel.
+  - exists (EBot BOutOfFuel). unfold id_fun. apply Eval_AppAbs. apply Eval_OutOfFuel.
+  - exists (EBot BOutOfFuel). unfold id_fun. apply Eval_AppAbs.
+    eapply Eval_Var; [reflexivity | apply Eval_OutOfFuel].
+  - exists (@ELit model_sorts true). unfold id_fun. apply Eval_AppAbs.
+    eapply Eval_Var; [reflexivity | apply Eval_Lit].
+Qed.
+
+Lemma walk_total : forall i m Φ Γ,
+  exists v, eval (Fin m) Φ Γ (EApp (nest (S i) (EThunk · id_fun)) (@ELit model_sorts true)) v.
+Proof.
+  intros i m Φ Γ. destruct m as [| m]; [exists (EBot BOutOfFuel); apply Eval_OutOfFuel |].
+  destruct (nest_value_total (S i) m Φ Γ) as [w [Hw [-> | ->]]].
+  - exists (EBot BOutOfFuel).
+    eapply Eval_AppSpine; [apply Comp_Thunk; apply nest_not_lam; reflexivity | exact Hw |].
+    destruct m; [apply Eval_OutOfFuel | apply Eval_AppBot].
+  - destruct (id_app_total m Φ Γ) as [v Hv]. exists v.
+    eapply Eval_AppSpine; [apply Comp_Thunk; apply nest_not_lam; reflexivity | exact Hw | exact Hv].
+Qed.
+
+Lemma sym_prog_total : forall k, exists v, eval (Fin (7 + k)) pc_true · sym_prog v.
+Proof.
+  intros k.
+  destruct (junk_has_value · (pc_true ∧ ¬ @PCLit model_sorts true) (S k)) as [J HJ].
+  destruct (walk_total (9 + 5 * nots J) (S (S (S (S k)))) pc_true
+              (extend_env · kv · (EApp (@EPrimOp model_sorts PNot) model_arm))) as [v Hv].
+  exists v. unfold sym_prog, consumer.
+  apply Eval_AppSpine with (ef' := EThunk · (ELam kv (EApp (EVar kv) (@ELit model_sorts true))));
+    [apply Comp_Lam | apply Eval_Lam |].
+  apply Eval_AppAbs.
+  apply Eval_AppSpine with (ef' := nest (inflation J) (EThunk · id_fun));
+    [apply Comp_Var; discriminate | | exact Hv].
+  eapply Eval_Var; [reflexivity |].
+  apply (@Eval_AppPrim model_sorts fuel_solver (Remaining (S (S k))) pc_true · (@EPrimOp model_sorts PNot) model_arm PNot
+           (model_arm :: nil) (EIf (@ELit model_sorts true) (EThunk · id_fun) J :: nil));
+    [reflexivity | reflexivity |].
+  constructor; [| constructor].
+  unfold model_arm.
+  apply Eval_If with (pc_c := @PCLit model_sorts true); [apply Eval_Lit | reflexivity | apply Eval_Lam | exact HJ].
+Qed.
+
+Definition sigma_all : valuation := fun _ => true.
+Definition no_symvars : symvars := fun _ => false.
+
+Lemma lit_true_models_cond : models_cond sigma_all no_symvars (@ELit model_sorts true).
+Proof. exists (@PCLit model_sorts true). split; [intros Γ _; reflexivity | reflexivity]. Qed.
+
+Lemma prog_contains : contains sigma_all no_symvars sym_prog con_prog.
+Proof.
+  unfold sym_prog, con_prog, consumer, model_arm, id_fun.
+  apply Cont_App.
+  - apply Cont_Lam; [reflexivity |]. apply Cont_App; [apply Cont_Var_Bound; reflexivity | apply Cont_Lit].
+  - apply Cont_App; [apply Cont_PrimOp |].
+    apply Cont_If_True; [exact lit_true_models_cond |].
+    apply Cont_Lam; [reflexivity | apply Cont_Var_Bound; reflexivity].
+Qed.
+
+Lemma con_prog_concore : concore_expr con_prog.
+Proof. unfold con_prog, consumer, id_fun. repeat constructor. Qed.
+
+Lemma con_prog_runs : · ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true.
+Proof.
+  unfold eval_con, con_prog, consumer.
+  apply Eval_AppSpine with (ef' := EThunk · (ELam kv (EApp (EVar kv) (@ELit model_sorts true))));
+    [apply Comp_Lam | apply Eval_Lam |].
+  apply Eval_AppAbs.
+  apply Eval_AppSpine with (ef' := EThunk · id_fun); [apply Comp_Var; discriminate | |].
+  - eapply Eval_Var; [reflexivity |].
+    apply (@Eval_AppPrim model_sorts fuel_solver Unlimited pc_true · (@EPrimOp model_sorts PNot) id_fun PNot
+             (id_fun :: nil) (EThunk · id_fun :: nil)); [reflexivity | reflexivity |].
+    constructor; [apply Eval_Lam | constructor].
+  - unfold id_fun. apply Eval_AppAbs. eapply Eval_Var; [reflexivity | apply Eval_Lit].
+Qed.
+
+Lemma sigma_models_pc_true : sigma_all ⊨ pc_true.
+Proof. reflexivity. Qed.
+
+Lemma sym_prog_budget_total : budget_total pc_true · sym_prog.
+Proof.
+  exists 7. intros n Hn. replace n with (7 + (n - 7)) by lia. apply sym_prog_total.
+Qed.
+
+Theorem fuel_inflation_counterexample :
+  sigma_all ⊨ pc_true /\
+  contains_env sigma_all no_symvars · · /\
+  contains sigma_all no_symvars sym_prog con_prog /\
+  concore_expr con_prog /\
+  budget_total pc_true · sym_prog /\
+  (· ⊢ᶜ con_prog ⇓ᶜ @ELit model_sorts true) /\
+  (forall n, (7 <= n)%nat -> forall v_sym,
+     eval (Fin n) pc_true · sym_prog v_sym ->
+     ~ contains sigma_all no_symvars v_sym (@ELit model_sorts true)).
+Proof.
+  refine (conj sigma_models_pc_true (conj (Cont_Env_Empty _ _) (conj prog_contains
+          (conj con_prog_concore (conj sym_prog_budget_total (conj con_prog_runs _)))))).
+  intros n Hn v Hv. replace n with (7 + (n - 7)) in Hv by lia.
+  rewrite (sym_prog_runs_out _ _ Hv). apply bot_not_contains_lit.
+Qed.
+
+Theorem target_completeness_is_false : ~ @target_completeness model_sorts fuel_solver.
+Proof.
+  intros Htarget.
+  destruct fuel_inflation_counterexample as [Hm [Henv [Hc [Hcc [Hb [Hrun Hout]]]]]].
+  destruct (Htarget pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
+              Hm Henv Hc Hcc Hb Hrun) as [h Hh].
+  destruct (Hh (7 + h) ltac:(lia)) as [v [Hv Hcv]].
+  exact (Hout (7 + h) ltac:(lia) v Hv Hcv).
+Qed.
+
+Theorem lawful_instance_refutes_target :
+  @ConCoreLaws model_sorts fuel_solver /\ ~ @target_completeness model_sorts fuel_solver.
+Proof. exact (conj fuel_laws target_completeness_is_false). Qed.
+
+Lemma branch_stuck_at_fuel_one : forall Φ Γ ec et ef v,
+  ~ eval (Fin 1) Φ Γ (EIf ec et ef) v.
+Proof.
+  intros Φ Γ ec et ef v H. inversion H; subst; try kill_rule.
+  match goal with [Hc : eval (dec _) _ _ ec ?c, Hp : expr_to_pc _ ?c = Some _ |- _] =>
+    apply eval_fin_zero_inv in Hc; subst; discriminate Hp end.
+Qed.
+
+Print Assumptions lawful_instance_refutes_target.
