@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore ConCore Completeness.
+From SymCoreTheory Require Import SymCore ConCore Completeness Model.
 From Stdlib Require Import Strings.String Lists.List Arith.PeanoNat Lia.
 Import ListNotations.
 
@@ -349,3 +349,79 @@ Proof.
 Qed.
 
 End Saturation.
+
+Section ModelSaturation.
+
+Lemma model_graft_arg_saturated : forall a f n,
+  spine_ok Exactly (S n) f -> saturated a -> spine_ok Exactly n (graft_arg f a).
+Proof.
+  induction a; intros f n Hf Ha; try exact (conj Hf Ha).
+  destruct Ha as [Hc [Ht He]].
+  exact (conj Hc (conj (IHa2 f n Hf Ht) (IHa3 f n Hf He))).
+Qed.
+
+Lemma model_graft_saturated : forall f a n,
+  spine_ok Exactly (S n) f -> saturated a -> spine_ok Exactly n (graft f a).
+Proof.
+  induction f; intros a n Hf Ha; try (apply model_graft_arg_saturated; assumption).
+  destruct Hf as [Hc [Ht He]].
+  exact (conj Hc (conj (IHf2 a n Ht Ha) (IHf3 a n He Ha))).
+Qed.
+
+Lemma model_lift_branches_saturated : forall e n,
+  spine_ok Exactly n e -> spine_ok Exactly n (lift_branches e).
+Proof.
+  induction e; intros n He; try exact He.
+  - destruct He as [Hf Ha]. apply model_graft_saturated; [apply IHe1 | apply IHe2]; assumption.
+  - destruct He as [Hc [Ht Hf]]. exact (conj Hc (conj (IHe2 n Ht) (IHe3 n Hf))).
+Qed.
+
+Lemma model_fold_leaves_saturated : forall e n,
+  spine_ok Exactly n e -> spine_ok Exactly n (fold_leaves e).
+Proof.
+  induction e; intros n He; simpl; unfold fold_leaf;
+    try (destruct (smt_ground _)); try exact I; try exact He.
+  destruct He as [Hc [Ht Hf]]. exact (conj Hc (conj (IHe2 n Ht) (IHe3 n Hf))).
+Qed.
+
+Lemma model_reduce_unbranched_saturated : forall p args,
+  Forall saturated args -> saturated (reduce_unbranched p args).
+Proof.
+  intros p args Hargs. unfold reduce_unbranched.
+  destruct (Nat.eqb (length args) (model_arity p)) eqn:Hlen; [| exact I].
+  apply Nat.eqb_eq in Hlen.
+  apply model_fold_leaves_saturated, model_lift_branches_saturated.
+  apply fold_left_spine_ok; [| exact Hargs].
+  rewrite Nat.add_0_r. simpl. unfold arity_met. exact (eq_sym Hlen).
+Qed.
+
+Lemma model_split_arg_saturated : forall k a,
+  (forall a', saturated a' -> saturated (k a')) -> saturated a -> saturated (split_arg k a).
+Proof.
+  intros k a Hk. induction a; intros Ha; try exact (Hk _ Ha).
+  destruct Ha as [Hc [Ht Hf]]. exact (conj Hc (conj (IHa2 Ht) (IHa3 Hf))).
+Qed.
+
+Lemma model_split_args_saturated : forall args k,
+  (forall args', Forall saturated args' -> saturated (k args')) ->
+  Forall saturated args -> saturated (split_args k args).
+Proof.
+  induction args as [| a rest IH]; intros k Hk Hargs; simpl; [apply Hk; constructor |].
+  inversion Hargs as [| a0 rest0 Ha Hrest]; subst.
+  apply model_split_arg_saturated; [| exact Ha].
+  intros a' Ha'. apply IH; [| exact Hrest].
+  intros rest' Hrest'. apply Hk. constructor; assumption.
+Qed.
+
+#[export] Instance model_reduce_prim_keeps_saturation : ReducePrimKeepsSaturation.
+Proof.
+  intros p args _ Hargs.
+  change (saturated (model_reduce_prim p args)). unfold model_reduce_prim.
+  apply model_split_args_saturated; [| exact Hargs].
+  apply model_reduce_unbranched_saturated.
+Qed.
+
+#[export] Instance model_cast_expr_keeps_saturation : CastExprKeepsSaturation.
+Proof. intros e γ He. exact He. Qed.
+
+End ModelSaturation.
