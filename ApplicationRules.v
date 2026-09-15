@@ -117,3 +117,85 @@ Proof.
 Qed.
 
 End OutOfFuel.
+
+Section RuleDisjointness.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
+Lemma comp_excludes_closure : forall Γ Γ' x b, ~ Comp Γ (EThunk Γ' (ELam x b)).
+Proof. intros Γ Γ' x b H. inversion H; subst. discriminate. Qed.
+
+Lemma comp_excludes_cast : forall Γ e γ, ~ Comp Γ (ECast e γ).
+Proof. intros Γ e γ H. inversion H. Qed.
+
+Lemma comp_excludes_branch : forall Γ ec et ef, ~ Comp Γ (EIf ec et ef).
+Proof. intros Γ ec et ef H. inversion H. Qed.
+
+Lemma comp_excludes_bottom : forall Γ b, ~ Comp Γ (EBot b).
+Proof. intros Γ b H. inversion H. Qed.
+
+Lemma comp_excludes_whole_spine_head : forall Γ e,
+  has_whole_spine_rule (spine_head e) = true -> ~ Comp Γ e.
+Proof.
+  intros Γ e Hhead Hcomp.
+  destruct Hcomp; simpl in *; congruence.
+Qed.
+
+Lemma spine_head_of_unspool : forall e h args,
+  unspool_app e [] = (h, args) -> spine_head e = h.
+Proof.
+  intros e h args Hu.
+  rewrite <- (fst_unspool_app e []). rewrite Hu. reflexivity.
+Qed.
+
+Lemma comp_excludes_con_spine : forall Γ e d args,
+  unspool_app e [] = (ECon d, args) -> ~ Comp Γ e.
+Proof.
+  intros Γ e d args Hu. apply comp_excludes_whole_spine_head.
+  rewrite (spine_head_of_unspool e _ args Hu). reflexivity.
+Qed.
+
+Lemma comp_excludes_prim_spine : forall Γ e p args,
+  unspool_app e [] = (EPrimOp p, args) -> ~ Comp Γ e.
+Proof.
+  intros Γ e p args Hu. apply comp_excludes_whole_spine_head.
+  rewrite (spine_head_of_unspool e _ args Hu). reflexivity.
+Qed.
+
+Lemma comp_excludes_branch_spine : forall Γ e ec et ef args,
+  unspool_app e [] = (EIf ec et ef, args) -> ~ Comp Γ e.
+Proof.
+  intros Γ e ec et ef args Hu. apply comp_excludes_whole_spine_head.
+  rewrite (spine_head_of_unspool e _ args Hu). reflexivity.
+Qed.
+
+Definition app_if_fires (e : expr) : Prop :=
+  exists e1 e2 ec et ef args,
+    e = EApp e1 e2 /\ unspool_app (EApp e1 e2) [] = (EIf ec et ef, args).
+
+Definition app_prim_fires (e : expr) : Prop :=
+  exists e1 e2 p args,
+    e = EApp e1 e2 /\ unspool_app (EApp e1 e2) [] = (EPrimOp p, args) /\
+    length args = primop_arity p.
+
+Definition con_fires (e : expr) : Prop :=
+  exists d args, unspool_app e [] = (ECon d, args).
+
+Lemma app_if_never_overlaps_app_prim : forall e,
+  ~ (app_if_fires e /\ app_prim_fires e).
+Proof.
+  intros e [Hif Hprim].
+  destruct Hif as (e1 & e2 & ec & et & ef & args & He & Hu_if).
+  destruct Hprim as (f1 & f2 & p & pargs & He' & Hu_prim & _).
+  subst e. injection He' as <- <-. congruence.
+Qed.
+
+Lemma app_if_never_overlaps_con : forall e,
+  ~ (app_if_fires e /\ con_fires e).
+Proof.
+  intros e [Hif Hcon].
+  destruct Hif as (e1 & e2 & ec & et & ef & args & He & Hu_if).
+  destruct Hcon as (d & cargs & Hu_con).
+  subst e. congruence.
+Qed.
+
+End RuleDisjointness.
