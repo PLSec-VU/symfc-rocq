@@ -49,6 +49,14 @@ Proof.
   - apply Con_Alt. apply Con_Lit.
 Qed.
 
+Lemma nv_con_closed : closed_program · nv_con.
+Proof.
+  split; [apply Scoped_Env_Empty |].
+  unfold nv_con, nv_alts, self_app, self_app_fun, self_app_body.
+  apply Scoped_Case; [apply Scoped_Con |].
+  repeat constructor.
+Qed.
+
 Lemma nv_con_evaluates : · ⊢ᶜ nv_con ⇓ᶜ ELit true.
 Proof.
   unfold eval_con, nv_con.
@@ -76,7 +84,7 @@ Theorem nv_completeness_instance :
     exists v_sym, eval (Fin n) nv_phi · nv_sym v_sym /\ contains nv_sigma nv_S v_sym nv_true.
 Proof.
   exact (concore_completeness_budget nv_phi · · nv_sigma nv_S nv_sym nv_con nv_true
-           nv_sigma_models_phi (Cont_Env_Empty _ _) nv_contains nv_con_concore
+           nv_sigma_models_phi (Cont_Env_Empty _ _) nv_contains nv_con_concore nv_con_closed
            nv_budget_total nv_con_evaluates).
 Qed.
 
@@ -85,14 +93,14 @@ Theorem nv_completeness_forall_instance :
     forall v_sym, eval (Fin n) nv_phi · nv_sym v_sym -> contains nv_sigma nv_S v_sym nv_true.
 Proof.
   exact (concore_completeness_forall · nv_con nv_true nv_con_evaluates nv_phi · nv_sigma nv_S nv_sym
-           nv_sigma_models_phi (Cont_Env_Empty _ _) nv_contains nv_con_concore).
+           nv_sigma_models_phi (Cont_Env_Empty _ _) nv_contains nv_con_concore nv_con_closed).
 Qed.
 
 Theorem nv_completeness_exists_instance :
   exists k v_sym, eval (Fin k) nv_phi · nv_sym v_sym /\ contains nv_sigma nv_S v_sym nv_true.
 Proof.
   exact (concore_completeness_exists nv_phi · · nv_sigma nv_S nv_sym nv_con nv_true
-           nv_sigma_models_phi (Cont_Env_Empty _ _) nv_contains nv_con_concore
+           nv_sigma_models_phi (Cont_Env_Empty _ _) nv_contains nv_con_concore nv_con_closed
            nv_budget_total nv_con_evaluates).
 Qed.
 
@@ -183,23 +191,23 @@ Qed.
 #[local] Instance pruning_cost_laws : @SymFCCostLaws model_sorts pruning_solver.
 Proof.
   constructor.
-  - constructor; [constructor | exact model_reduce_prim_branch | exact model_cast_expr_branch].
+  - constructor.
     + exact model_reduce_prim_solvable.
     + exact model_reduce_prim_saturated.
     + exact model_reduce_prim_concore.
     + exact model_cast_expr_concore.
+    + exact model_reduce_prim_scoped.
+    + exact model_cast_expr_scoped.
     + exact pruning_models_sat.
     + exact model_prim_value_and.
     + exact model_reduce_prim_contains.
     + exact model_reduce_prim_denote.
     + exact model_reduce_prim_ground_value.
-    + exact model_reduce_prim_ite_contains.
     + exact model_cast_expr_contains.
     + exact model_subst_coerc_contains_env.
     + exact model_subst_type_contains_env.
   - exact model_cast_expr_contains_k.
   - exact model_reduce_prim_contains_k.
-  - exact model_reduce_prim_ite_contains_k.
 Qed.
 
 Definition pm_x : var := "x".
@@ -233,6 +241,9 @@ Proof.
   intros Γ Hfree. simpl. rewrite (Hfree pm_x (only_self pm_x)). reflexivity.
 Qed.
 
+Lemma pm_true_closed : closed_program · pm_true.
+Proof. split; [apply Scoped_Env_Empty | apply Scoped_Lit]. Qed.
+
 Lemma pm_con_evaluates : @eval_con model_sorts pruning_solver · pm_true pm_true.
 Proof. apply Eval_Lit. Qed.
 
@@ -241,7 +252,8 @@ Theorem pm_soundness_instance :
     contains pm_sigma pm_S (EIf (EVar pm_x) pm_true (EBot BUnreachable)) v_con.
 Proof.
   exact (concore_soundness pm_phi · · pm_sigma pm_S pm_sym pm_true _
-           pm_sigma_models_phi (Cont_Env_Empty _ _) pm_contains (Con_Lit _) pm_sym_evaluates).
+           pm_sigma_models_phi (Cont_Env_Empty _ _) pm_contains (Con_Lit _) pm_true_closed
+           pm_sym_evaluates).
 Qed.
 
 Theorem pm_completeness_instance :
@@ -250,7 +262,7 @@ Theorem pm_completeness_instance :
       /\ contains pm_sigma pm_S v_sym pm_true.
 Proof.
   exact (concore_completeness_budget pm_phi · · pm_sigma pm_S pm_sym pm_true pm_true
-           pm_sigma_models_phi (Cont_Env_Empty _ _) pm_contains (Con_Lit _)
+           pm_sigma_models_phi (Cont_Env_Empty _ _) pm_contains (Con_Lit _) pm_true_closed
            (budget_total_of_terminating _ _ _ (ex_intro _ _ pm_sym_evaluates))
            pm_con_evaluates).
 Qed.

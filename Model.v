@@ -3,10 +3,13 @@
   ConCore.v.
 
   Literals are the Booleans. The primitive operations are conjunction,
-  negation and if-then-else, read the way the Booleans read them. The reducer
-  folds an application whose arguments are closed, and leaves any other
-  application as a residual term. A branch inside an argument is lifted out
-  of the application first, so the reducer answers a branch of folded terms.
+  negation and if-then-else, read the way the Booleans read them. A branch
+  inside an argument is lifted out of the application first, so the reducer
+  answers a branch of reduced terms. The reducer folds an application whose
+  arguments are closed. When every argument is an SMT term and some argument
+  is not closed, it also simplifies as an SMT solver does: and false z and
+  and z false become false, ite true a b becomes a, ite false a b becomes b,
+  and ite c a a becomes a. It leaves any other application as a residual term.
 *)
 
 From SymCoreTheory Require Import SymCore ConCore CostLaws.
@@ -89,6 +92,52 @@ Fixpoint fold_leaves (e : expr) : expr :=
   | _ => fold_leaf e
   end.
 
+Fixpoint smt_need (e : expr) : option nat :=
+  match e with
+  | EVar _ => Some 0
+  | ELit _ => Some 0
+  | EPrimOp p => Some (model_arity p)
+  | EApp f a =>
+      match smt_need f, smt_need a with
+      | Some (Datatypes.S n), Some 0 => Some n
+      | _, _ => None
+      end
+  | _ => None
+  end.
+
+Definition smt_term (e : expr) : bool :=
+  match smt_need e with
+  | Some 0 => true
+  | _ => false
+  end.
+
+Definition lit_of (e : expr) : option bool :=
+  if smt_ground e then Some (closed_value e) else None.
+
+Definition is_false_lit (e : expr) : bool :=
+  match lit_of e with
+  | Some false => true
+  | _ => false
+  end.
+
+Definition rewrite_prim (p : model_primop) (args : list expr) : option expr :=
+  match p, args with
+  | PAnd, a :: b :: nil =>
+      if is_false_lit a || is_false_lit b then Some (ELit false) else None
+  | PIte, c :: a :: b :: nil =>
+      match lit_of c with
+      | Some true => Some (fold_leaf a)
+      | Some false => Some (fold_leaf b)
+      | None => if expr_eqb a b then Some (fold_leaf a) else None
+      end
+  | _, _ => None
+  end.
+
+Definition simplify (p : model_primop) (args : list expr) : option expr :=
+  if forallb smt_term args && negb (forallb smt_ground args)
+  then rewrite_prim p args
+  else None.
+
 Definition op_spine (p : model_primop) (args : list expr) : expr :=
   fold_left EApp args (EPrimOp p).
 
@@ -109,8 +158,14 @@ Fixpoint split_args (k : list expr -> expr) (args : list expr) : expr :=
   | a :: rest => split_arg (fun a' => split_args (fun rest' => k (a' :: rest')) rest) a
   end.
 
+Definition simplify_unbranched (p : model_primop) (args : list expr) : expr :=
+  match simplify p args with
+  | Some r => r
+  | None => reduce_unbranched p args
+  end.
+
 Definition model_reduce_prim (p : model_primop) (args : list expr) : expr :=
-  split_args (reduce_unbranched p) args.
+  split_args (simplify_unbranched p) args.
 
 Definition model_sat (Φ : path_condition) : bool := true.
 Definition erase_cast (e : expr) (γ : coercion) : expr := e.
@@ -129,6 +184,26 @@ Proof. reflexivity. Qed.
 Lemma model_reduce_prim_leaves_residual :
   reduce_prim op_and (EVar "x"%string :: ELit true :: nil)
   = EApp (EApp (EPrimOp PAnd) (EVar "x"%string)) (ELit true).
+Proof. reflexivity. Qed.
+
+Lemma model_and_false_left :
+  reduce_prim op_and (ELit false :: EVar "z"%string :: nil) = ELit false.
+Proof. reflexivity. Qed.
+
+Lemma model_and_false_right :
+  reduce_prim op_and (EVar "z"%string :: ELit false :: nil) = ELit false.
+Proof. reflexivity. Qed.
+
+Lemma model_ite_true :
+  reduce_prim op_ite (ELit true :: EVar "z"%string :: EVar "w"%string :: nil) = EVar "z"%string.
+Proof. reflexivity. Qed.
+
+Lemma model_ite_false :
+  reduce_prim op_ite (ELit false :: EVar "z"%string :: EVar "w"%string :: nil) = EVar "w"%string.
+Proof. reflexivity. Qed.
+
+Lemma model_ite_same_arms :
+  reduce_prim op_ite (EVar "z"%string :: ELit true :: ELit true :: nil) = ELit true.
 Proof. reflexivity. Qed.
 
 (** ========================================================================= *)
@@ -727,15 +802,303 @@ Proof.
   apply flat_not_if. eapply contains_flat_instance. eassumption.
 Qed.
 
-#[export] Instance model_reduce_prim_contains : ReducePrimContains.
+Lemma smt_term_need : forall e, smt_term e = true -> smt_need e = Some 0.
 Proof.
-  intros σ S p args_s args_c HF.
-  change (contains σ S (model_reduce_prim p args_s) (model_reduce_prim p args_c)).
-  unfold model_reduce_prim.
-  rewrite (split_args_not_if _ args_c (contains_instances_not_if σ S _ _ HF)).
-  destruct (contains_args_picks σ S _ _ HF) as [ls [Hp Hc]].
-  apply (picks_split_args σ S _ _ Hp). apply unbranched_contains. exact Hc.
+  intros e H. unfold smt_term in H.
+  destruct (smt_need e) as [[| n] |]; [reflexivity | discriminate H | discriminate H].
 Qed.
+
+Lemma smt_terms_of_forallb : forall args,
+  forallb smt_term args = true -> Forall (fun a => smt_need a = Some 0) args.
+Proof.
+  intros args H. apply Forall_forall. intros a Ha.
+  apply smt_term_need. exact (proj1 (forallb_forall _ _) H a Ha).
+Qed.
+
+Lemma smt_need_app : forall f a n,
+  smt_need (EApp f a) = Some n -> smt_need f = Some (Datatypes.S n) /\ smt_need a = Some 0.
+Proof.
+  intros f a n H. simpl in H.
+  destruct (smt_need f) as [[| m] |]; destruct (smt_need a) as [[| k] |];
+    try discriminate H.
+  injection H as <-. split; reflexivity.
+Qed.
+
+Lemma smt_need_op_app : forall e n, smt_need e = Some (Datatypes.S n) -> is_op_app e = true.
+Proof.
+  induction e; intros n H; try (simpl in H; discriminate H); try reflexivity.
+  destruct (smt_need_app _ _ _ H) as [H1 _]. exact (IHe1 _ H1).
+Qed.
+
+Lemma smt_need_unspool : forall e n acc (q : model_primop) qs,
+  smt_need e = Some n -> unspool_app e acc = (EPrimOp q, qs) ->
+  n + length qs = model_arity q + length acc.
+Proof.
+  induction e; intros n acc q qs Hn Hu; simpl in Hu; try discriminate Hu.
+  - injection Hu as Hq Hqs. subst qs. simpl in Hn. injection Hn as <-.
+    change (model_arity p + length acc = model_arity q + length acc). rewrite Hq. reflexivity.
+  - destruct (smt_need_app _ _ _ Hn) as [H1 _].
+    pose proof (IHe1 _ _ _ _ H1 Hu) as H. simpl in H. lia.
+Qed.
+
+Lemma smt_need_flat : forall e n, smt_need e = Some n -> flat e = true.
+Proof.
+  induction e; intros n H; try (simpl in H; discriminate H); try reflexivity.
+  destruct (smt_need_app _ _ _ H) as [H1 H2]. simpl. rewrite (IHe1 _ H1), (IHe2 _ H2). reflexivity.
+Qed.
+
+Lemma smt_need_closed_ground : forall e n,
+  smt_need e = Some n -> closed_term e -> smt_ground e = true.
+Proof.
+  induction e; intros n Hn Hc; try (simpl in Hn; discriminate Hn); try reflexivity.
+  - unfold closed_term in Hc. inversion Hc; subst.
+    match goal with [H : In _ nil |- _] => destruct H end.
+  - destruct (smt_need_app _ _ _ Hn) as [H1 H2].
+    unfold closed_term in Hc. inversion Hc; subst. simpl.
+    rewrite (smt_need_op_app _ _ H1), (IHe1 _ H1 ltac:(assumption)), (IHe2 _ H2 ltac:(assumption)).
+    reflexivity.
+Qed.
+
+Lemma contains_smt_need : forall σ S L X n,
+  contains σ S L X -> smt_need L = Some n -> smt_need X = Some n.
+Proof.
+  intros σ S L X n H. revert n.
+  induction H; intros n Hn; try (simpl in Hn; discriminate Hn); try exact Hn.
+  - destruct (smt_need_app _ _ _ Hn) as [H1 H2].
+    simpl. rewrite (IHcontains1 _ H1), (IHcontains2 _ H2). reflexivity.
+  - match goal with
+    | [ Hu : unspool_app es nil = (EPrimOp ?q, ?qs), Hl : length ?qs = primop_arity ?q |- _ ] =>
+        pose proof (smt_need_unspool es n nil q qs Hn Hu) as E;
+        change (length qs = model_arity q) in Hl
+    end.
+    simpl in E. assert (n = 0) by lia. subst n. reflexivity.
+Qed.
+
+Lemma ground_denote_value : forall σ S a l,
+  smt_ground a = true -> denote σ S a l -> l = closed_value a.
+Proof.
+  intros σ S a l Hg [pc [Hd Hv]].
+  pose proof (Hd · (sym_free_env_empty S)) as He.
+  rewrite (closed_value_of a pc He), <- Hv.
+  destruct (ground_pc_value a pc σ closed_model Hg He) as [E _]. exact E.
+Qed.
+
+Lemma fold_leaf_denote : forall σ S a l, denote σ S a l -> denote σ S (fold_leaf a) l.
+Proof.
+  intros σ S a l H. unfold fold_leaf. destruct (smt_ground a) eqn:Hg; [| exact H].
+  rewrite <- (ground_denote_value σ S a l Hg H). apply denote_lit.
+Qed.
+
+Lemma fold_leaf_contains_k : forall σ S a l,
+  smt_need a = Some 0 -> denote σ S a l ->
+  exists k, k <= smt_size a /\ contains_k σ S k (fold_leaf a) (ELit l).
+Proof.
+  intros σ S a l Hn Hd. unfold fold_leaf. destruct (smt_ground a) eqn:Hg.
+  - rewrite <- (ground_denote_value σ S a l Hg Hd). exists 0. split; [lia | apply ContK_Lit].
+  - destruct a; try (simpl in Hg; discriminate Hg); try (simpl in Hn; discriminate Hn).
+    + destruct (denote_var_inv σ S v l Hd) as [Hs ->].
+      exists 0. split; [lia | apply ContK_Var_Sym; exact Hs].
+    + destruct (smt_need_app _ _ _ Hn) as [H1 _].
+      assert (Hop : is_op_app (EApp a1 a2) = true) by exact (smt_need_op_app _ _ H1).
+      destruct (is_op_app_unspool _ Hop) as [q [qs Hu]].
+      exists (smt_size (EApp a1 a2)). split; [lia |].
+      apply (ContK_Denote σ S _ q qs l Hu); [| exact Hg | exact Hd].
+      pose proof (smt_need_unspool _ 0 nil q qs Hn Hu) as E. simpl in E.
+      change (length qs = model_arity q). lia.
+Qed.
+
+Lemma fold_leaf_ground : forall a, smt_ground (fold_leaf a) = true -> exists l, fold_leaf a = ELit l.
+Proof.
+  intros a H. unfold fold_leaf in *. destruct (smt_ground a) eqn:Hg; [eexists; reflexivity | congruence].
+Qed.
+
+Lemma lit_of_value : forall σ S a b l, lit_of a = Some b -> denote σ S a l -> l = b.
+Proof.
+  intros σ S a b l H Hd. unfold lit_of in H. destruct (smt_ground a) eqn:Hg; [| discriminate H].
+  injection H as <-. exact (ground_denote_value σ S a l Hg Hd).
+Qed.
+
+Lemma is_false_lit_value : forall σ S a l, is_false_lit a = true -> denote σ S a l -> l = false.
+Proof.
+  intros σ S a l H Hd. unfold is_false_lit in H.
+  destruct (lit_of a) as [[|] |] eqn:E; try discriminate H.
+  exact (lit_of_value σ S a false l E Hd).
+Qed.
+
+Lemma rewrite_prim_arity : forall p args r,
+  rewrite_prim p args = Some r -> length args = model_arity p.
+Proof.
+  intros p args r H.
+  destruct p; destruct args as [| a1 [| a2 [| a3 [| a4 args]]]]; simpl in H; try discriminate H;
+    reflexivity.
+Qed.
+
+Lemma rewrite_prim_shape : forall p args r,
+  rewrite_prim p args = Some r -> r = ELit false \/ exists a, In a args /\ r = fold_leaf a.
+Proof.
+  intros p args r H.
+  destruct p; destruct args as [| a1 [| a2 [| a3 [| a4 args]]]]; simpl in H; try discriminate H.
+  - destruct (is_false_lit a1 || is_false_lit a2); [| discriminate H].
+    injection H as <-. left. reflexivity.
+  - destruct (lit_of a1) as [[|] |].
+    + injection H as <-. right. exists a2. split; [simpl; auto | reflexivity].
+    + injection H as <-. right. exists a3. split; [simpl; auto | reflexivity].
+    + destruct (expr_eqb a2 a3); [| discriminate H].
+      injection H as <-. right. exists a2. split; [simpl; auto | reflexivity].
+Qed.
+
+Lemma simplify_facts : forall p args r,
+  simplify p args = Some r ->
+  Forall (fun a => smt_need a = Some 0) args /\ rewrite_prim p args = Some r.
+Proof.
+  intros p args r H. unfold simplify in H.
+  destruct (forallb smt_term args && negb (forallb smt_ground args)) eqn:E; [| discriminate H].
+  apply andb_prop in E as [Ht _]. split; [exact (smt_terms_of_forallb args Ht) | exact H].
+Qed.
+
+Lemma rewrite_prim_value : forall σ S p args vs r,
+  Forall (fun a => smt_need a = Some 0) args -> Forall2 (denote σ S) args vs ->
+  rewrite_prim p args = Some r ->
+  denote σ S r (model_prim_value p vs) /\
+  exists k, k <= list_sum (map smt_size args) /\ contains_k σ S k r (ELit (model_prim_value p vs)).
+Proof.
+  intros σ S p args vs r Ht Hd Hr.
+  destruct p; destruct args as [| a1 [| a2 [| a3 [| a4 args]]]]; simpl in Hr; try discriminate Hr.
+  - inversion Hd as [| x1 v1 l1 vs1 Hd1 Hd1']; subst.
+    inversion Hd1' as [| x2 v2 l2 vs2 Hd2 Hd2']; subst.
+    inversion Hd2'; subst.
+    assert (Hv : r = ELit false /\ v1 && v2 = false).
+    { destruct (is_false_lit a1) eqn:E1; destruct (is_false_lit a2) eqn:E2; simpl in Hr;
+        try discriminate Hr; injection Hr as <-; split; try reflexivity.
+      - rewrite (is_false_lit_value σ S a1 v1 E1 Hd1). reflexivity.
+      - rewrite (is_false_lit_value σ S a1 v1 E1 Hd1). reflexivity.
+      - rewrite (is_false_lit_value σ S a2 v2 E2 Hd2). apply andb_false_r. }
+    destruct Hv as [-> Hv]. simpl. rewrite Hv.
+    split; [apply denote_lit | exists 0; split; [lia | apply ContK_Lit]].
+  - inversion Hd as [| x1 v1 l1 vs1 Hd1 Hd1']; subst.
+    inversion Hd1' as [| x2 v2 l2 vs2 Hd2 Hd2']; subst.
+    inversion Hd2' as [| x3 v3 l3 vs3 Hd3 Hd3']; subst.
+    inversion Hd3'; subst.
+    inversion Ht as [| y1 t1 Ht1 Ht1']; subst.
+    inversion Ht1' as [| y2 t2 Ht2 Ht2']; subst.
+    inversion Ht2' as [| y3 t3 Ht3 _]; subst.
+    destruct (lit_of a1) as [[|] |] eqn:Ec.
+    + injection Hr as <-. rewrite (lit_of_value σ S a1 true v1 Ec Hd1).
+      split; [exact (fold_leaf_denote σ S a2 v2 Hd2) |].
+      destruct (fold_leaf_contains_k σ S a2 v2 Ht2 Hd2) as [k [Hk Hc]].
+      exists k. split; [simpl; lia | exact Hc].
+    + injection Hr as <-. rewrite (lit_of_value σ S a1 false v1 Ec Hd1).
+      split; [exact (fold_leaf_denote σ S a3 v3 Hd3) |].
+      destruct (fold_leaf_contains_k σ S a3 v3 Ht3 Hd3) as [k [Hk Hc]].
+      exists k. split; [simpl; lia | exact Hc].
+    + destruct (expr_eqb a2 a3) eqn:Eab; [| discriminate Hr].
+      injection Hr as <-. apply expr_eqb_eq in Eab. subst a3.
+      rewrite (denote_functional σ S a2 v3 v2 Hd3 Hd2).
+      assert (Hvv : model_prim_value PIte (v1 :: v2 :: v2 :: nil) = v2) by (destruct v1; reflexivity).
+      rewrite Hvv.
+      split; [exact (fold_leaf_denote σ S a2 v2 Hd2) |].
+      destruct (fold_leaf_contains_k σ S a2 v2 Ht2 Hd2) as [k [Hk Hc]].
+      exists k. split; [simpl; lia | exact Hc].
+Qed.
+
+Lemma simplify_closed_none : forall p args, Forall closed_term args -> simplify p args = None.
+Proof.
+  intros p args H. unfold simplify.
+  destruct (forallb smt_term args) eqn:Ht; [| reflexivity].
+  assert (Hg : forallb smt_ground args = true).
+  { apply forallb_forall. intros a Ha.
+    apply (smt_need_closed_ground a 0).
+    - apply smt_term_need. exact (proj1 (forallb_forall _ _) Ht a Ha).
+    - exact (proj1 (Forall_forall _ _) H a Ha). }
+  rewrite Hg. reflexivity.
+Qed.
+
+Lemma fold_leaf_solvable : forall Γ a, Solvable Γ a -> Solvable Γ (fold_leaf a).
+Proof. intros Γ a H. unfold fold_leaf. destruct (smt_ground a); [apply Solvable_Lit | exact H]. Qed.
+
+Lemma fold_leaf_concore : forall a, concore_expr a -> concore_expr (fold_leaf a).
+Proof. intros a H. unfold fold_leaf. destruct (smt_ground a); [apply Con_Lit | exact H]. Qed.
+
+Lemma fold_leaf_scoped : forall L a, scoped L a -> scoped L (fold_leaf a).
+Proof. intros L a H. unfold fold_leaf. destruct (smt_ground a); [apply Scoped_Lit | exact H]. Qed.
+
+Lemma simplify_result : forall (P : expr -> Prop) p args r,
+  P (ELit false) -> Forall (fun a => P (fold_leaf a)) args ->
+  simplify p args = Some r -> P r.
+Proof.
+  intros P p args r Hl Ha Hs.
+  destruct (simplify_facts p args r Hs) as [_ Hr].
+  destruct (rewrite_prim_shape p args r Hr) as [-> | [a [Hin ->]]]; [exact Hl |].
+  exact (proj1 (Forall_forall _ _) Ha a Hin).
+Qed.
+
+Lemma graft_arg_scoped : forall L f a, scoped L f -> scoped L a -> scoped L (graft_arg f a).
+Proof.
+  intros L f a Hf. induction a; intros Ha; try (apply Scoped_App; assumption).
+  inversion Ha; subst. simpl. apply Scoped_If; auto.
+Qed.
+
+Lemma graft_scoped : forall L f a, scoped L f -> scoped L a -> scoped L (graft f a).
+Proof.
+  intros L f a Hf Ha. induction f; try (apply graft_arg_scoped; assumption).
+  inversion Hf; subst. simpl. apply Scoped_If; auto.
+Qed.
+
+Lemma lift_branches_scoped : forall L e, scoped L e -> scoped L (lift_branches e).
+Proof.
+  intros L e. induction e; intros H; try exact H.
+  - inversion H; subst. simpl. apply graft_scoped; auto.
+  - inversion H; subst. simpl. apply Scoped_If; auto.
+Qed.
+
+Lemma fold_leaves_scoped : forall L e, scoped L e -> scoped L (fold_leaves e).
+Proof.
+  intros L e. induction e; intros H; try (apply fold_leaf_scoped; exact H).
+  inversion H; subst. simpl. apply Scoped_If; auto.
+Qed.
+
+Lemma unbranched_scoped : forall p args,
+  Forall closed_term args -> closed_term (reduce_unbranched p args).
+Proof.
+  intros p args H. unfold reduce_unbranched.
+  destruct (Nat.eqb (length args) (model_arity p)); [| apply Scoped_Lit].
+  apply fold_leaves_scoped. apply lift_branches_scoped.
+  apply scoped_fold_left_app; [exact H | apply Scoped_PrimOp].
+Qed.
+
+Lemma split_arg_scoped : forall K a,
+  closed_term a -> (forall a', closed_term a' -> closed_term (K a')) -> closed_term (split_arg K a).
+Proof.
+  intros K a. induction a; intros Ha HK; try (apply HK; exact Ha).
+  unfold closed_term in Ha. inversion Ha; subst. simpl.
+  apply Scoped_If; [assumption | apply IHa2 | apply IHa3]; assumption.
+Qed.
+
+Lemma split_args_scoped : forall args k,
+  Forall closed_term args ->
+  (forall ls, Forall closed_term ls -> closed_term (k ls)) ->
+  closed_term (split_args k args).
+Proof.
+  induction args as [| a rest IH]; intros k Hargs Hk; [apply Hk; constructor |].
+  inversion Hargs; subst. cbn [split_args].
+  apply split_arg_scoped; [assumption |].
+  intros a' Ha'. apply IH; [assumption |].
+  intros ls Hls. apply Hk. constructor; assumption.
+Qed.
+
+#[export] Instance model_reduce_prim_scoped : ReducePrimScoped.
+Proof.
+  intros p args H.
+  change (closed_term (model_reduce_prim p args)). unfold model_reduce_prim.
+  apply split_args_scoped; [exact H |].
+  intros ls Hls. unfold simplify_unbranched.
+  destruct (simplify p ls) as [r |] eqn:Hs; [| exact (unbranched_scoped p ls Hls)].
+  apply (simplify_result closed_term p ls r ltac:(apply Scoped_Lit)); [| exact Hs].
+  eapply Forall_impl; [| exact Hls]. intros a Ha. exact (fold_leaf_scoped nil a Ha).
+Qed.
+
+#[export] Instance model_cast_expr_scoped : CastExprScoped.
+Proof. intros e γ H. exact H. Qed.
 
 #[export] Instance model_reduce_prim_denote : ReducePrimDenote.
 Proof.
@@ -744,7 +1107,10 @@ Proof.
   unfold model_reduce_prim.
   destruct (denote_args σ S args ls HF) as [pcs [Hds _]].
   rewrite (split_args_not_if _ args (flat_all_not_if _ (denotes_all_flat S args pcs Hds))).
-  apply unbranched_denote. exact HF.
+  unfold simplify_unbranched.
+  destruct (simplify p args) as [r |] eqn:Hs; [| apply unbranched_denote; exact HF].
+  destruct (simplify_facts p args r Hs) as [Ht Hr].
+  exact (proj1 (rewrite_prim_value σ S p args ls r Ht HF Hr)).
 Qed.
 
 #[export] Instance model_reduce_prim_ground_value : ReducePrimGroundValue.
@@ -753,9 +1119,13 @@ Proof.
   change (smt_ground (model_reduce_prim p args) = true) in H.
   change (exists l, model_reduce_prim p args = ELit l).
   unfold model_reduce_prim in *.
-  destruct (split_args_top (reduce_unbranched p) args) as [E | E].
-  - rewrite E in *. apply unbranched_ground_value. exact H.
-  - destruct (split_args (reduce_unbranched p) args); simpl in E, H; discriminate.
+  destruct (split_args_top (simplify_unbranched p) args) as [E | E].
+  - rewrite E in *. unfold simplify_unbranched in *.
+    destruct (simplify p args) as [r |] eqn:Hs; [| apply unbranched_ground_value; exact H].
+    destruct (simplify_facts p args r Hs) as [_ Hr].
+    destruct (rewrite_prim_shape p args r Hr) as [-> | [a [_ ->]]];
+      [eexists; reflexivity | exact (fold_leaf_ground a H)].
+  - destruct (split_args (simplify_unbranched p) args); simpl in E, H; discriminate.
 Qed.
 
 #[export] Instance model_reduce_prim_saturated : ReducePrimSaturated.
@@ -764,9 +1134,15 @@ Proof.
   change (unspool_app (model_reduce_prim p args) nil = (EPrimOp p0, args0)) in H.
   change (length args0 = model_arity p0).
   unfold model_reduce_prim in H.
-  destruct (split_args_top (reduce_unbranched p) args) as [E | E].
-  - rewrite E in H. exact (unbranched_saturated p args p0 args0 H).
-  - destruct (split_args (reduce_unbranched p) args); simpl in E, H; discriminate.
+  destruct (split_args_top (simplify_unbranched p) args) as [E | E].
+  - rewrite E in H. unfold simplify_unbranched in H.
+    destruct (simplify p args) as [r |] eqn:Hs; [| exact (unbranched_saturated p args p0 args0 H)].
+    destruct (simplify_facts p args r Hs) as [Ht Hr].
+    destruct (rewrite_prim_shape p args r Hr) as [-> | [a [Hin ->]]]; [discriminate H |].
+    unfold fold_leaf in H. destruct (smt_ground a); [discriminate H |].
+    pose proof (smt_need_unspool a 0 nil p0 args0 (proj1 (Forall_forall _ _) Ht a Hin) H) as E0.
+    simpl in E0. lia.
+  - destruct (split_args (simplify_unbranched p) args); simpl in E, H; discriminate.
 Qed.
 
 #[export] Instance model_reduce_prim_solvable : ReducePrimSolvable.
@@ -776,7 +1152,10 @@ Proof.
   assert (Hflat : Forall (fun a => flat a = true) args)
     by (eapply Forall_impl; [| exact HF]; apply solvable_flat).
   rewrite (split_args_not_if _ args (flat_all_not_if _ Hflat)).
-  apply unbranched_solvable. exact HF.
+  unfold simplify_unbranched.
+  destruct (simplify p args) as [r |] eqn:Hs; [| apply unbranched_solvable; exact HF].
+  apply (simplify_result (Solvable Γ) p args r ltac:(apply Solvable_Lit)); [| exact Hs].
+  eapply Forall_impl; [| exact HF]. apply fold_leaf_solvable.
 Qed.
 
 #[export] Instance model_reduce_prim_concore : ReducePrimConcore.
@@ -786,71 +1165,11 @@ Proof.
   assert (Hflat : Forall (fun a => flat a = true) args)
     by (eapply Forall_impl; [| exact HF]; apply concore_flat).
   rewrite (split_args_not_if _ args (flat_all_not_if _ Hflat)).
-  apply unbranched_concore. exact HF.
+  unfold simplify_unbranched.
+  destruct (simplify p args) as [r |] eqn:Hs; [| apply unbranched_concore; exact HF].
+  apply (simplify_result concore_expr p args r ltac:(apply Con_Lit)); [| exact Hs].
+  eapply Forall_impl; [| exact HF]. apply fold_leaf_concore.
 Qed.
-
-#[export] Instance model_reduce_prim_ite_contains : ReducePrimIteContains.
-Proof.
-  intros σ S ec et ef pt pf l Ht Hf Hc.
-  change (contains σ S (model_reduce_prim PIte (ec :: et :: ef :: nil)) (ELit l)).
-  unfold model_reduce_prim.
-  destruct (ite_selects_arm σ S ec et ef pt pf l Ht Hf Hc) as [pc [Hdc _]].
-  assert (Hflat : Forall (fun a => flat a = true) (ec :: et :: ef :: nil))
-    by (repeat constructor; eapply denotes_flat; eassumption).
-  rewrite (split_args_not_if _ _ (flat_all_not_if _ Hflat)).
-  exact (unbranched_ite_contains σ S ec et ef pt pf l Ht Hf Hc).
-Qed.
-
-#[export] Instance model_laws : ConCoreLaws.
-Proof. constructor; exact _. Qed.
-
-#[export] Instance model_reduce_prim_branch : ReducePrimBranch.
-Proof.
-  intros p pre ec et ef post H.
-  exact (split_args_branch (reduce_unbranched p) pre ec et ef post H).
-Qed.
-
-#[export] Instance model_cast_expr_branch : CastExprBranch.
-Proof. intros ec et ef γ. reflexivity. Qed.
-
-#[export] Instance model_symfc_laws : SymFCLaws.
-Proof. constructor; exact _. Qed.
-
-(** ========================================================================= *)
-(** 7. What the model shows                                                    *)
-(** ========================================================================= *)
-
-Theorem model_negation_is_satisfiable : prim_value op_not (false :: nil) = lit_true.
-Proof. reflexivity. Qed.
-
-Corollary some_literal_satisfies_negation :
-  ~ (forall l : lit, prim_value op_not (l :: nil) <> lit_true).
-Proof. intros H. exact (H false model_negation_is_satisfiable). Qed.
-
-Theorem model_soundness_takes_else_branch :
-  exists v_con,
-    ⊢ᶜ else_match true false ⇓ᶜ v_con /\
-    contains (else_model false) (only branch_var) (branch_on_x (ELit true) (ELit false)) v_con.
-Proof. exact (soundness_takes_else_branch false model_negation_is_satisfiable true false). Qed.
-
-Corollary model_else_branch_value : forall v,
-  ⊢ᶜ else_match true false ⇓ᶜ v -> v = ELit false.
-Proof.
-  intros v Hv.
-  exact (concore_eval_deterministic_top _ _ _ (else_match_concore true false) Hv
-           (else_match_reads_else_arm true false)).
-Qed.
-
-Theorem model_soundness_on_negation : forall σ x,
-  σ ⊨ pc_true ->
-  exists v_con,
-    ⊢ᶜ EApp (EPrimOp PNot) (ELit (σ x)) ⇓ᶜ v_con /\
-    contains σ (only x) (reduce_prim PNot (EVar x :: nil)) v_con.
-Proof.
-  exact (soundness_on_computing_primitive PNot eq_refl (fun x => eq_refl)).
-Qed.
-
-
 
 Inductive picks_k (σ : valuation) (S : symvars) : nat -> expr -> expr -> Prop :=
   | picks_k_leaf : forall e, is_if e = false -> picks_k σ S 0 e e
@@ -1054,16 +1373,108 @@ Proof.
   apply (IH (fun rest' => K (L :: rest'))). exact Hk.
 Qed.
 
+
+Lemma ground_flat : forall a, smt_ground a = true -> flat a = true.
+Proof. intros a H. exact (solvable_flat · a (smt_ground_solvable a · H)). Qed.
+
+Lemma op_spine_pc : forall args pcs h (q : model_primop) acc,
+  Forall2 (fun a pc => expr_to_pc · a = Some pc) args pcs ->
+  expr_to_pc · h = Some (PCPrim q acc) ->
+  expr_to_pc · (fold_left EApp args h) = Some (PCPrim q (acc ++ pcs)).
+Proof.
+  intros args pcs h q acc H. revert h acc.
+  induction H as [| a pc args pcs Ha _ IH]; intros h acc Hh.
+  - rewrite app_nil_r. exact Hh.
+  - simpl. replace (acc ++ pc :: pcs) with ((acc ++ pc :: nil) ++ pcs)
+      by (rewrite <- app_assoc; reflexivity).
+    apply IH. simpl. rewrite Hh, Ha. reflexivity.
+Qed.
+
+Lemma op_spine_ground : forall args h,
+  Forall (fun a => smt_ground a = true) args ->
+  smt_ground h = true -> is_op_app h = true ->
+  smt_ground (fold_left EApp args h) = true.
+Proof.
+  intros args h H. revert h. induction H as [| a args Ha _ IH]; intros h Hh Hop; [exact Hh |].
+  simpl. apply IH; simpl; [rewrite Hop, Hh, Ha; reflexivity | exact Hop].
+Qed.
+
+Lemma unbranched_ground : forall p args,
+  length args = model_arity p -> Forall (fun a => smt_ground a = true) args ->
+  reduce_unbranched p args = ELit (model_prim_value p (map closed_value args)).
+Proof.
+  intros p args Hlen Hg. unfold reduce_unbranched.
+  rewrite (proj2 (Nat.eqb_eq _ _) Hlen).
+  assert (Hflat : Forall (fun a => flat a = true) args)
+    by (eapply Forall_impl; [| exact Hg]; exact ground_flat).
+  rewrite (lift_flat _ (op_spine_flat p args Hflat)), (fold_leaves_not_if _ (op_spine_not_if p args)).
+  unfold fold_leaf, op_spine.
+  rewrite (op_spine_ground args (@EPrimOp model_sorts p) Hg eq_refl eq_refl).
+  assert (Hpcs : exists pcs, Forall2 (fun a pc => expr_to_pc · a = Some pc) args pcs
+                   /\ map (pc_value closed_model) pcs = map closed_value args).
+  { clear Hlen Hflat. induction Hg as [| a args Ha _ [pcs [Hp Hv]]].
+    - exists nil. split; [constructor | reflexivity].
+    - destruct (solvable_expr_to_pc · a (smt_ground_solvable a · Ha)) as [pc Hpc].
+      exists (pc :: pcs). split; [constructor; assumption |].
+      cbn [map]. rewrite Hv, (closed_value_of a pc Hpc). reflexivity. }
+  destruct Hpcs as [pcs [Hp Hv]].
+  pose proof (op_spine_pc args pcs (@EPrimOp model_sorts p) p nil Hp eq_refl) as He. simpl in He.
+  rewrite (closed_value_of _ _ He).
+  change (ELit (model_prim_value p (map (pc_value closed_model) pcs))
+          = ELit (model_prim_value p (map closed_value args))).
+  rewrite Hv. reflexivity.
+Qed.
+
+Lemma arg_facts_k : forall σ S ks ls args_c,
+  Forall3 (contains_k σ S) ks ls args_c -> Forall closed_term args_c ->
+  Forall (fun a => smt_need a = Some 0) ls ->
+  Forall (fun c => smt_ground c = true) args_c /\
+  Forall2 (denote σ S) ls (map closed_value args_c) /\
+  list_sum (map smt_size ls) <= list_sum ks + list_sum (map ground_size args_c).
+Proof.
+  intros σ S ks ls args_c H. induction H as [| k L X ks ls args_c HLX _ IH]; intros Hcl Ht.
+  - split; [constructor | split; [constructor | simpl; lia]].
+  - inversion Hcl as [| X0 xs0 HclX Hcl']; subst. inversion Ht as [| L0 ls0 HtL Ht']; subst.
+    destruct (IH Hcl' Ht') as [Hg [Hd Hs]].
+    pose proof (contains_k_erase _ _ _ _ _ HLX) as HLX0.
+    pose proof (smt_need_closed_ground X 0 (contains_smt_need σ S L X 0 HLX0 HtL) HclX) as HgX.
+    destruct (ground_instance_denotes σ S L X HLX0 (smt_need_flat L 0 HtL) HgX)
+      as [pcL [pcX [HdL [HeX [Hv _]]]]].
+    split; [constructor; assumption |].
+    split.
+    + constructor; [| exact Hd].
+      exists pcL. split; [exact HdL |]. rewrite (closed_value_of X pcX HeX). exact Hv.
+    + pose proof (smt_size_contains_k _ _ _ _ _ HLX) as HsX.
+      simpl. unfold ground_size at 1. rewrite HgX. lia.
+Qed.
+
+Lemma simplified_contains_k : forall σ S p ks ls args_c,
+  Forall closed_term args_c -> Forall3 (contains_k σ S) ks ls args_c ->
+  exists k', k' <= list_sum ks + prim_slack args_c /\
+    contains_k σ S k' (simplify_unbranched p ls) (simplify_unbranched p args_c).
+Proof.
+  intros σ S p ks ls args_c Hcl HF.
+  unfold simplify_unbranched at 2. rewrite (simplify_closed_none p args_c Hcl).
+  unfold simplify_unbranched.
+  destruct (simplify p ls) as [r |] eqn:Hs; [| exact (unbranched_contains_k σ S p ks ls args_c HF)].
+  destruct (simplify_facts p ls r Hs) as [Ht Hr].
+  destruct (arg_facts_k σ S ks ls args_c HF Hcl Ht) as [Hg [Hd Hsz]].
+  destruct (rewrite_prim_value σ S p ls _ r Ht Hd Hr) as [_ [k [Hk Hck]]].
+  rewrite (unbranched_ground p args_c); [| | exact Hg].
+  - exists k. split; [unfold prim_slack; lia | exact Hck].
+  - rewrite <- (forall3_length_right _ _ _ _ _ _ _ HF). exact (rewrite_prim_arity p ls r Hr).
+Qed.
+
 #[export] Instance model_reduce_prim_contains_k : ReducePrimContainsK.
 Proof.
-  intros σ S p ks args_s args_c HF.
+  intros σ S p ks args_s args_c Hcl HF.
   change (exists k', k' <= list_sum ks + prim_slack args_c /\
     contains_k σ S k' (model_reduce_prim p args_s) (model_reduce_prim p args_c)).
   unfold model_reduce_prim.
   rewrite (split_args_not_if _ args_c
              (contains_instances_not_if σ S _ _ (forall3_contains_k_erase _ _ _ _ _ HF))).
   destruct (contains_k_args_picks σ S _ _ _ HF) as [kps [kls [ls [Hp [Hc Hs]]]]].
-  destruct (unbranched_contains_k σ S p kls ls args_c Hc) as [k' [Hk' Hc']].
+  destruct (simplified_contains_k σ S p kls ls args_c Hcl Hc) as [k' [Hk' Hc']].
   exists (list_sum kps + k'). split; [lia |].
   exact (picks_k_split_args σ S _ _ _ Hp _ _ _ Hc').
 Qed.
@@ -1071,38 +1482,46 @@ Qed.
 #[export] Instance model_cast_expr_contains_k : CastExprContainsK.
 Proof. intros σ S k es ec γ H. exact H. Qed.
 
-#[export] Instance model_reduce_prim_ite_contains_k : ReducePrimIteContainsK.
-Proof.
-  intros σ S k ec et ef pt pf l Ht Hf Hc.
-  change (exists k', k' <= k + smt_size et + smt_size ef + 3 /\
-    contains_k σ S k' (model_reduce_prim PIte (ec :: et :: ef :: nil)) (ELit l)).
-  pose proof (contains_k_erase _ _ _ _ _ Hc) as Hc0.
-  destruct (ite_selects_arm σ S ec et ef pt pf l Ht Hf Hc0) as [pc [Hdc Hv]].
-  destruct (contains_k_if_inv σ S _ _ _ _ _ Hc) as [k0 [Hk _]].
-  assert (Hflat : Forall (fun a => flat a = true) (ec :: et :: ef :: nil))
-    by (repeat constructor; eapply denotes_flat; eassumption).
-  unfold model_reduce_prim.
-  rewrite (split_args_not_if _ _ (flat_all_not_if _ Hflat)).
-  unfold reduce_unbranched.
-  replace (Nat.eqb (length (ec :: et :: ef :: nil)) (model_arity PIte)) with true by reflexivity.
-  rewrite (lift_flat _ (op_spine_flat _ _ Hflat)), (fold_leaves_not_if _ (op_spine_not_if _ _)).
-  assert (Hd : denotes S (op_spine PIte (ec :: et :: ef :: nil)) (PCPrim PIte (pc :: pt :: pf :: nil))).
-  { apply (op_spine_denotes S (ec :: et :: ef :: nil) (pc :: pt :: pf :: nil) ltac:(repeat constructor; assumption) (EPrimOp op_ite) op_ite nil).
-    intros Γ _. reflexivity. }
-  unfold fold_leaf. destruct (smt_ground (op_spine PIte (ec :: et :: ef :: nil))) eqn:Hg.
-  - pose proof (Hd · (sym_free_env_empty S)) as He.
-    rewrite (closed_value_of _ _ He).
-    destruct (ground_pc_value _ _ closed_model σ Hg He) as [Hcl _].
-    rewrite Hcl, Hv. exists 0. split; [lia | apply ContK_Lit].
-  - exists (smt_size (op_spine PIte (ec :: et :: ef :: nil))).
-    split; [simpl; lia |].
-    apply (ContK_Denote σ S _ op_ite (ec :: et :: ef :: nil) l).
-    + apply op_spine_unspool.
-    + reflexivity.
-    + exact Hg.
-    + exists (PCPrim op_ite (pc :: pt :: pf :: nil)). split; [exact Hd | exact Hv].
-Qed.
+#[export] Instance model_reduce_prim_contains : ReducePrimContains.
+Proof. exact (reduce_prim_contains_of_k model_reduce_prim_contains_k). Qed.
+
+#[export] Instance model_laws : ConCoreLaws.
+Proof. constructor; exact _. Qed.
 
 #[export] Instance model_symfc_cost_laws : SymFCCostLaws.
 Proof. constructor; exact _. Qed.
+
+(** ========================================================================= *)
+(** 7. What the model shows                                                    *)
+(** ========================================================================= *)
+
+Theorem model_negation_is_satisfiable : prim_value op_not (false :: nil) = lit_true.
+Proof. reflexivity. Qed.
+
+Corollary some_literal_satisfies_negation :
+  ~ (forall l : lit, prim_value op_not (l :: nil) <> lit_true).
+Proof. intros H. exact (H false model_negation_is_satisfiable). Qed.
+
+Theorem model_soundness_takes_else_branch :
+  exists v_con,
+    ⊢ᶜ else_match true false ⇓ᶜ v_con /\
+    contains (else_model false) (only branch_var) (branch_on_x (ELit true) (ELit false)) v_con.
+Proof. exact (soundness_takes_else_branch false model_negation_is_satisfiable true false). Qed.
+
+Corollary model_else_branch_value : forall v,
+  ⊢ᶜ else_match true false ⇓ᶜ v -> v = ELit false.
+Proof.
+  intros v Hv.
+  exact (concore_eval_deterministic_top _ _ _ (else_match_concore true false) Hv
+           (else_match_reads_else_arm true false)).
+Qed.
+
+Theorem model_soundness_on_negation : forall σ x,
+  σ ⊨ pc_true ->
+  exists v_con,
+    ⊢ᶜ EApp (EPrimOp PNot) (ELit (σ x)) ⇓ᶜ v_con /\
+    contains σ (only x) (reduce_prim PNot (EVar x :: nil)) v_con.
+Proof.
+  exact (soundness_on_computing_primitive PNot eq_refl (fun x => eq_refl)).
+Qed.
 
