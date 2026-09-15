@@ -199,3 +199,155 @@ Proof.
 Qed.
 
 End RuleDisjointness.
+
+Section BoundedDeterminism.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
+Definition tainted_field_var : var := "z".
+
+Definition identity_lam : expr := ELam "y" (EVar "y").
+
+Definition tainted_env : environment :=
+  ExtendEnv tainted_field_var (MkClosure · (EBot BOutOfFuel)) ·.
+
+Definition tainted_closure : expr := EThunk tainted_env identity_lam.
+
+Definition spent_scrutinee (γ : coercion) (l : lit) : expr :=
+  ECast (EThunk · (EThunk · (ELit l))) γ.
+
+Definition branch_alts (l : lit) : list alt :=
+  Alt "A" nil (ELit l) :: Alt "B" nil (ELit l) :: nil.
+
+Definition tainted_body (γ : coercion) (l : lit) : expr :=
+  ECase (ECast identity_lam γ) (branch_alts l).
+
+Definition tainted_program (γ : coercion) (l : lit) : expr :=
+  ECase (spent_scrutinee γ l) (Alt "D" (tainted_field_var :: nil) (tainted_body γ l) :: nil).
+
+Definition tainted_fuel : nat := 4.
+
+Definition CastsSpentBottomToField (γ : coercion) : Prop :=
+  cast_expr (EBot BOutOfFuel) γ = EApp (ECon "D") (EBot BOutOfFuel).
+
+Definition CastsTaintedClosureToBranch (γ : coercion) : Prop :=
+  cast_expr tainted_closure γ = EIf (EVar guard_var) (ECon "A") (ECon "B").
+
+Lemma tainted_program_concore : forall γ l, concore_expr (tainted_program γ l).
+Proof. intros γ l. repeat constructor. Qed.
+
+Lemma tainted_closure_not_concore : ~ concore_expr tainted_closure.
+Proof.
+  unfold tainted_closure, tainted_env. intros H. inversion H; subst.
+  match goal with
+  | [ Henv : concrete_env (ExtendEnv _ _ _) |- _ ] => inversion Henv; subst
+  end.
+  match goal with
+  | [ Hbot : concore_expr (EBot BOutOfFuel) |- _ ] => exact (out_of_fuel_not_concore Hbot)
+  end.
+Qed.
+
+Lemma contains_thunk_concrete_env : forall σ S es ec,
+  contains σ S es ec -> forall Γc e, ec = EThunk Γc e -> concrete_env Γc.
+Proof.
+  intros σ S es ec H.
+  induction H; intros Γ0 e0 Heq; try discriminate Heq; eauto.
+  injection Heq as <- <-. eapply contains_env_concrete. eassumption.
+Qed.
+
+Lemma tainted_closure_contains_nothing : forall σ S es,
+  ~ contains σ S es tainted_closure.
+Proof.
+  intros σ S es H.
+  apply tainted_closure_not_concore.
+  pose proof (contains_thunk_concrete_env σ S es tainted_closure H tainted_env identity_lam eq_refl) as Henv.
+  constructor; [exact Henv | repeat constructor].
+Qed.
+
+Lemma tainted_program_value : forall γ l,
+  CastsSpentBottomToField γ ->
+  CastsTaintedClosureToBranch γ ->
+  forall arm, eval (Fin 2) (pc_true ∧ PCVar guard_var) tainted_env (ELit l) arm ->
+  eval (Fin tainted_fuel) pc_true · (tainted_program γ l)
+    (EIf (EVar guard_var) arm (ELit l)).
+Proof.
+  intros γ l Hfield Hbranch arm Harm.
+  unfold tainted_program, tainted_fuel.
+  eapply Eval_Case with (es' := cast_expr (EBot BOutOfFuel) γ).
+  - apply Eval_Cast. apply Eval_Thunk. apply Eval_Thunk. apply Eval_OutOfFuel.
+  - rewrite Hfield. cbn.
+    eapply FoldAlts_Con; [reflexivity | reflexivity |].
+    cbn. unfold tainted_body.
+    eapply Eval_Case with (es' := cast_expr tainted_closure γ).
+    + apply Eval_Cast. apply Eval_Lam.
+    + rewrite Hbranch. cbn.
+      eapply FoldAlts_If; [reflexivity | |].
+      * eapply FoldAlts_Con; [reflexivity | reflexivity | exact Harm].
+      * eapply FoldAlts_Con; [reflexivity | reflexivity | apply Eval_Lit].
+Qed.
+
+Theorem bounded_concrete_determinism_fails : forall γ,
+  CastsSpentBottomToField γ ->
+  CastsTaintedClosureToBranch γ ->
+  sat (pc_true ∧ PCVar guard_var) = false ->
+  exists n e v1 v2,
+    concore_expr e /\
+    eval (Fin n) pc_true · e v1 /\
+    eval (Fin n) pc_true · e v2 /\
+    v1 <> v2.
+Proof.
+  intros γ Hfield Hbranch Hunsat. set (l := lit_true).
+  exists tainted_fuel, (tainted_program γ l),
+    (EIf (EVar guard_var) (ELit l) (ELit l)),
+    (EIf (EVar guard_var) (EBot BUnreachable) (ELit l)).
+  split; [apply tainted_program_concore |].
+  split; [apply tainted_program_value; [exact Hfield | exact Hbranch | apply Eval_Lit] |].
+  split; [apply tainted_program_value; [exact Hfield | exact Hbranch | apply Eval_Prune; exact Hunsat] |].
+  discriminate.
+Qed.
+
+Corollary bounded_concrete_determinism_not_provable : forall γ,
+  CastsSpentBottomToField γ ->
+  CastsTaintedClosureToBranch γ ->
+  sat (pc_true ∧ PCVar guard_var) = false ->
+  ~ (forall n Γ e v1 v2,
+       concrete_env Γ -> concore_expr e ->
+       eval (Fin n) pc_true Γ e v1 -> eval (Fin n) pc_true Γ e v2 -> v1 = v2).
+Proof.
+  intros γ Hfield Hbranch Hunsat Hdet.
+  destruct (bounded_concrete_determinism_fails γ Hfield Hbranch Hunsat)
+    as (n & e & v1 & v2 & Hcon & H1 & H2 & Hneq).
+  exact (Hneq (Hdet n · e v1 v2 CEnv_Empty Hcon H1 H2)).
+Qed.
+
+Lemma spent_field_contains_itself : forall σ S,
+  contains σ S (EApp (ECon "D") (EBot BOutOfFuel)) (EApp (ECon "D") (EBot BOutOfFuel)).
+Proof. intros σ S. repeat constructor. Qed.
+
+Definition tainted_alts (γ : coercion) : list alt :=
+  Alt "C" nil (tainted_program γ lit_true) :: nil.
+
+Corollary bounded_concrete_fold_alts_determinism_not_provable : forall γ,
+  CastsSpentBottomToField γ ->
+  CastsTaintedClosureToBranch γ ->
+  sat (pc_true ∧ PCVar guard_var) = false ->
+  ~ (forall n Γ e alts r1 r2,
+       concrete_env Γ -> concore_expr e -> Forall concore_alt alts ->
+       fold_alts (Fin n) pc_true Γ e alts r1 ->
+       fold_alts (Fin n) pc_true Γ e alts r2 -> r1 = r2).
+Proof.
+  intros γ Hfield Hbranch Hunsat Hdet.
+  assert (Halts : Forall concore_alt (tainted_alts γ))
+    by (repeat constructor).
+  assert (Hneq : EIf (EVar guard_var) (ELit lit_true) (ELit lit_true) <>
+                 EIf (EVar guard_var) (EBot BUnreachable) (ELit lit_true))
+    by discriminate.
+  apply Hneq.
+  apply (Hdet tainted_fuel · (ECon "C") (tainted_alts γ)); [constructor | constructor | exact Halts | |].
+  - eapply FoldAlts_Con; [reflexivity | reflexivity |].
+    apply tainted_program_value; [exact Hfield | exact Hbranch | apply Eval_Lit].
+  - eapply FoldAlts_Con; [reflexivity | reflexivity |].
+    apply tainted_program_value; [exact Hfield | exact Hbranch | apply Eval_Prune; exact Hunsat].
+Qed.
+
+End BoundedDeterminism.
+
