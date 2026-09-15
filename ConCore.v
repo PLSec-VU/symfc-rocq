@@ -3329,6 +3329,8 @@ Fixpoint concore_soundness_fix (k0 : fuel) (Φ : path_condition) (Γs : environm
     contains σ S e_sym e_con ->
     concore_expr e_con ->
     closed_instance Γc e_con ->
+    sym_scoped_env S Γs ->
+    sym_scoped S (dom_env Γs) e_sym ->
     exists v_con,
       Γc ⊢ᶜ e_con ⇓ᶜ v_con /\
       contains σ S v_sym v_con
@@ -3344,6 +3346,9 @@ with concore_soundness_fold_fix (k0 : fuel) (Φ : path_condition) (Γs : environ
     Forall (scoped_alt (dom_env Γc)) altsc ->
     (exists vc_s, Γc ⊢ᶜ esc ⇓ᶜ vc_s /\ contains σ S escrut vc_s) ->
     Forall2 (contains_alt σ S) alts altsc ->
+    sym_scoped_env S Γs ->
+    sym_scoped S nil escrut ->
+    Forall (sym_scoped_alt S (dom_env Γs)) alts ->
     exists v_con,
       Γc ⊢ᶜ ECase esc altsc ⇓ᶜ v_con /\ contains σ S er v_con.
 Proof.
@@ -3369,7 +3374,8 @@ Proof.
     | kv Φ Γ τ
     | kv Φ Γ Γ' e e' Heval_t
     | Φ Γ e
-    ]; intros Hk0; try discriminate Hk0; injection Hk0 as Hk0; subst kv; intros Γc σ S e_con Hmod Henv Hcont Hcon Hcl.
+    ]; intros Hk0; try discriminate Hk0; injection Hk0 as Hk0; subst kv;
+      intros Γc σ S e_con Hmod Henv Hcont Hcon Hcl HsymE Hsym.
   - (* Eval_Var *)
     assert (Hfree : sym_free_env S Γ)
       by (destruct (contains_env_sym_free σ S Γ Γc Henv) as [Hf _]; exact Hf).
@@ -3379,8 +3385,9 @@ Proof.
     assert (Hcon' : concore_expr ec) by (apply (lookup_env_concore σ S Γ Γc x Γ' e Γ'c ec Henv Hlookup Hlookc)).
     destruct (closed_instance_program Γc (EVar x) Hcl eq_refl) as [HΓc _].
     destruct (lookup_env_scoped Γc x Γ'c ec HΓc Hlookc) as [HΓ'c Hsc'].
+    destruct (sym_lookup_env_scoped S Γ x Γ' e HsymE Hlookup) as [HsymE' Hsym'].
     destruct (concore_soundness_fix Inf Φ Γ' e e' Heval_x eq_refl Γ'c σ S ec Hmod Henv' Hcont' Hcon'
-                (or_introl (conj HΓ'c Hsc'))) as [v_con [Hevalc Hcont_v]].
+                (or_introl (conj HΓ'c Hsc')) HsymE' Hsym') as [v_con [Hevalc Hcont_v]].
     exists v_con. split; [| exact Hcont_v].
     unfold eval_con. eapply Eval_Var; eassumption.
   - (* Eval_SymVar: an unbound variable is its own value. Either it is one of
@@ -3414,8 +3421,9 @@ Proof.
     inversion Hcon as [| | | | | | | ec0 γ0 Hcon_e | | | | | | ]; subst.
     destruct (closed_instance_program Γc _ Hcl eq_refl) as [HΓc Hsc].
     inversion Hsc as [| | | | | | | L1 e1 γ1 Hsce | | | | |]; subst.
+    inversion Hsym as [| | | | | | | L2 e2 γ2 Hsym_e | | | | |]; subst.
     destruct (concore_soundness_fix Inf Φ Γ e e' Heval_e eq_refl Γc σ S ec Hmod Henv Hcont_e Hcon_e
-                (or_introl (conj HΓc Hsce))) as [vc [Hevalc Hcont_v]].
+                (or_introl (conj HΓc Hsce)) HsymE Hsym_e) as [vc [Hevalc Hcont_v]].
     exists (cast_expr vc γ). split; [unfold eval_con; apply Eval_Cast; exact Hevalc | apply cast_expr_contains; exact Hcont_v].
   - (* Eval_AppAbs *)
     assert (Hfree : sym_free_env S Γ)
@@ -3433,9 +3441,15 @@ Proof.
     inversion Hsclam as [| | | | | L2 x2 b2 Hscb | | | | | | |]; subst.
     assert (Henv_ext : contains_env σ S (ExtendEnv x (MkClosure Γ ea) Γ') (ExtendEnv x (MkClosure Γc ac) Γ'c)).
     { apply Cont_Env_Extend; assumption. }
+    inversion Hsym as [| | | | L3 f3 a3 Hsymf Hsyma | | | | | | | |]; subst.
+    inversion Hsymf as [| | | | | | | | | | | | L4 Γ4 e4 HsymΓ' Hsymlam]; subst.
+    inversion Hsymlam as [| | | | | L5 x5 b5 Hsymb | | | | | | |]; subst.
+    assert (HsymE_ext : sym_scoped_env S (ExtendEnv x (MkClosure Γ ea) Γ'))
+      by (apply SymScoped_Env_Extend; assumption).
     destruct (concore_soundness_fix Inf Φ (extend_env Γ' x Γ ea) eb eb' Heval_b eq_refl
                 (ExtendEnv x (MkClosure Γc ac) Γ'c) σ S ebc Hmod Henv_ext Hcont_b Hcon_b
-                (or_introl (conj (Scoped_Env_Extend x Γc ac Γ'c HΓc Hsca HΓ'c) Hscb)))
+                (or_introl (conj (Scoped_Env_Extend x Γc ac Γ'c HΓc Hsca HΓ'c) Hscb))
+                HsymE_ext Hsymb)
       as [v_con [Heval_b' Hcont_v]].
     exists v_con. split; [| exact Hcont_v].
     unfold eval_con. apply Eval_AppAbs. exact Heval_b'.
@@ -3616,8 +3630,12 @@ Proof.
     | kv Φ Γ ec et ef alts Hpc_none
     | kv Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
     | kv Φ Γ b alts
-    | kv Φ Γ e alts Hnothead Hnoalt Hnotbot
-    ]; intros Hk0; subst kv; intros Γc σ S esc altsc Hmod Henv Hcon_esc Hcon_altsc Hcl_esc Hsc_altsc Hvc Halts.
+    | kv Φ Γ e pc alts r Hpcg Hvarg Hrec
+    | kv Φ Γ e pc alts r1 r2 Hpcs Hvars Hars Hf1 Hf2
+    | kv Φ Γ e alts Hpcnone Hopnone Hnothead Hnoalt Hnotbot
+    ]; intros Hk0; subst kv;
+      intros Γc σ S esc altsc Hmod Henv Hcon_esc Hcon_altsc Hcl_esc Hsc_altsc Hvc Halts
+             HsymE Hsym_scrut Hsym_alts.
   - (* FoldAlts_If *)
     destruct Hvc as [vc_s [Heval_esc Hcont_vs]].
     inversion Hcont_vs; subst.
