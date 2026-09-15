@@ -190,4 +190,122 @@ Section LoopingArmUnderCase.
 
 End LoopingArmUnderCase.
 
+Section AppliedCaseWithBranchScrutinee.
+  Variables (Φ : path_condition) (σ : valuation) (S : symvars).
+  Variables (x : var) (la : lit).
+
+  Hypothesis HmodPhi : σ ⊨ Φ.
+  Hypothesis Hsx     : S x = true.
+  Hypothesis Hmodx   : σ ⊨ PCVar x.
+  Hypothesis Hsy     : S "y" = false.
+  Hypothesis Hsz     : S "z" = false.
+
+  Definition app_alts : list alt :=
+    Alt "T" [] (ELam "y" (EVar "y")) :: Alt "F" [] (ELam "z" (EVar "z")) :: nil.
+  Definition app_case : expr := ECase (EIf (EVar x) (ECon "T") (ECon "F")) app_alts.
+  Definition app_sym : expr := EApp app_case (ELit la).
+  Definition app_case_con : expr := ECase (ECon "T") app_alts.
+  Definition app_con : expr := EApp app_case_con (ELit la).
+
+  Lemma app_guard_cond : models_cond σ S (EVar x).
+  Proof.
+    exists (PCVar x). split; [| exact Hmodx].
+    intros Γ Hfree. simpl. rewrite (Hfree x Hsx). reflexivity.
+  Qed.
+
+  Lemma app_alts_contains : Forall2 (contains_alt σ S) app_alts app_alts.
+  Proof.
+    apply Forall2_cons; [| apply Forall2_cons; [| apply Forall2_nil]].
+    - apply Cont_Alt; [apply Forall_nil |].
+      apply Cont_Lam; [exact Hsy | apply Cont_Var_Bound; exact Hsy].
+    - apply Cont_Alt; [apply Forall_nil |].
+      apply Cont_Lam; [exact Hsz | apply Cont_Var_Bound; exact Hsz].
+  Qed.
+
+  Lemma app_contains : contains σ S app_sym app_con.
+  Proof.
+    apply Cont_App; [| apply Cont_Lit].
+    apply Cont_Case; [| exact app_alts_contains].
+    apply Cont_If_True; [exact app_guard_cond | apply Cont_Con].
+  Qed.
+
+  Lemma app_con_concore : concore_expr app_con.
+  Proof.
+    apply Con_App; [| apply Con_Lit].
+    apply Con_Case; [apply Con_Con |].
+    apply Forall_cons; [| apply Forall_cons; [| apply Forall_nil]];
+      apply Con_Alt; apply Con_Lam; apply Con_Var.
+  Qed.
+
+  Lemma app_con_converges : Φ ; · ⊢ app_con ⇓ (ELit la).
+  Proof.
+    unfold app_con, app_case_con.
+    eapply Eval_AppSpine.
+    - apply Comp_Case.
+    - eapply Eval_Case.
+      + eapply Eval_Con. reflexivity.
+      + simpl. eapply FoldAlts_Con.
+        * reflexivity.
+        * simpl. destruct (string_dec "T" "T"); [reflexivity | congruence].
+        * simpl. apply Eval_Lam.
+    - eapply Eval_AppAbs. simpl.
+      eapply Eval_Var.
+      + simpl. destruct (string_dec "y" "y"); [reflexivity | congruence].
+      + apply Eval_Lit.
+  Qed.
+
+  Lemma app_sym_converges : Φ ; · ⊢ app_sym ⇓ (EIf (EVar x) (ELit la) (ELit la)).
+  Proof.
+    unfold app_sym, app_case.
+    eapply Eval_AppSpine.
+    - apply Comp_Case.
+    - eapply Eval_Case.
+      + eapply Eval_If with (pc_c := PCVar x).
+        * apply Eval_SymVar. reflexivity.
+        * reflexivity.
+        * eapply Eval_Con. reflexivity.
+        * eapply Eval_Con. reflexivity.
+      + simpl. eapply FoldAlts_If.
+        * reflexivity.
+        * simpl. eapply FoldAlts_Con.
+          -- reflexivity.
+          -- simpl. destruct (string_dec "T" "T"); [reflexivity | congruence].
+          -- simpl. apply Eval_Lam.
+        * simpl. eapply FoldAlts_Con.
+          -- reflexivity.
+          -- simpl. destruct (string_dec "F" "T"); [congruence |].
+             simpl. destruct (string_dec "F" "F"); [reflexivity | congruence].
+          -- simpl. apply Eval_Lam.
+    - eapply Eval_AppIf.
+      + reflexivity.
+      + simpl. eapply Eval_If with (pc_c := PCVar x).
+        * apply Eval_SymVar. reflexivity.
+        * reflexivity.
+        * eapply Eval_AppAbs. simpl. eapply Eval_Var.
+          -- simpl. destruct (string_dec "y" "y"); [reflexivity | congruence].
+          -- apply Eval_Lit.
+        * eapply Eval_AppAbs. simpl. eapply Eval_Var.
+          -- simpl. destruct (string_dec "z" "z"); [reflexivity | congruence].
+          -- apply Eval_Lit.
+  Qed.
+
+  Lemma app_budget_total : budget_total Φ · app_sym.
+  Proof.
+    apply budget_total_of_terminating. exists (EIf (EVar x) (ELit la) (ELit la)).
+    exact app_sym_converges.
+  Qed.
+
+  Theorem app_target_conclusion :
+    exists h, forall n, (h <= n)%nat ->
+      exists v_sym, eval (Fin n) Φ · app_sym v_sym /\ contains σ S v_sym (ELit la).
+  Proof.
+    destruct (eval_inf_has_budget Φ · app_sym (EIf (EVar x) (ELit la) (ELit la))
+                app_sym_converges) as [h Hh].
+    exists h. intros n Hn. exists (EIf (EVar x) (ELit la) (ELit la)). split.
+    - apply Hh. exact Hn.
+    - apply Cont_If_True; [exact app_guard_cond | apply Cont_Lit].
+  Qed.
+
+End AppliedCaseWithBranchScrutinee.
+
 End Completeness.
