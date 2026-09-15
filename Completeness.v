@@ -30,6 +30,32 @@ Definition forall_form_lemma : Prop :=
       exists h, forall n, (h <= n)%nat ->
         forall v_sym, eval (Fin n) Φ Γs e_sym v_sym -> contains σ S v_sym v_con.
 
+(**
+  The existential corollary follows from the upward-closed target: fix a large
+  enough budget and read off one symbolic value that contains the concrete one.
+  Because EBot BOutOfFuel contains no ConCore term, the value delivered here is
+  never that bottom, so the corollary is not vacuous.
+*)
+Definition existential_corollary : Prop :=
+  forall Φ Γs Γc σ S e_sym e_con v_con,
+    σ ⊨ Φ ->
+    contains_env σ S Γs Γc ->
+    contains σ S e_sym e_con ->
+    concore_expr e_con ->
+    budget_total Φ Γs e_sym ->
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+    exists k v_sym, eval (Fin k) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
+
+Lemma existential_corollary_of_target :
+  target_completeness -> existential_corollary.
+Proof.
+  intros Htarget Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hbud Hevalc.
+  destruct (Htarget Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hbud Hevalc)
+    as [h Hh].
+  destruct (Hh h ltac:(lia)) as [v_sym [Heval Hcv]].
+  exists h, v_sym. split; assumption.
+Qed.
+
 Section BudgetTotalIsNecessary.
   Variables (Φ : path_condition) (σ : valuation) (S : symvars).
   Variables (x : var) (l l' : lit).
