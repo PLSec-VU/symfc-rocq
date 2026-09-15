@@ -419,6 +419,7 @@ Proof.
       rewrite Hl. reflexivity.
     + intros _. exists q, (qs ++ pa :: nil), (qsX ++ paX :: nil).
       split; [reflexivity | split; [reflexivity | exact Hl]].
+  - exfalso. destruct ec; discriminate.
   - destruct H2 as [pc [Hd Hv]].
     exists pc, (PCLit l).
     split; [exact Hd | split; [reflexivity | split; [exact Hv | intros Hop; discriminate Hop]]].
