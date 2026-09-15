@@ -544,7 +544,7 @@ Proof.
     | k Φ Γ ef ea p args args' Hunspool Harity Hargs
     | k Φ Γ x e
     | k Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | k Φ Γ ec et ef ea er Heval_arms
+    | k Φ Γ e1 e2 ec et ef args er Hunspool_if Heval_arms
     | k Φ Γ b ea
     | k Φ Γ es alts es' er Heval_es Hfold
     | k Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
@@ -600,8 +600,8 @@ Proof.
              er Heval_pushed eq_refl Hsat Henv).
     apply Con_Cast. apply Con_App; [assumption | apply Con_Cast; assumption].
   - (* Eval_AppIf *)
-    exfalso. inversion Hcon as [| | | | f a Hf Ha | | | | | | | | | ]; subst.
-    apply (not_concore_if ec et ef). assumption.
+    exfalso. apply (not_concore_if ec et ef).
+    exact (proj1 (unspool_app_concore _ [] _ args Hunspool_if Hcon (Forall_nil _))).
   - (* Eval_AppBot *)
     inversion Hcon; subst. assumption.
   - (* Eval_Case *)
@@ -1266,7 +1266,11 @@ Proof.
     exact (comp_not_solvable _ _ H Hf).
   - right. exists p, args, args'. repeat split; assumption.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
-  - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
+  - exfalso.
+    match goal with
+    | [ Hu : unspool_app (EApp _ _) _ = (EIf _ _ _, _) |- _ ] =>
+        exact (solvable_unspool_not_if _ _ _ _ _ _ _ Hsolv Hu)
+    end.
   - exfalso. inversion Hsolv as [| | | f a Hop Hf Ha]; subst. discriminate.
   - exfalso. apply models_sat in Hmod. congruence.
 Qed.
@@ -2036,7 +2040,7 @@ Proof.
     | kv Φ Γ ef ea p eargs eargs' Hunspool Harity Hargs
     | kv Φ Γ x eb
     | kv Φ Γ ef γ ea γ_a γ_r er Hdecomp Heval_pushed
-    | kv Φ Γ ec et ef ea er Heval_arms
+    | kv Φ Γ e1 e2 ec et ef args er Hunspool_if Heval_arms
     | kv Φ Γ b ea
     | kv Φ Γ es alts es' er Heval_es Hfold
     | kv Φ Γ ec et ef ec' et' ef' pc_c Heval_c Hpc Heval_t Heval_f
