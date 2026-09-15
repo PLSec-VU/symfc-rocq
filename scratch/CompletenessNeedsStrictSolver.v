@@ -67,4 +67,81 @@ Proof.
     model_subst_coerc_contains_env model_subst_type_contains_env).
 Qed.
 
-Print Assumptions stacking_laws.
+Definition Sg : symvars := fun v => String.eqb v guard_var.
+Definition sig : valuation := fun v => if String.eqb v guard_var then true else false.
+Definition wild_cast : coercion := MkCoercion (TyCon tt) (TyCon tt) RoleNominal.
+Definition diverging_untaken_arm : expr := ECast self_app wild_cast.
+Definition quarantine_sym : expr := EIf guard (ELit true) diverging_untaken_arm.
+Definition quarantine_con : expr := ELit true.
+
+Lemma sig_models_guard : @models model_sorts sig (PCVar guard_var).
+Proof. unfold models. cbn. reflexivity. Qed.
+
+Lemma guard_models_cond : models_cond sig Sg guard.
+Proof.
+  exists (PCVar guard_var). split; [| exact sig_models_guard].
+  intros Γ Hfree. cbn. rewrite (Hfree guard_var eq_refl). reflexivity.
+Qed.
+
+Lemma quarantine_contains : contains sig Sg quarantine_sym quarantine_con.
+Proof.
+  apply Cont_If_True; [apply guard_models_cond | apply Cont_Lit].
+Qed.
+
+Lemma quarantine_con_concore : concore_expr quarantine_con.
+Proof. apply Con_Lit. Qed.
+
+Lemma quarantine_env : contains_env sig Sg · ·.
+Proof. apply Cont_Env_Empty. Qed.
+
+Lemma sig_models_pc_true : @models model_sorts sig (@pc_true model_sorts stacking_solver).
+Proof. unfold models. cbn. reflexivity. Qed.
+
+Lemma quarantine_concrete :
+  @eval_con model_sorts stacking_solver · quarantine_con (ELit true).
+Proof. apply Eval_Lit. Qed.
+
+Lemma quarantine_value_at_fuel : forall n,
+  exists v, @eval model_sorts stacking_solver (Fin (S (S n))) pc_true · quarantine_sym v
+            /\ contains sig Sg v (ELit true).
+Proof.
+  intros n.
+  destruct (self_app_has_value_at_every_budget n (pc_true ∧ ¬ PCVar guard_var) ·)
+    as [sv Hsv].
+  eexists. split.
+  - unfold quarantine_sym, diverging_untaken_arm.
+    eapply Eval_If.
+    + apply Eval_SymVar. reflexivity.
+    + cbn. reflexivity.
+    + cbn. apply Eval_Lit.
+    + cbn. apply Eval_Cast. cbn. exact Hsv.
+  - apply Cont_If_True; [apply guard_models_cond | apply Cont_Lit].
+Qed.
+
+Lemma quarantine_budget_total :
+  @budget_total model_sorts stacking_solver pc_true · quarantine_sym.
+Proof.
+  exists 2. intros n Hn. destruct n as [| [| m]]; try lia.
+  destruct (quarantine_value_at_fuel m) as [v [Hv _]].
+  exists v. exact Hv.
+Qed.
+
+Theorem finding2_not_a_counterexample :
+  sig ⊨ pc_true /\
+  contains_env sig Sg · · /\
+  contains sig Sg quarantine_sym quarantine_con /\
+  concore_expr quarantine_con /\
+  budget_total pc_true · quarantine_sym /\
+  (· ⊢ᶜ quarantine_con ⇓ᶜ ELit true) /\
+  (exists h, forall n, (h <= n)%nat ->
+     exists v_sym, eval (Fin n) pc_true · quarantine_sym v_sym /\
+                   contains sig Sg v_sym (ELit true)).
+Proof.
+  refine (conj sig_models_pc_true (conj quarantine_env (conj quarantine_contains
+          (conj quarantine_con_concore (conj quarantine_budget_total
+          (conj quarantine_concrete _)))))).
+  exists 2. intros n Hn. destruct n as [| [| m]]; try lia.
+  apply quarantine_value_at_fuel.
+Qed.
+
+Print Assumptions finding2_not_a_counterexample.
