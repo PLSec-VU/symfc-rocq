@@ -1,5 +1,6 @@
 -Q . SymCoreTheory
 SymCore.v
 ConCore.v
+Completeness.v
 Model.v
 ApplicationRules.v
