@@ -810,6 +810,22 @@ Qed.
 Definition make_con_app (d : dcon) (args : list expr) : expr :=
   fold_left EApp args (ECon d).
 
+Definition delay (Γ : environment) (e : expr) : expr :=
+  match e with
+  | EThunk _ _ => e
+  | _ => EThunk Γ e
+  end.
+
+Lemma delay_delay : forall Γ Γ' e, delay Γ (delay Γ' e) = delay Γ' e.
+Proof. intros Γ Γ' e. destruct e; reflexivity. Qed.
+
+Lemma map_delay_delay : forall Γ Γ' args,
+  map (delay Γ) (map (delay Γ') args) = map (delay Γ') args.
+Proof.
+  intros Γ Γ' args. rewrite map_map.
+  apply map_ext. apply delay_delay.
+Qed.
+
 Lemma unspool_fold_left_app : forall args h acc,
   unspool_app (fold_left EApp args h) acc = unspool_app h (args ++ acc).
 Proof.
@@ -1049,12 +1065,13 @@ Inductive eval : fuel -> path_condition -> environment -> expr -> expr -> Prop :
       eval (Live f) Φ Γ (ELit l) (ELit l)
 
   (** Rule Con: a constructor spine is a value once each field is paired with
-      the environment it was written in. The fields stay unevaluated:
+      the environment it was written in. A field that is already a thunk
+      keeps the environment it carries. The fields stay unevaluated:
       fold-alts binds them into the environment, and Rule Thunk forces one
       only when a variable reads it. *)
   | Eval_Con : forall f Φ Γ e d args,
       unspool_app e [] = (ECon d, args) ->
-      eval (Live f) Φ Γ e (make_con_app d (map (EThunk Γ) args))
+      eval (Live f) Φ Γ e (make_con_app d (map (delay Γ) args))
 
   (** Rule Cast: Evaluate expression and simplify cast *)
   | Eval_Cast : forall f Φ Γ e γ e',
@@ -1751,7 +1768,7 @@ Lemma eval_con_spine_same : forall Φ Γ e d args v,
   sat Φ = true ->
   unspool_app e [] = (ECon d, args) ->
   Φ ; Γ ⊢ e ⇓ v ->
-  v = make_con_app d (map (EThunk Γ) args).
+  v = make_con_app d (map (delay Γ) args).
 Proof.
   intros Φ Γ e d args v Hsat Hu Heval.
   destruct e; simpl in Hu; try discriminate.
@@ -1778,6 +1795,25 @@ Proof.
     + simpl in Hu; discriminate.
     + simpl in Hu; discriminate.
     + rewrite Hsat in *; discriminate.
+Qed.
+
+Lemma eval_con_value_itself : forall f Φ Γ Γ' d args,
+  eval (Live f) Φ Γ (make_con_app d (map (delay Γ') args))
+                    (make_con_app d (map (delay Γ') args)).
+Proof.
+  intros f Φ Γ Γ' d args.
+  rewrite <- (map_delay_delay Γ Γ' args) at 2.
+  apply Eval_Con. apply make_con_app_unspool.
+Qed.
+
+Lemma eval_con_value_same : forall Φ Γ Γ' d args v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ make_con_app d (map (delay Γ') args) ⇓ v ->
+  v = make_con_app d (map (delay Γ') args).
+Proof.
+  intros Φ Γ Γ' d args v Hsat Hv.
+  rewrite (eval_con_spine_same Φ Γ _ d _ v Hsat (make_con_app_unspool _ _) Hv).
+  rewrite map_delay_delay. reflexivity.
 Qed.
 
 (** Evaluation of lambdas under a satisfiable path condition *)
