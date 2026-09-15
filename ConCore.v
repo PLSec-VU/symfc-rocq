@@ -1206,15 +1206,14 @@ reduce_prim_ground_value : forall p args,
   that term.
 
   The statement is about literal instances of arms that denote formulas, and
-  no more. Each wider statement has no intended model:
+  no more. Each wider statement proves that no literal satisfies op_not, so
+  no model takes an else-branch (scratch/NegationWasUnsatisfiable.v):
   - An arm that is solvable in Γ need not be an SMT term under S: a variable
     that Γ does not bind and S does not list stands for itself, and one term
     cannot stand for two such variables.
-    scratch/NegationWasUnsatisfiable.v derives that no literal satisfies
-    op_not from the version with no restriction.
-  - An SMT arm has instances that are not literals: op_and x y has the
-    instance op_and l1 l2. One term cannot keep the head op_and for one
-    model and the head op_not for another.
+  - An SMT arm has instances that are not literals: op_and x x has the
+    instance op_and l l. One term cannot keep the head op_and for one model
+    and the head op_not for another.
 *)
 Class ReducePrimIteContains : Prop :=
 reduce_prim_ite_contains : forall σ S ec et ef pt pf l,
