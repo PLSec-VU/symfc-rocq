@@ -91,3 +91,29 @@ Proof.
 Qed.
 
 End BranchApplication.
+
+Section OutOfFuel.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
+Lemma out_of_fuel_not_concore : ~ concore_expr (EBot BOutOfFuel).
+Proof. intros H. inversion H. Qed.
+
+Lemma out_of_fuel_contains_nothing_concrete : forall σ S e_c,
+  concore_expr e_c -> ~ contains σ S (EBot BOutOfFuel) e_c.
+Proof.
+  intros σ S e_c Hcon Hcont.
+  inversion Hcont; subst.
+  - exact (out_of_fuel_not_concore Hcon).
+  - match goal with
+    | [ H : unspool_app (EBot _) [] = _ |- _ ] => discriminate H
+    end.
+Qed.
+
+Lemma concrete_evaluation_never_out_of_fuel : forall Γ e,
+  concrete_env Γ -> concore_expr e -> ~ Γ ⊢ᶜ e ⇓ᶜ EBot BOutOfFuel.
+Proof.
+  intros Γ e Henv Hcon Heval.
+  exact (out_of_fuel_not_concore (concore_eval_closed Γ e (EBot BOutOfFuel) Henv Hcon Heval)).
+Qed.
+
+End OutOfFuel.
