@@ -1020,6 +1020,11 @@ Inductive contains (σ : valuation) (S : symvars) : expr -> expr -> Prop :=
       contains_env σ S Γs Γc ->
       contains σ S es ec ->
       contains σ S (EThunk Γs es) (EThunk Γc ec)
+  | Cont_Thunk_Outer : forall Γs Γc es ec,
+      contains_env σ S Γs Γc ->
+      contains σ S es ec ->
+      is_thunk ec = true ->
+      contains σ S (EThunk Γs es) ec
   | Cont_Cast : forall es ec γ,
       contains σ S es ec ->
       contains σ S (ECast es γ) (ECast ec γ)
@@ -1413,10 +1418,12 @@ Qed.
 
 Lemma contains_thunk_inv : forall σ S Γs es ec,
   contains σ S (EThunk Γs es) ec ->
-  exists Γc ec', ec = EThunk Γc ec' /\ contains_env σ S Γs Γc /\ contains σ S es ec'.
+  (exists Γc ec', ec = EThunk Γc ec' /\ contains_env σ S Γs Γc /\ contains σ S es ec')
+  \/ (exists Γc, contains_env σ S Γs Γc /\ contains σ S es ec /\ is_thunk ec = true).
 Proof.
-  intros σ S Γs es ec H. inversion H; subst; [| kill_denote].
-  exists Γc, ec0. split; [reflexivity | auto].
+  intros σ S Γs es ec H. inversion H; subst; [left | right | kill_denote].
+  - exists Γc, ec0. split; [reflexivity | auto].
+  - exists Γc. auto.
 Qed.
 
 Lemma contains_clos_inv : forall σ S Γs x body ec,
@@ -1426,9 +1433,12 @@ Lemma contains_clos_inv : forall σ S Γs x body ec,
     contains σ S body bodyc.
 Proof.
   intros σ S Γs x body ec H.
-  destruct (contains_thunk_inv σ S Γs (ELam x body) ec H) as [Γc [ec' [Heq [Henv Hlam]]]].
-  destruct (contains_lam_inv σ S x body ec' Hlam) as [bodyc [Heq' [Hx Hbody]]].
-  subst. exists Γc, bodyc. auto.
+  destruct (contains_thunk_inv σ S Γs (ELam x body) ec H)
+    as [[Γc [ec' [Heq [Henv Hlam]]]] | [Γc [Henv [Hlam Hthunk]]]].
+  - destruct (contains_lam_inv σ S x body ec' Hlam) as [bodyc [Heq' [Hx Hbody]]].
+    subst. exists Γc, bodyc. auto.
+  - destruct (contains_lam_inv σ S x body ec Hlam) as [bodyc [Heq' _]].
+    subst. discriminate Hthunk.
 Qed.
 
 (**
@@ -3399,6 +3409,7 @@ Proof.
   inversion Hcont; subst.
   - destruct (denote_var_inv σ S x l1 Hden) as [_ Hl1]. congruence.
   - symmetry. exact (denote_lit_inv σ S l2 l1 Hden).
+  - discriminate.
   - destruct Hden as [pc [Hd _]].
     specialize (Hd · (sym_free_env_empty S)). simpl in Hd. discriminate.
   - destruct Hden as [pc [Hd _]].

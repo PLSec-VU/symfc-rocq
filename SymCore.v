@@ -797,6 +797,12 @@ Definition is_cast (e : expr) : bool :=
   | _ => false
   end.
 
+Definition is_thunk (e : expr) : bool :=
+  match e with
+  | EThunk _ _ => true
+  | _ => false
+  end.
+
 (** Lookup a matching constructor alternative in a branch list: find(D, a⃗) *)
 Fixpoint find_alt (d : dcon) (alts : list alt) : option (list var * expr) :=
   match alts with
@@ -1854,6 +1860,29 @@ Proof.
   - no_con_head.
   - reflexivity.
   - rewrite Hsat in H0; discriminate.
+Qed.
+
+Lemma eval_thunk_ambient_env : forall k Φ Γ1 Γ2 Γ' e v,
+  eval k Φ Γ1 (EThunk Γ' e) v -> eval k Φ Γ2 (EThunk Γ' e) v.
+Proof.
+  intros k Φ Γ1 Γ2 Γ' e v Heval.
+  inversion Heval; subst.
+  - no_con_head.
+  - apply Eval_Prune. assumption.
+  - apply Eval_Thunk. assumption.
+  - apply Eval_OutOfFuel.
+Qed.
+
+Lemma eval_closure_same : forall Φ Γ Γ' x body v,
+  sat Φ = true ->
+  Φ ; Γ ⊢ EThunk Γ' (ELam x body) ⇓ v ->
+  v = EThunk Γ' (ELam x body).
+Proof.
+  intros Φ Γ Γ' x body v Hsat Heval.
+  inversion Heval; subst.
+  - no_con_head.
+  - rewrite Hsat in H0; discriminate.
+  - eapply eval_lam_same; eassumption.
 Qed.
 
 (** Evaluation of coercions under a satisfiable path condition *)
