@@ -348,6 +348,29 @@ Proof.
   pose proof (at_least_prim_spine _ p args He Hu) as Hge. lia.
 Qed.
 
+Lemma forall_values : forall f Φ Γ args,
+  Forall (fun a => exists v, eval f Φ Γ a v) args ->
+  exists args', Forall2 (eval f Φ Γ) args args'.
+Proof.
+  intros f Φ Γ args H.
+  induction H as [| a rest [v Hv] _ [rest' IH]]; [exists nil; constructor |].
+  exists (v :: rest'). constructor; assumption.
+Qed.
+
+Theorem evaluated_prim_app_stuck_only_if_over_applied : forall k Φ Γ ef ea p args,
+  spine_ok AtLeast 0 (EApp ef ea) -> unspool_app (EApp ef ea) [] = (EPrimOp p, args) ->
+  Forall (fun a => exists v, eval (Fin k) Φ Γ a v) args ->
+  (forall v, ~ eval (Fin (S k)) Φ Γ (EApp ef ea) v) ->
+  primop_arity p < length args.
+Proof.
+  intros k Φ Γ ef ea p args He Hu Hargs Hstuck.
+  pose proof (at_least_prim_spine _ p args He Hu) as Hge.
+  destruct (Nat.eq_dec (primop_arity p) (length args)) as [Heq | Hne]; [| lia].
+  exfalso. destruct (forall_values _ _ _ _ Hargs) as [args' HF].
+  apply (Hstuck (reduce_prim p args')).
+  exact (Eval_AppPrim (Remaining k) Φ Γ ef ea p args args' Hu (eq_sym Heq) HF).
+Qed.
+
 End Saturation.
 
 Section ModelSaturation.
