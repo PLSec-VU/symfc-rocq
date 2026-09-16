@@ -20,7 +20,7 @@ When this document is not enough, section 11 tells you how to ask Rocq directly.
 
 ## 1. Status
 
-- **The Rocq development was last changed in commit `cf4b7f6`.** That commit and the one before it repair the `scratch/` suite for the new design; the design itself landed in `1267e5f`. All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
+- **The files in `_CoqProject` were last changed in commit `1267e5f`.** The `scratch/` suite was repaired for the new design in `8727495` and `cf4b7f6`, and this document was rewritten after that. All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
 - **`case` can now branch on an SMT boolean.** This is the large change since the last handoff. Section 3, item 11 describes it. It is what a compiled comparison needs, so the theorems now cover a branch whose guard is computed while the program runs.
 - **The main theorems are closed.** `Print Assumptions` says "Closed under the global context" for each. The laws enter only as section arguments.
 - **The laws have a model.** `Model.v` builds a concrete solver with `lit := bool`, real `and`, `not` and `ite`, and a reducer that simplifies. It proves every law.
@@ -307,6 +307,8 @@ Each statement below is exact, apart from notation. Check it with `Check` (secti
 > If `Γ` is a ConCore environment, `e` is a ConCore program, and `closed_program Γ e` holds, then `Γ ⊢ᶜ e ⇓ᶜ v₁` and `Γ ⊢ᶜ e ⇓ᶜ v₂` imply `v₁ = v₂`.
 
 This is the determinism theorem of the paper.
+
+It rests on four laws only: `ReducePrimConcore`, `CastExprConcore`, `ReducePrimScoped` and `CastExprScoped`. Soundness needs every law in `ConCoreLaws` except the two `⊥ₖ` laws, and completeness needs all of `SymFCCostLaws`.
 
 The closedness premise is new. It is needed twice: a free variable would let Rule Var and Rule Sym-Var both fire, and a closed scrutinee's formula mentions no variable, so `FoldAlts_SymbolicFormula` cannot fire on a concrete run. `concore_eval_deterministic_top` is the whole-program corollary: it asks for `concore_expr e` and `closed_term e` in the empty environment.
 
