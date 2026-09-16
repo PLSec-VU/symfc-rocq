@@ -237,6 +237,9 @@ Proof. intros σ Φ _. reflexivity. Qed.
 #[export] Instance model_prim_value_and : PrimValueAnd.
 Proof. intros l1 l2. apply andb_true_iff. Qed.
 
+#[export] Instance model_cast_expr_keeps_out_of_fuel : CastExprKeepsOutOfFuel.
+Proof. intros e γ H. exact H. Qed.
+
 (** ========================================================================= *)
 (** 4. Lifting branches out of an application                                  *)
 (** ========================================================================= *)
@@ -1617,6 +1620,191 @@ Proof.
     rewrite (fold_leaves_not_if _ (op_spine_not_if _ _)) in Hdm.
     apply (model_ite_wellformed_spine S ec et ef pc pca Hdm Hok).
     destruct (lit_eq_dec (pc_value σ pcc) lit_true); [left | right]; exact Hda.
+Qed.
+
+Lemma smt_ground_no_out_of_fuel : forall e,
+  smt_ground e = true -> mentions_out_of_fuel e = false.
+Proof.
+  induction e; intros Hg; cbn [smt_ground] in Hg; try discriminate; try reflexivity.
+  apply andb_prop in Hg as [Hgf Hga]. apply andb_prop in Hgf as [_ Hgf].
+  cbn [mentions_out_of_fuel]. rewrite (IHe1 Hgf), (IHe2 Hga). reflexivity.
+Qed.
+
+Lemma out_of_fuel_needs_nothing : forall e,
+  mentions_out_of_fuel e = true -> smt_need e = None.
+Proof.
+  induction e; intros Hm; cbn [mentions_out_of_fuel] in Hm;
+    try discriminate; try reflexivity.
+  cbn [smt_need]. apply orb_true_iff in Hm as [Hf | Ha].
+  - rewrite (IHe1 Hf). reflexivity.
+  - rewrite (IHe2 Ha). destruct (smt_need e1) as [[| n] |]; reflexivity.
+Qed.
+
+Lemma out_of_fuel_not_smt_term : forall e,
+  mentions_out_of_fuel e = true -> smt_term e = false.
+Proof.
+  intros e Hm. unfold smt_term. rewrite (out_of_fuel_needs_nothing e Hm). reflexivity.
+Qed.
+
+Lemma graft_arg_keeps_out_of_fuel : forall a f,
+  (mentions_out_of_fuel f || mentions_out_of_fuel a)%bool = true ->
+  mentions_out_of_fuel (graft_arg f a) = true.
+Proof.
+  induction a; intros f H; try exact H.
+  cbn [graft_arg mentions_out_of_fuel] in H |- *.
+  repeat rewrite orb_true_iff in H. repeat rewrite orb_true_iff.
+  destruct H as [Hf | [Hc | [Ht | He]]].
+  - right. left. apply IHa2. apply orb_true_iff. left. exact Hf.
+  - left. exact Hc.
+  - right. left. apply IHa2. apply orb_true_iff. right. exact Ht.
+  - right. right. apply IHa3. apply orb_true_iff. right. exact He.
+Qed.
+
+Lemma graft_keeps_out_of_fuel : forall f a,
+  (mentions_out_of_fuel f || mentions_out_of_fuel a)%bool = true ->
+  mentions_out_of_fuel (graft f a) = true.
+Proof.
+  induction f; intros a H; try (apply graft_arg_keeps_out_of_fuel; exact H).
+  cbn [graft mentions_out_of_fuel] in H |- *.
+  repeat rewrite orb_true_iff in H. repeat rewrite orb_true_iff.
+  destruct H as [[Hc | [Ht | He]] | Ha].
+  - left. exact Hc.
+  - right. left. apply IHf2. apply orb_true_iff. left. exact Ht.
+  - right. right. apply IHf3. apply orb_true_iff. left. exact He.
+  - right. left. apply IHf2. apply orb_true_iff. right. exact Ha.
+Qed.
+
+Lemma lift_branches_keeps_out_of_fuel : forall e,
+  mentions_out_of_fuel e = true -> mentions_out_of_fuel (lift_branches e) = true.
+Proof.
+  induction e; intros H; cbn [lift_branches]; try exact H.
+  - apply graft_keeps_out_of_fuel.
+    cbn [mentions_out_of_fuel] in H. apply orb_true_iff in H as [Hf | Ha];
+      apply orb_true_iff; [left; exact (IHe1 Hf) | right; exact (IHe2 Ha)].
+  - cbn [mentions_out_of_fuel] in H |- *.
+    repeat rewrite orb_true_iff in H. repeat rewrite orb_true_iff.
+    destruct H as [Hc | [Ht | Hf]].
+    + left. exact Hc.
+    + right. left. exact (IHe2 Ht).
+    + right. right. exact (IHe3 Hf).
+Qed.
+
+Lemma fold_leaf_of_out_of_fuel : forall e,
+  mentions_out_of_fuel e = true -> fold_leaf e = e.
+Proof.
+  intros e H. unfold fold_leaf. destruct (smt_ground e) eqn:Hg; [| reflexivity].
+  rewrite (smt_ground_no_out_of_fuel e Hg) in H. discriminate H.
+Qed.
+
+Lemma fold_leaves_keeps_out_of_fuel : forall e,
+  mentions_out_of_fuel e = true -> mentions_out_of_fuel (fold_leaves e) = true.
+Proof.
+  induction e; intros H; cbn [fold_leaves];
+    try (rewrite (fold_leaf_of_out_of_fuel _ H); exact H).
+  cbn [mentions_out_of_fuel] in H |- *.
+  repeat rewrite orb_true_iff in H. repeat rewrite orb_true_iff.
+  destruct H as [Hc | [Ht | Hf]].
+  - left. exact Hc.
+  - right. left. exact (IHe2 Ht).
+  - right. right. exact (IHe3 Hf).
+Qed.
+
+Lemma fold_left_app_mentions_out_of_fuel : forall args h,
+  mentions_out_of_fuel (fold_left EApp args h)
+  = (mentions_out_of_fuel h || existsb mentions_out_of_fuel args)%bool.
+Proof.
+  induction args as [| a rest IH]; intros h; cbn [fold_left existsb].
+  - rewrite orb_false_r. reflexivity.
+  - rewrite (IH (EApp h a)). cbn [mentions_out_of_fuel]. symmetry. apply orb_assoc.
+Qed.
+
+Lemma op_spine_keeps_out_of_fuel : forall p args,
+  existsb mentions_out_of_fuel args = true ->
+  mentions_out_of_fuel (op_spine p args) = true.
+Proof.
+  intros p args H. unfold op_spine. rewrite fold_left_app_mentions_out_of_fuel.
+  rewrite H. apply orb_true_r.
+Qed.
+
+Lemma simplify_unbranched_keeps_out_of_fuel : forall p args,
+  length args = model_arity p ->
+  existsb mentions_out_of_fuel args = true ->
+  mentions_out_of_fuel (simplify_unbranched p args) = true.
+Proof.
+  intros p args Hlen H.
+  assert (Hsimp : simplify p args = None).
+  { unfold simplify. destruct (forallb smt_term args) eqn:Hterm; [| reflexivity].
+    exfalso. apply existsb_exists in H as [a [Hin Ha]].
+    rewrite forallb_forall in Hterm. specialize (Hterm a Hin).
+    rewrite (out_of_fuel_not_smt_term a Ha) in Hterm. discriminate Hterm. }
+  unfold simplify_unbranched. rewrite Hsimp.
+  unfold reduce_unbranched. rewrite Hlen, Nat.eqb_refl.
+  apply fold_leaves_keeps_out_of_fuel. apply lift_branches_keeps_out_of_fuel.
+  apply op_spine_keeps_out_of_fuel. exact H.
+Qed.
+
+Lemma split_arg_keeps_a_mentioning_continuation : forall a k,
+  (forall a', mentions_out_of_fuel (k a') = true) ->
+  mentions_out_of_fuel (split_arg k a) = true.
+Proof.
+  induction a; intros k Hk; try (apply Hk).
+  cbn [split_arg mentions_out_of_fuel]. rewrite (IHa2 k Hk).
+  apply orb_true_r.
+Qed.
+
+Lemma split_arg_keeps_out_of_fuel : forall a k,
+  (forall a', mentions_out_of_fuel a' = true -> mentions_out_of_fuel (k a') = true) ->
+  mentions_out_of_fuel a = true ->
+  mentions_out_of_fuel (split_arg k a) = true.
+Proof.
+  induction a; intros k Hk H; try (apply Hk; exact H).
+  cbn [split_arg mentions_out_of_fuel] in H |- *.
+  repeat rewrite orb_true_iff in H. repeat rewrite orb_true_iff.
+  destruct H as [Hc | [Ht | Hf]].
+  - left. exact Hc.
+  - right. left. exact (IHa2 k Hk Ht).
+  - right. right. exact (IHa3 k Hk Hf).
+Qed.
+
+Lemma split_args_keeps_a_mentioning_continuation : forall args k,
+  (forall args', length args' = length args -> mentions_out_of_fuel (k args') = true) ->
+  mentions_out_of_fuel (split_args k args) = true.
+Proof.
+  induction args as [| a rest IH]; intros k Hk; cbn [split_args].
+  - apply Hk. reflexivity.
+  - apply split_arg_keeps_a_mentioning_continuation. intros a'.
+    apply IH. intros rest' Hlen. apply Hk. cbn [length]. rewrite Hlen. reflexivity.
+Qed.
+
+Lemma split_args_keeps_out_of_fuel : forall args k,
+  (forall args', length args' = length args ->
+     existsb mentions_out_of_fuel args' = true ->
+     mentions_out_of_fuel (k args') = true) ->
+  existsb mentions_out_of_fuel args = true ->
+  mentions_out_of_fuel (split_args k args) = true.
+Proof.
+  induction args as [| a rest IH]; intros k Hk H; [discriminate H |].
+  cbn [split_args]. cbn [existsb] in H. apply orb_true_iff in H as [Ha | Hrest].
+  - apply (split_arg_keeps_out_of_fuel a); [| exact Ha].
+    intros a' Ha'. apply split_args_keeps_a_mentioning_continuation.
+    intros rest' Hlen. apply Hk.
+    + cbn [length]. rewrite Hlen. reflexivity.
+    + cbn [existsb]. rewrite Ha'. reflexivity.
+  - apply split_arg_keeps_a_mentioning_continuation. intros a'.
+    apply IH; [| exact Hrest].
+    intros rest' Hlen Hex. apply Hk.
+    + cbn [length]. rewrite Hlen. reflexivity.
+    + cbn [existsb]. rewrite Hex. apply orb_true_r.
+Qed.
+
+#[export] Instance model_reduce_prim_keeps_out_of_fuel : ReducePrimKeepsOutOfFuel.
+Proof.
+  intros p args Hlen H.
+  change (mentions_out_of_fuel (model_reduce_prim p args) = true).
+  unfold model_reduce_prim.
+  apply split_args_keeps_out_of_fuel; [| exact H].
+  intros args' Hlen' Hex.
+  apply simplify_unbranched_keeps_out_of_fuel; [rewrite Hlen'; exact Hlen | exact Hex].
 Qed.
 
 #[export] Instance model_laws : ConCoreLaws.

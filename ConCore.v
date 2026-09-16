@@ -619,6 +619,20 @@ Proof.
   apply cast_expr_scoped. apply scoped_no_symvars. exact H.
 Qed.
 
+Class ReducePrimKeepsOutOfFuel : Prop :=
+reduce_prim_keeps_out_of_fuel : forall p args,
+  length args = primop_arity p ->
+  existsb mentions_out_of_fuel args = true ->
+  mentions_out_of_fuel (reduce_prim p args) = true.
+
+Class CastExprKeepsOutOfFuel : Prop :=
+cast_expr_keeps_out_of_fuel : forall e γ,
+  mentions_out_of_fuel e = true ->
+  mentions_out_of_fuel (cast_expr e γ) = true.
+
+Context {reduce_prim_keeps_out_of_fuel_law : ReducePrimKeepsOutOfFuel}
+  {cast_expr_keeps_out_of_fuel_law : CastExprKeepsOutOfFuel}.
+
 (** ------------------------------------------------------------------------- *)
 (** 8.2 Mutual Induction Scheme for Big-Step Semantics                        *)
 (** ------------------------------------------------------------------------- *)
@@ -5893,6 +5907,7 @@ Inductive ConCoreLaws {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
     ReducePrimSolvable -> ReducePrimSaturated ->
     ReducePrimConcore -> CastExprConcore ->
     ReducePrimScoped -> CastExprScoped ->
+    ReducePrimKeepsOutOfFuel -> CastExprKeepsOutOfFuel ->
     ModelsSat -> PrimValueAnd ->
     ReducePrimContains -> ReducePrimDenote -> ReducePrimGroundValue ->
     CastExprContains -> ReducePrimIteWellformed ->
@@ -5912,6 +5927,12 @@ Proof. destruct laws; assumption. Qed.
 #[export] Instance reduce_prim_scoped_of_laws `{laws : ConCoreLaws} : ReducePrimScoped.
 Proof. destruct laws; assumption. Qed.
 #[export] Instance cast_expr_scoped_of_laws `{laws : ConCoreLaws} : CastExprScoped.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance reduce_prim_keeps_out_of_fuel_of_laws `{laws : ConCoreLaws}
+  : ReducePrimKeepsOutOfFuel.
+Proof. destruct laws; assumption. Qed.
+#[export] Instance cast_expr_keeps_out_of_fuel_of_laws `{laws : ConCoreLaws}
+  : CastExprKeepsOutOfFuel.
 Proof. destruct laws; assumption. Qed.
 #[export] Instance models_sat_of_laws `{laws : ConCoreLaws} : ModelsSat.
 Proof. destruct laws; assumption. Qed.

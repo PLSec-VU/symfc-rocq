@@ -346,6 +346,54 @@ Proof.
     reflexivity.
 Qed.
 
+Fixpoint mentions_out_of_fuel (e : expr) {struct e} : bool :=
+  match e with
+  | EApp f a => orb (mentions_out_of_fuel f) (mentions_out_of_fuel a)
+  | ELam _ body => mentions_out_of_fuel body
+  | ECase es alts =>
+      orb (mentions_out_of_fuel es)
+        ((fix alts_mention (l : list alt) {struct l} : bool :=
+            match l with
+            | nil => false
+            | Alt _ _ ep :: rest => orb (mentions_out_of_fuel ep) (alts_mention rest)
+            end) alts)
+  | ECast body _ => mentions_out_of_fuel body
+  | EIf ec et ef =>
+      orb (mentions_out_of_fuel ec)
+        (orb (mentions_out_of_fuel et) (mentions_out_of_fuel ef))
+  | EBot b => bottom_mentions_out_of_fuel b
+  | EThunk Γ body => orb (env_mentions_out_of_fuel Γ) (mentions_out_of_fuel body)
+  | _ => false
+  end
+with bottom_mentions_out_of_fuel (b : bottom) {struct b} : bool :=
+  match b with
+  | BRaise e => mentions_out_of_fuel e
+  | BOutOfFuel => true
+  | _ => false
+  end
+with env_mentions_out_of_fuel (Γ : environment) {struct Γ} : bool :=
+  match Γ with
+  | EmptyEnv => false
+  | ExtendEnv _ (MkClosure Γ' e) rest =>
+      orb (orb (env_mentions_out_of_fuel Γ') (mentions_out_of_fuel e))
+        (env_mentions_out_of_fuel rest)
+  end.
+
+Definition alts_mention_out_of_fuel : list alt -> bool :=
+  fix alts_mention (l : list alt) {struct l} : bool :=
+    match l with
+    | nil => false
+    | Alt _ _ ep :: rest => orb (mentions_out_of_fuel ep) (alts_mention rest)
+    end.
+
+Lemma mentions_out_of_fuel_case : forall es alts,
+  mentions_out_of_fuel (ECase es alts)
+  = orb (mentions_out_of_fuel es) (alts_mention_out_of_fuel alts).
+Proof. reflexivity. Qed.
+
+Lemma out_of_fuel_mentions_itself : mentions_out_of_fuel (EBot BOutOfFuel) = true.
+Proof. reflexivity. Qed.
+
 (** Environment lookup: (Γ', e) = Γ(x) (Fig. 3, Rule Var) *)
 Fixpoint lookup_env (Γ : environment) (x : var) : option (environment * expr) :=
   match Γ with
