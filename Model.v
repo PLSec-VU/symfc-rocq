@@ -1817,6 +1817,103 @@ Proof. constructor; exact _. Qed.
 (** 7. What the model shows                                                    *)
 (** ========================================================================= *)
 
+Fixpoint and_chain (n : nat) : expr :=
+  match n with
+  | O => ELit true
+  | Datatypes.S m => EApp (EApp (EPrimOp PAnd) (EVar "x"%string)) (and_chain m)
+  end.
+
+Lemma and_chain_solvable : forall n Γ,
+  lookup_env Γ "x"%string = None -> Solvable Γ (and_chain n).
+Proof.
+  induction n as [| m IH]; intros Γ Hx; cbn [and_chain].
+  - apply Solvable_Lit.
+  - apply Solvable_AppPrim; [reflexivity | | apply IH; exact Hx].
+    apply Solvable_AppPrim;
+      [reflexivity | apply Solvable_PrimOp | apply Solvable_Var; exact Hx].
+Qed.
+
+Lemma and_chain_needs_nothing : forall n, smt_need (and_chain n) = Some 0.
+Proof.
+  induction n as [| m IH]; [reflexivity |].
+  cbn [and_chain smt_need]. rewrite IH. reflexivity.
+Qed.
+
+Lemma and_chain_smt_term : forall n, smt_term (and_chain n) = true.
+Proof. intros n. unfold smt_term. rewrite and_chain_needs_nothing. reflexivity. Qed.
+
+Lemma and_chain_grows : forall n, n <= smt_size (and_chain n).
+Proof.
+  induction n as [| m IH]; [cbn; lia |].
+  cbn [and_chain smt_size]. lia.
+Qed.
+
+Lemma merge_of_the_chain : forall n,
+  merge · (EIf (EVar "x"%string) (ELit true) (and_chain (Datatypes.S n)))
+  = op_spine PIte (EVar "x"%string :: ELit true :: and_chain (Datatypes.S n) :: nil).
+Proof.
+  intros n. cbn [merge]. rewrite ite_leaf_of by (left; reflexivity).
+  unfold ite_leaf.
+  replace (decompose_con_app (@ELit model_sorts true))
+    with (@None (dcon * list (@expr model_sorts))) by reflexivity.
+  destruct (solvable_dec · (@ELit model_sorts true)) as [_ | Hno];
+    [| exfalso; apply Hno; apply Solvable_Lit].
+  destruct (solvable_dec · (and_chain (Datatypes.S n))) as [Hchain | Hno];
+    [| exfalso; apply Hno; apply and_chain_solvable; reflexivity].
+  change (reduce_prim op_ite
+            (EVar "x"%string :: @ELit model_sorts true :: and_chain (Datatypes.S n) :: nil))
+    with (model_reduce_prim PIte
+            (EVar "x"%string :: @ELit model_sorts true :: and_chain (Datatypes.S n) :: nil)).
+  unfold model_reduce_prim.
+  rewrite split_args_not_if by (repeat constructor).
+  unfold simplify_unbranched.
+  replace (simplify PIte
+             (EVar "x"%string :: @ELit model_sorts true :: and_chain (Datatypes.S n) :: nil))
+    with (@None (@expr model_sorts)).
+  2: { unfold simplify. cbn [forallb]. rewrite (and_chain_smt_term (Datatypes.S n)).
+       cbn [smt_term smt_need smt_ground andb negb]. reflexivity. }
+  unfold reduce_unbranched. cbn [length model_arity Nat.eqb].
+  assert (Hflat : Forall (fun a => flat a = true)
+            (EVar "x"%string :: @ELit model_sorts true :: and_chain (Datatypes.S n) :: nil)).
+  { constructor; [reflexivity |]. constructor; [reflexivity |].
+    constructor; [exact (solvable_flat · _ Hchain) | constructor]. }
+  rewrite (lift_flat _ (op_spine_flat PIte _ Hflat)).
+  rewrite (fold_leaves_not_if _ (op_spine_not_if _ _)).
+  unfold fold_leaf.
+  replace (smt_ground (op_spine PIte
+             (EVar "x"%string :: @ELit model_sorts true :: and_chain (Datatypes.S n) :: nil)))
+    with false by reflexivity.
+  reflexivity.
+Qed.
+
+Theorem merged_branch_size_is_not_bounded_by_the_instance_index : forall B,
+  exists (σ : valuation) (S : symvars) (ec et ef e_c : expr),
+    contains_k σ S 2 (EIf ec et ef) e_c
+    /\ smt_size e_c = 1
+    /\ B <= smt_size (merge · (EIf ec et ef))
+    /\ (forall k r1 r2 v_c,
+          contains_k σ S k (EIf (merge · (EIf ec et ef)) r1 r2) v_c -> B <= k).
+Proof.
+  intros B.
+  pose (σ := fun _ : var => true).
+  pose (S := only "x"%string).
+  exists σ, S, (EVar "x"%string), (@ELit model_sorts true),
+    (and_chain (Datatypes.S B)), (@ELit model_sorts true).
+  assert (Hden : denotes S (EVar "x"%string) (PCVar "x"%string)).
+  { intros Γ Hfree. cbn [expr_to_pc]. rewrite (Hfree "x"%string (only_self _)).
+    reflexivity. }
+  assert (Hsize : B <= smt_size (merge · (EIf (EVar "x"%string) (@ELit model_sorts true)
+                                            (and_chain (Datatypes.S B))))).
+  { rewrite merge_of_the_chain. unfold op_spine. cbn [fold_left smt_size].
+    pose proof (and_chain_grows (Datatypes.S B)). cbn [and_chain] in *. lia. }
+  split; [| split; [reflexivity | split; [exact Hsize |]]].
+  - replace 2 with (1 + smt_size (EVar "x"%string) + 0) by reflexivity.
+    apply ContK_If_True; [| apply ContK_Lit].
+    exists (PCVar "x"%string). split; [exact Hden | reflexivity].
+  - intros k r1 r2 v_c Hk.
+    destruct (@contains_k_if_inv model_sorts σ S k _ r1 r2 v_c Hk) as [k0 [-> _]]. lia.
+Qed.
+
 Theorem model_negation_is_satisfiable : prim_value op_not (false :: nil) = lit_true.
 Proof. reflexivity. Qed.
 
