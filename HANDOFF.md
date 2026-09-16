@@ -10,8 +10,9 @@ Terms used in this document:
 - **Concrete run.** Evaluation of a ConCore program. A ConCore program is a SymCore program with no symbolic branch and no free variable.
 - **Model.** A map `σ` from symbolic variables to literals. The SMT solver returns it.
 - **Instance.** The concrete term `e_c` is an instance of the symbolic term `e_s` under `σ` when `contains σ S e_s e_c` holds. `S` is the set of symbolic variables.
+- **Formula.** A path condition, the solver's own term language. `expr_to_pc` reads a formula off an expression.
 - **Fuel.** A bound on the depth of a derivation. `Fin n` allows depth `n`. `Inf` has no bound.
-- **Law.** An assumption about an opaque solver function (`reduce-prim` or `cast`). Each law is a Rocq class, not an `Axiom`. `Model.v` proves every law for one concrete solver.
+- **Law.** An assumption about an opaque solver function (`reduce-prim` or `cast`). Each law is a Rocq class, not an `Axiom`. `Model.v` proves every law.
 
 When this document is not enough, section 11 tells you how to ask Rocq directly. Do that before you write a claim you are unsure of.
 
@@ -19,11 +20,12 @@ When this document is not enough, section 11 tells you how to ask Rocq directly.
 
 ## 1. Status
 
-- **The Rocq development was last changed after `610f214`, in changes that are not yet committed.** They add the results in section 6.4 and section 10, items 4 and 10. All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
+- **The Rocq development was last changed in commit `cf4b7f6`.** That commit and the one before it repair the `scratch/` suite for the new design; the design itself landed in `1267e5f`. All files build. No file in `_CoqProject` contains `Admitted`, `admit`, `Axiom` or `Parameter`.
+- **`case` can now branch on an SMT boolean.** This is the large change since the last handoff. Section 3, item 11 describes it. It is what a compiled comparison needs, so the theorems now cover a branch whose guard is computed while the program runs.
 - **The main theorems are closed.** `Print Assumptions` says "Closed under the global context" for each. The laws enter only as section arguments.
 - **The laws have a model.** `Model.v` builds a concrete solver with `lit := bool`, real `and`, `not` and `ite`, and a reducer that simplifies. It proves every law.
-- **Every theorem is non-vacuous.** `NonVacuity.v` checks, inside the model, that each theorem has an instance where all hypotheses hold and the conclusion says something. One instance runs through an else-branch. One has a looping arm the model does not take. A second solver, `pruning_solver`, makes Rule Prune fire.
-- **Two audits.** The first found four defects. The second, `REVIEW2`, found that the laws forbade realistic simplifiers, and that fix is now done. Both defect lists are resolved except the open items in section 10.
+- **Every theorem is non-vacuous.** `NonVacuity.v` checks, inside the model, that each theorem has an instance where all hypotheses hold and the conclusion says something. Its `RuntimeBranch` section holds a program whose guard is computed at run time; soundness and both completeness forms have instances there.
+- **Two audits.** The first found four defects. The second, `REVIEW2`, found that the laws forbade realistic simplifiers, and that fix is done. Both defect lists are resolved except the open items in section 10.
 
 Build:
 
@@ -39,14 +41,14 @@ The file order is `SymCore.v`, `ConCore.v`, `CostLaws.v`, `Completeness.v`, `Mod
 
 | File | Contents |
 | --- | --- |
-| `SymCore.v` | Syntax, the solver parameters (`SymCoreSorts`, `SymCoreSolver`), `Solvable`, `Comp`, `delay`, merge (`ite_leaf`, `ite`, `merge`), fuel, the judgements `eval` and `fold_alts`, fuel lemmas (`eval_inf_has_budget`, `eval_fin_zero_inv`) |
-| `ConCore.v` | `concore_expr`, `concrete_env`, `scoped`/`closed_term`/`closed_program`, valuations and `models`, `denotes`/`denote`, the instance relation `contains`, most laws, alignment lemmas, `merge_keeps`, **soundness**, **concrete determinism**, **symbolic results agree** (`symbolic_results_share_the_instance`), the scope limit `branch_on_bound_variable_has_no_instance`, `budget_total`, the bundle `ConCoreLaws` |
-| `CostLaws.v` | `contains_k` (instances indexed by symbolic overhead), erasure lemmas, the cost laws, `merge_contains_k`, the bundle `SymFCCostLaws`, the scope limits `cast_of_symvar_is_not_branch` and `cast_of_smt_term_is_not_its_own_branch` |
-| `Completeness.v` | The completeness statements, worked examples, and the proof: `eval_nested_ind`, `smt_eval_fin`, `good_at`, `forall_form`, and the three **completeness theorems** |
-| `Model.v` | The concrete solver and proofs of every law (`model_laws`, `model_symfc_cost_laws`) |
+| `SymCore.v` | Syntax, the solver parameters (`SymCoreSorts`, `SymCoreSolver`), `Solvable`, `Comp`, `delay`, merge (`ite_leaf`, `ite`, `merge`), fuel, the judgements `eval` and `fold_alts`, the formula reader `expr_to_pc`, the formula helpers `pc_value`, `pc_has_var`, `pc_arities_ok`, `pc_closed_value`, `truth_constructor`, the bottom detector `mentions_out_of_fuel`, the model types `valuation` and `symvars`, fuel lemmas (`eval_inf_has_budget`, `eval_fin_zero_inv`) |
+| `ConCore.v` | `concore_expr`, `concrete_env`, `scoped`/`closed_term`/`closed_program`, `sym_scoped`/`symbolic_program`, valuations and `models`, `denotes`/`denote`, the instance relation `contains`, most laws, alignment lemmas, `merge_keeps`, **soundness**, **concrete determinism**, **symbolic results agree** (`symbolic_results_share_the_instance`), the scope limit `branch_on_bound_variable_has_no_instance`, `budget_total`, the bundle `ConCoreLaws` |
+| `CostLaws.v` | `contains_k` (instances indexed by symbolic overhead), `smt_size`, erasure lemmas, the cost laws, `merge_contains_k`, the bundle `SymFCCostLaws`, the scope limits `cast_of_symvar_is_not_branch` and `cast_of_smt_term_is_not_its_own_branch`, and the two bottom results `merge_folds_no_branch_that_ran_out_of_fuel` and `a_clean_value_can_come_from_a_derivation_that_ran_out_of_fuel` |
+| `Completeness.v` | The completeness statements, the reachability relation `sym_step`/`sym_reach`, the SMT size bound `smt_terms_bounded`/`smt_bounded_run`, worked examples, and the proof: `eval_nested_ind`, `smt_eval_fin`, `good_at`, `forall_form`, and the three **completeness theorems** |
+| `Model.v` | The concrete solver and proofs of every law (`model_laws`, `model_symfc_cost_laws`), and the obstruction `merged_branch_size_is_not_bounded_by_the_instance_index` |
 | `Saturation.v` | The well-formedness condition "primitives are fully applied", its two laws, and preservation by evaluation |
 | `ApplicationRules.v` | Regression lemmas for the application rules, and the obstruction to determinism at finite fuel |
-| `NonVacuity.v` | Model instances of every theorem, and the pruning solver |
+| `NonVacuity.v` | Model instances of every theorem, the pruning solver, and the `RuntimeBranch` section |
 | `scratch/*.v` | Counterexamples and worked examples. Section 9 lists them. |
 
 ---
@@ -69,12 +71,29 @@ Each item is a defect in `theory.tex` that the formalization fixes. The file in 
 6. **Fuel is a real depth bound.** The judgement carries a bound. At bound 0 only Rule Out-Of-Fuel fires, and it returns a new bottom `⊥ₖ`, "bound exceeded". `⊥ₖ` is not a ConCore term, so no concrete value is an instance of it. If Out-Of-Fuel returned the paper's undefined value `?` instead, "complete at some bound" would hold trivially whenever the concrete value is `?`. [`scratch/FuelIndexFeasibility.v`, `scratch/DivergenceNeedsFuel.v`, `ApplicationRules.v`: `out_of_fuel_contains_nothing_concrete`]
 7. **`fold-alts` details.**
    - A branch whose guard does not convert to a formula gives `?` (`FoldAlts_IfFail`).
-   - The "otherwise" clause must also demand that the head of the scrutinee's spine is not a branch. [`scratch/FoldAltsNoNestedIfIsFalse.v`, which must fail]
+   - The "otherwise" clause must also demand that the head of the scrutinee's spine is not a branch, that the scrutinee reads as no formula, and that it is not a primitive application. [`scratch/FoldAltsNoNestedIfIsFalse.v`, which must fail]
    - A pattern variable with no matching field is bound to `?`. [`ConCore.v`: `fieldless_reader_is_undefined`]
    - `fold-alts` spends no fuel.
 8. **Merge's lambda clause.** The paper merges `λx.e₁` with `λx.e₂`. Evaluation never produces a bare lambda, only closures. The clause now merges two closures with the same environment and the same binder: `(Γ, λx.e₁)` and `(Γ, λx.e₂)` become `(Γ, λx. if c then e₁ else e₂)`.
 9. **Applying a cast whose coercion does not split is stuck, on purpose.** No rule applies, on either side. [`scratch/OpaqueCastOperatorStuck.v`]
 10. **Merging and folding.** Do not claim that `fold-alts` on a merged scrutinee equals `fold-alts` on the raw one. That claim is false. [`scratch/MergeIsNotThePapersIte.v`]
+11. **`case` can branch on an SMT boolean.** This is new, and the paper has nothing like it. SymFC compiles a comparison into a `case` on a solver term: `(<) = convert .: ilt`, `convert v = ite v True False`, and `ite` is itself `case scrut of True → tr; False → fl`. So the scrutinee of a `case` can be a formula rather than a constructor. Rule Case now reads the scrutinee as a formula and answers by its shape.
+
+   The table is what `case` does for each scrutinee, after merge has run on it:
+
+   | Scrutinee, after merge | What `case` does | Rule |
+   | --- | --- | --- |
+   | a constructor spine `D e⃗` | takes the alternative for `D`, binding the fields | `FoldAlts_Con` |
+   | a branch `if c then t else f`, where `c` reads as a formula | folds both arms, under `Φ ∧ c` and `Φ ∧ ¬c` | `FoldAlts_If` |
+   | a branch whose guard reads as no formula | `?` | `FoldAlts_IfFail` |
+   | a formula with no variable, such as `true` or `not true` | takes the `True` or the `False` alternative, by the formula's value | `FoldAlts_GroundFormula` |
+   | a formula with a variable and the right arity everywhere, such as `and x y` | builds `if e then r₁ else r₂`, where `r₁` folds the `True` alternative under `Φ ∧ e` and `r₂` folds the `False` alternative under `Φ ∧ ¬e` | `FoldAlts_SymbolicFormula` |
+   | a formula with a variable and a wrong arity, such as `and x y true` | stuck: no rule applies | — |
+   | a primitive application that reads as no formula, such as `not (if x then true else false)` | stuck: no rule applies | — |
+   | a bottom | the same bottom | `FoldAlts_Bot` |
+   | anything else | `?` | `FoldAlts_Otherwise` |
+
+   The two stuck rows are deliberate. They are the shapes for which no answer is sound, and getting stuck is the safe answer. The model's reducer never produces either shape. [`scratch/RuntimeBranchWitnessesClosed.v`; `NonVacuity.v` section `RuntimeBranch`]
 
 ---
 
@@ -126,7 +145,21 @@ Each item is a defect in `theory.tex` that the formalization fixes. The file in 
 | Thunk | `Γ' ⊢ e ⇓ e'` gives `(Γ', e) ⇓ e'` |
 | Out-Of-Fuel | `e ⇓⁰ ⊥ₖ`. It is the only rule at bound 0. |
 
-`fold-alts` follows the paper, with the three changes in section 3, item 7.
+**`fold-alts`.** It spends no fuel, and it has seven clauses. Section 3, item 11 gives the table; this is the same list written as rules.
+
+| Clause | Premises and conclusion |
+| --- | --- |
+| `FoldAlts_Con` | `e ≡ D e⃗`, the alternative for `D` is `D x⃗ → e_p`, and `Γ{x⃗ ↦ e⃗} ⊢ e_p ⇓ e_r`, gives `e_r` |
+| `FoldAlts_If` | `e_c` reads as formula `pc`; fold `e_t` under `Φ ∧ pc` and `e_f` under `Φ ∧ ¬pc`; gives `if e_c then e_t' else e_f'` |
+| `FoldAlts_IfFail` | `e_c` reads as no formula, gives `?` |
+| `FoldAlts_Bot` | a bottom gives the same bottom |
+| `FoldAlts_GroundFormula` | `e` reads as formula `pc`, `pc` has no variable; fold `True` or `False` in place of `e`, chosen by the value of `pc`; gives that result |
+| `FoldAlts_SymbolicFormula` | `e` reads as formula `pc`, `pc` has a variable, every primitive in `pc` has exactly its arity; `r₁` folds `True` under `Φ ∧ pc`, `r₂` folds `False` under `Φ ∧ ¬pc`; gives `if e then r₁ else r₂` |
+| `FoldAlts_Otherwise` | `e` reads as no formula, `e` is no primitive application, the head of `e`'s spine is no branch, no alternative matches `e`, and `e` is no bottom; gives `?` |
+
+The last two premises of `FoldAlts_Otherwise` are new and they matter. Without "reads as no formula" the rule would answer `?` for a boolean formula that the two new clauses resolve. Without "is no primitive application" it would answer `?` for a primitive application that reads as no formula, and that answer is unsound: the concrete instance of such a term can read as a formula and take an alternative. Getting stuck is the right answer there. [`scratch/NestedBranchScrutineeWitness.v`]
+
+`True` and `False` above are the two data constructors `dcon_true` and `dcon_false` of `SymCoreSorts`. A formula's value picks between them through `truth_constructor`.
 
 Merge is `merge(Γ, if c then e_t else e_f) = ite(Γ, c, e_t, e_f)`, and merge is the identity on any other term. `ite` follows the paper, with these clauses:
 
@@ -136,6 +169,8 @@ Merge is `merge(Γ, if c then e_t else e_f) = ite(Γ, c, e_t, e_f)`, and merge i
 - equal bottoms, types or coercions;
 - two casts with the same coercion: recurse into their bodies;
 - otherwise: keep the branch.
+
+The second clause is what turns a branch into a formula, so merge is the step that hands a runtime branch to Rule Case.
 
 ### 4.4 ConCore evaluation
 
@@ -165,6 +200,12 @@ Most rules are structural congruence. The rules that are not:
 
 - **`budget_total Φ Γ e`.** There is an `h` such that for every `n ≥ h`, `e` has some value at `Fin n`. A looping term satisfies it, because it runs out of fuel. A stuck term does not.
 - **`closed_program Γ e`.** Every environment is scoped, and every free variable of `e` is bound by `Γ`.
+- **`symbolic_program S Γ e`.** The same condition for the symbolic side, with the symbolic variables allowed free. In plain words: every free variable of the program is either bound by the environment or is a symbolic variable of the run. It is written with `sym_scoped`, which is `scoped` plus the rule "a variable in `S` is in scope anywhere". With no symbolic variable the two agree (`sym_scoped_no_symvars`).
+
+  Soundness and completeness need it because a program may not read a variable that is neither bound nor symbolic. Such a variable makes Rule Sym-Var fire, the value is that variable, and no concrete value is an instance of it. It is also what keeps a concrete run out of `FoldAlts_SymbolicFormula`: a closed scrutinee's formula mentions no variable (`expr_to_pc_scoped_no_var`), so a concrete run never builds a runtime branch.
+- **`smt_bounded_run Φ Γ e`.** There is one number `bs` that bounds the size of every SMT term the run can build, from every state it can reach, at every bound. In Rocq: `sym_reach` is the reflexive transitive closure of `sym_step`, a step relation that covers every way evaluation moves from one `(Φ, Γ, e)` state to another; `smt_terms_bounded bs Φ Γ e` says that for every reachable state and every value that state has at any fuel, `smt_size (merge Γ' v) ≤ bs`; and `smt_bounded_run` says some such `bs` exists.
+
+  In plain words: the program's SMT terms do not grow without limit as the bound grows. A program that builds a longer and longer formula on some path fails it. Completeness needs it, and section 10, item 4 says what it rules out.
 - **`saturated e`.** Every primitive occurrence is fully applied. Section 8 explains it.
 
 ---
@@ -175,27 +216,37 @@ Most rules are structural congruence. The rules that are not:
 
 The parameters are abstract. The SMT theory stays configurable through them.
 
-- **`SymCoreSorts`:** literals, primitives, `and`/`not`/`ite`, `arity`, `prim_value` (the SMT meaning of a primitive on literals), `lit_true`, type constructors, and decidable equalities.
+- **`SymCoreSorts`:** literals, primitives, `and`/`not`/`ite`, `arity`, `prim_value` (the SMT meaning of a primitive on literals), `lit_true`, the two boolean data constructors `dcon_true` and `dcon_false`, type constructors, decidable equalities, and two equations that fix the meaning of `not` and `ite`:
+  - `prim_value(not, [l]) = lit_true` exactly when `l ≠ lit_true`;
+  - `prim_value(ite, [c, t, f]) = t` when `c = lit_true`, and `f` otherwise.
+
+  These two equations describe the SMT theory, not the solver, which is why they sit beside `prim_value` rather than in a law class. Rule Case needs them: it reads the truth value of a merged boolean and must pick the arm the model takes.
 - **`SymCoreSolver`:** `sat`, `pc_true`, `reduce_prim`, `cast_expr`, and the two substitutions.
 - **`σ ⊨ Φ`:** defined as `pc_value σ Φ = lit_true`. It is a definition, not a law.
 
 ### 5.2 Laws in `ConCoreLaws`
-
-These are all needed by soundness and completeness.
 
 | Law | Plain meaning | Why it exists |
 | --- | --- | --- |
 | `ReducePrimSolvable` | Solvable arguments give a solvable result | Guard evaluation stays in the SMT fragment |
 | `ReducePrimSaturated` | A primitive-headed result is fully applied | Over-application stays stuck |
 | `ReducePrimConcore`, `CastExprConcore` | ConCore inputs give ConCore outputs | Concrete runs stay concrete |
-| `ReducePrimScoped`, `CastExprScoped` | Closed inputs give closed outputs | Without them a lawful cast can invent a free variable and break soundness [`scratch/SoundnessNeedsScopeLaws.v`: `soundness_fails_without_cast_scoped`] |
+| `ReducePrimScoped`, `CastExprScoped` | Inputs in scope give a result in scope | Without them a lawful cast can invent a free variable and break soundness [`scratch/SoundnessNeedsScopeLaws.v`: `soundness_fails_without_cast_scoped`] |
+| `ReducePrimKeepsOutOfFuel`, `CastExprKeepsOutOfFuel` | A result keeps `⊥ₖ` visible when an argument shows it | So that a spent budget cannot be laundered into a clean value. See section 10, item 10 |
 | `ModelsSat` | A formula with a model is satisfiable | Rule Prune cannot fire on the model's path |
 | `PrimValueAnd` | `and` means conjunction | Path conditions compose |
 | `ReducePrimContains` | Related arguments give related results, **when the concrete arguments are closed** | The restriction lets a real simplifier satisfy the law [`scratch/ReducerLawsForbidSimplification.v`] |
 | `ReducePrimDenote` | Reduction keeps the SMT value | `reduce-prim` may compute |
 | `ReducePrimGroundValue` | A result with no variable is a literal | A ground result cannot stop half-reduced |
 | `CastExprContains` | A cast keeps instances | Soundness of Rule Cast |
+| `ReducePrimIteWellformed` | If the reduced `ite` reads as a well-formed formula, so does the arm the model takes | Rule Case reads the merged branch as a formula, and the arm it selects must be one too |
 | `SubstCoercContainsEnv`, `SubstTypeContainsEnv` | Substitution keeps instances | Rules Coercion and Type |
+
+**The scope laws are now stated for open terms.** They used to say "closed input gives closed output". They now say: if every free variable of the input is bound in a list `L` or is symbolic, the same holds of the output. The closed forms follow at once (`reduce_prim_scoped_closed`, `cast_expr_scoped_closed`), so the concrete side is unchanged. The open form is what the symbolic side needs, because a symbolic value is open by design: it mentions symbolic variables.
+
+The open form is strictly stronger. A cast that wraps its argument in a thunk with an empty environment satisfies the closed form and breaks the open one, because the wrap hides the argument's bound variables. `scratch/ZipLeakCounterexample.v` used to do exactly that and had to be changed.
+
+**The two `⊥ₖ` laws are in the bundle but no theorem uses them yet.** They were added for bounded soundness, which is still unproved. Section 10, item 10 says where that stands. Do not write in the paper that they buy anything today.
 
 ### 5.3 Cost laws in `SymFCCostLaws`
 
@@ -212,6 +263,8 @@ In the paper, write these as: "`reduce-prim` and `cast` preserve instances witho
 
 - `scratch/FuelInflationCounterexample.v`: `lawful_instance_refutes_target`.
 - `scratch/ZipLeakCounterexample.v`: `branch_lawful_instance_refutes_target`. This one leaks the junk through merge's constructor zip.
+
+**Read those two with care.** Both refute the completeness statements **without** the `smt_bounded_run` premise, and both fail that premise: their junk arm builds a tower of negations whose size grows with the bound. Each file states the premise-free form itself, as `target_completeness_unbounded` and friends. `FuelInflationCounterexample.v` also breaks `ReducePrimKeepsOutOfFuel`, and the file proves that (`fuel_reduce_prim_hides_the_spent_budget`), so its solver satisfies the rest of the bundle and not the whole of it. So the mechanized case for the cost laws is this: they are needed for completeness **without** a bound on SMT term size. Whether they are still needed once `smt_bounded_run` is assumed is open, and nobody has checked it.
 
 **Why the slack depends on the arguments.** A constant slack is too strict. The model folds a concrete argument to a literal while the symbolic side keeps an SMT term. [`scratch/ReducePrimOverheadNeedsSlack.v`: `model_breaks_constant_slack`]
 
@@ -231,7 +284,7 @@ These are in `Saturation.v`, not in any bundle.
 
 `Model.v` uses:
 
-- `lit := bool`;
+- `lit := bool`, with `dcon_true := "True"` and `dcon_false := "False"`;
 - `sat := true`;
 - casts erased and identity substitutions;
 - a reducer that splits branches in its arguments, then simplifies:
@@ -241,7 +294,7 @@ These are in `Saturation.v`, not in any bundle.
   - ground terms fold to literals;
   - otherwise a residual term.
 
-`reflexivity` checks the rewrites (`model_and_false_left`, `model_ite_same_arms`). `model_symfc_cost_laws` proves every law.
+`reflexivity` checks the rewrites (`model_and_false_left`, `model_ite_same_arms`). `model_symfc_cost_laws` proves every law, including the three new ones.
 
 ---
 
@@ -251,12 +304,16 @@ Each statement below is exact, apart from notation. Check it with `Check` (secti
 
 ### 6.1 Concrete determinism: `concore_eval_deterministic` (`ConCore.v`)
 
-> If `Γ` is a ConCore environment and `e` is a ConCore program, then `Γ ⊢ᶜ e ⇓ᶜ v₁` and `Γ ⊢ᶜ e ⇓ᶜ v₂` imply `v₁ = v₂`.
+> If `Γ` is a ConCore environment, `e` is a ConCore program, and `closed_program Γ e` holds, then `Γ ⊢ᶜ e ⇓ᶜ v₁` and `Γ ⊢ᶜ e ⇓ᶜ v₂` imply `v₁ = v₂`.
+
+This is the determinism theorem of the paper.
+
+The closedness premise is new. It is needed twice: a free variable would let Rule Var and Rule Sym-Var both fire, and a closed scrutinee's formula mentions no variable, so `FoldAlts_SymbolicFormula` cannot fire on a concrete run. `concore_eval_deterministic_top` is the whole-program corollary: it asks for `concore_expr e` and `closed_term e` in the empty environment.
 
 Limits:
 
 - **Unlimited bound only.** At a finite bound it does not follow from the laws. A run that exceeds the bound can pass `⊥ₖ` into `cast`, and the laws say nothing about non-ConCore input. [`ApplicationRules.v`: `bounded_concrete_determinism_fails`. Its assumptions are two `cast` equations and one unsatisfiable guard.]
-- **Symbolic evaluation is not deterministic.** Rule Prune may give `∅` or the ordinary value on an infeasible path, and it does so by design. [`NonVacuity.v`: `pm_symbolic_evaluation_not_deterministic`, `scratch/EvalNotDeterministic.v`] Do not claim symbolic determinism. It is not expected: SymCore exists to find ConCore values, and concrete determinism is the determinism theorem of the paper.
+- **Symbolic evaluation is not deterministic.** Rule Prune may give `∅` or the ordinary value on an infeasible path, and it does so by design. [`NonVacuity.v`: `pm_symbolic_evaluation_not_deterministic`, `scratch/EvalNotDeterministic.v`] Do not claim symbolic determinism. It is not expected: SymCore exists to find ConCore values.
 
 **Proof structure.** Induction on the first derivation (`eval_det_fix`) with inversion on the second.
 
@@ -272,18 +329,22 @@ Limits:
 > - `contains σ S e_s e_c`;
 > - `e_c` is ConCore;
 > - `closed_program Γc e_c`;
+> - `symbolic_program S Γs e_s`;
 > - `Φ; Γs ⊢ e_s ⇓ v_s`.
 >
 > Then there is a `v_c` with `Γc ⊢ᶜ e_c ⇓ᶜ v_c` and `contains σ S v_s v_c`.
 
-In plain words: whatever the symbolic run produces, every concrete instance also runs, and the symbolic result covers the concrete result. The laws needed are those in `ConCoreLaws`.
+In plain words: whatever the symbolic run produces, every concrete instance also runs, and the symbolic result covers the concrete result. The laws needed are those in `ConCoreLaws` except the two `⊥ₖ` laws.
+
+`symbolic_program` is the new hypothesis. Section 4.6 says what it means and why it is needed.
 
 **Proof structure.** Induction on the **symbolic** derivation at `Inf`, as mutually recursive fixpoints over `eval` and `fold_alts` (`concore_soundness_fix`). The plain induction principle is too weak, because App-Prim has a `Forall2` premise and Case nests `fold_alts`. On paper, write "induction on derivation height, stated simultaneously for `fold-alts`". Key lemmas:
 
 - **Alignment:** the concrete term takes the matching rule (`comp_contains`, `contains_spine_if`, `contains_app_if_spine`, `contains_unspool_primop`, `contains_unspool_con`, `contains_delay`).
 - **Merge:** merge keeps the instance, or both sides are scrutinees that no alternative matches (`merge_keeps`).
-- **Closedness:** evaluation of a closed program stays closed (`closed_eval`).
+- **Closedness:** evaluation of a closed program stays closed (`closed_eval`); evaluation of a symbolic program stays symbolic (`sym_eval_scoped_fix`).
 - **Guards:** a guard's truth value survives evaluation (`eval_models_cond`, `eval_denote`).
+- **Formula scrutinees:** the new fold clauses need the model's reading of the merged formula to line up with the concrete side, which is what `ReducePrimIteWellformed` and the two `prim_value` equations give.
 
 ### 6.3 Completeness (`Completeness.v`, section `CompletenessUnderCostLaws`, laws `SymFCCostLaws`)
 
@@ -294,6 +355,8 @@ In plain words: whatever the symbolic run produces, every concrete instance also
 > - `contains σ S e_s e_c`;
 > - `e_c` is ConCore;
 > - `closed_program Γc e_c`;
+> - `symbolic_program S Γs e_s`;
+> - `smt_bounded_run Φ Γs e_s`;
 > - `budget_total Φ Γs e_s`;
 > - `Γc ⊢ᶜ e_c ⇓ᶜ v_c`.
 >
@@ -307,7 +370,7 @@ In plain words: whatever the symbolic run produces, every concrete instance also
 
 > Under the hypotheses of `concore_completeness_budget`: there are `k` and `v_s` with `Φ; Γs ⊢ e_s ⇓ᵏ v_s` and `contains σ S v_s v_c`.
 
-In plain words: if the concrete run ends, then every large enough bound gives a symbolic result that covers it. `budget_total` is the only extra hypothesis, and it says the symbolic program never gets stuck. Divergence is allowed, including in arms the model does not take and in branches created while the program runs.
+In plain words: if the concrete run ends, then every large enough bound gives a symbolic result that covers it. There are now three extra hypotheses beside the instance ones: `symbolic_program`, `smt_bounded_run` and `budget_total`. Divergence is allowed, including in arms the model does not take and in branches created while the program runs.
 
 **About the bound.** `h` is not the concrete run's depth. It grows with the concrete derivation and with the symbolic overhead:
 
@@ -326,6 +389,7 @@ In plain words: if the concrete run ends, then every large enough bound gives a 
 - **Symbolic-only steps.** Branch and outer-thunk layers are peeled by strong induction on `bk`.
 - **Guards.** A denoting guard evaluated at `n > size` gives its unbounded value (`smt_eval_fin`).
 - **Opaque functions.** `merge_contains_k` bounds merge, and the cost laws bound `reduce-prim` and `cast`.
+- **Runtime branches.** When a `case` builds `if e then r₁ else r₂`, the overhead of that value grows with the size of `e`, and nothing in the instance index bounds it. `smt_bounded_run` is what supplies the missing bound. `sym_ok` carries it through the induction, alongside `sym_state_scoped`.
 - **Combining.** The ∀-form gives the budget form: `budget_total` supplies a derivation, and the ∀-form says it is good.
 
 **What `budget_total` excludes.** It excludes only programs that get stuck somewhere evaluation goes. After App-If, a stuck term is ill-typed or a primitive applied to the wrong number of arguments. [`Completeness.v`: `budget_total_fails_on_stuck_arm`; `scratch/CompletenessNeedsFuel.v`] Rule Prune can rescue a stuck arm on an infeasible path. [`NonVacuity.v`: `pm_completeness_instance`, `pm_plain_model_not_budget_total`]
@@ -339,6 +403,7 @@ This is an optional corollary, not a main theorem. Concrete determinism (section
 > - `contains σ S e_s e_c`;
 > - `e_c` is ConCore;
 > - `closed_program Γc e_c`;
+> - `symbolic_program S Γs e_s`;
 > - `Φ; Γs ⊢ e_s ⇓ v₁` and `Φ; Γs ⊢ e_s ⇓ v₂`.
 >
 > Then there is a `v_c` with `Γc ⊢ᶜ e_c ⇓ᶜ v_c`, `contains σ S v₁ v_c` and `contains σ S v₂ v_c`.
@@ -350,7 +415,7 @@ Limits:
 - **Unlimited bound only**, like soundness.
 - **It does not make concrete determinism trivial.** Its proof applies soundness twice, and then concrete determinism makes the two concrete values equal.
 
-**Proof.** Soundness gives `v_c₁` for `v₁` and `v_c₂` for `v₂`. The environment `Γc` is ConCore (`contains_env_concrete`). Concrete determinism gives `v_c₁ = v_c₂`.
+**Proof.** Soundness gives `v_c₁` for `v₁` and `v_c₂` for `v₂`. The environment `Γc` is ConCore (`contains_env_concrete`) and closed. Concrete determinism gives `v_c₁ = v_c₂`.
 
 ---
 
@@ -371,8 +436,22 @@ Read these before writing prose. Each one is a place where the obvious statement
 | Opaque functions only need to keep instances | They can inflate fuel cost | `scratch/FuelInflationCounterexample.v`, `scratch/ZipLeakCounterexample.v` |
 | Casts keep closedness automatically | A lawful cast can invent a free variable | `scratch/SoundnessNeedsScopeLaws.v` |
 | Merge then fold equals fold | The guard is read before or after evaluation | `scratch/MergeIsNotThePapersIte.v` |
-| The theorems cover code that branches on a computed SMT value | Such code has no instance, and the cast cost law forbids a cast that makes the branch | `ConCore.v`: `branch_on_bound_variable_has_no_instance`; `CostLaws.v`: `cast_of_symvar_is_not_branch` |
-| A counterexample from a bounded run is guaranteed | A lawful cast can turn `⊥ₖ` into `true` | `scratch/BoundedSoundnessFailsUnderLaws.v` |
+| A `case` may treat a cast of a boolean as a branch | A lawful cast can turn a literal into a formula, and can turn a formula into one whose instance is not a formula | `scratch/FormulaScrutineeCastWitness.v` |
+| A `case` may read any primitive application as a formula | A lawful cast can leave a branch inside a primitive; the symbolic side then reads no formula while its instance does | `scratch/NestedBranchScrutineeWitness.v` |
+| A merged branch may be scrutinised with no scope condition | The untaken arm can be a variable that is neither bound nor symbolic, and then the merged formula denotes nothing | `scratch/MergedBranchUntakenArmWitness.v` |
+| A runtime branch's size is bounded by the instance index | Merge makes a formula as large as you like from an instance of index 2 | `Model.v`: `merged_branch_size_is_not_bounded_by_the_instance_index` |
+| A clean value means the derivation had budget left | A lawful cast can drop a field that held `⊥ₖ` | `CostLaws.v`: `a_clean_value_can_come_from_a_derivation_that_ran_out_of_fuel` |
+| The theorems cover no code that branches on a computed SMT value | They do now; see section 10, item 4 for what is still open | `NonVacuity.v` section `RuntimeBranch` |
+| A counterexample from a bounded run is guaranteed | A cast that hides `⊥ₖ` can turn it into `true` | `scratch/BoundedSoundnessFailsUnderLaws.v` |
+
+### 7.1 The four attempts at `case` on an SMT boolean
+
+Four designs were tried. Three were refuted by a Rocq witness, and each witness copies the judgement it refutes into its own file, so the witnesses still stand. Do not repeat these.
+
+1. **Attempt 1: a cast of a boolean is a branch.** The idea was that `case (e ▷ γ) of True → …; False → …` could treat the cast as making a branch on `e`. Two lawful casts break it. One turns the literal `true` into `not true`, a closed formula that is not a literal, so the "branch" is on something the design did not expect. The other turns the formula `and x y` into `and x y true`, a formula with the wrong arity, while the concrete instance `and true false true` reads as no formula at all. So the symbolic and the concrete side disagree. [`scratch/FormulaScrutineeCastWitness.v`: `negating_cast_gives_closed_formula_scrutinee`, `applying_cast_splits_formula_from_its_instance`]
+2. **Attempt 2: read every primitive application as a formula, and answer `?` when it reads as none.** A lawful cast can leave a branch inside a primitive: `not (if x then true else false)`. That term reads as no formula, so the design answered `?`. Its concrete instance is `not true`, which reads as the ground formula `not true` and takes the `False` alternative. `?` does not cover a constructor, so soundness fails. The fix is the "is no primitive application" premise on `FoldAlts_Otherwise`: such a scrutinee is now stuck, not undefined. [`scratch/NestedBranchScrutineeWitness.v`: `proposed_design_breaks_soundness`]
+3. **Attempt 3: fold a merged branch with no scope condition.** The program `case (if x then true else y) of …`, with `y` free and not symbolic, merges to the formula `ite x true y`. Under a model that takes the `true` arm, the concrete side is `case true of …` and answers the `True` alternative. The symbolic side builds a runtime branch whose guard mentions `y`, and that guard denotes no formula in an environment that binds `y`, so the branch has no instance. Soundness fails. The fix is `symbolic_program`, which rejects the program outright. [`scratch/MergedBranchUntakenArmWitness.v`: `approved_design_breaks_soundness_in_the_model`]
+4. **Attempt 4, the one that is implemented.** Two clauses, split by whether the formula mentions a variable, and with the arity condition on the symbolic one; everything else stuck. `scratch/RuntimeBranchWitnessesClosed.v` runs the three refuting programs against it: the first agrees with its instance, the second and third are stuck, and the fourth is excluded by `symbolic_program` and agrees once its free variable is symbolic.
 
 ---
 
@@ -395,6 +474,8 @@ Read these before writing prose. Each one is a place where the obvious statement
 
 **Branch arms.** A branch passes its argument count to its arms: `(if c then and x else not) y` counts as saturated. The model's branch lifting needs this.
 
+**A saturated program can still be stuck at a `case`.** The two stuck rows of the table in section 3, item 11 are about the scrutinee's shape, not about arity in the program text. A cast can produce them. The model's reducer does not.
+
 ---
 
 ## 9. Scratch files
@@ -407,12 +488,17 @@ for f in scratch/*.v; do coqtop -q -Q . SymCoreTheory -batch -l "$f" >/dev/null 
 
 Exactly five files fail today:
 
-- **`FoldAltsNoNestedIfIsFalse.v` fails on purpose.** It derives `False` from an old axiom that is now a lemma.
+- **`FoldAltsNoNestedIfIsFalse.v` fails on purpose.** Its last proof tries to apply `FoldAlts_Otherwise` to a scrutinee whose spine head is a branch. The spine-head premise rejects it, and that rejection is the regression check.
 - **`Audit.v`, `ReducePrimCannotCompute.v`, `prim.v`, `prim2.v`** used to fail on purpose, as results before the repairs. They now also fail because signatures changed. None of them carries a "must fail" marker, so treat them as historical.
 
 Every other file must pass. If one of the five starts to pass, look at why.
 
-`BoundedSoundnessFailsUnderLaws.v` is the witness for section 10, item 10.
+The files about `case` on an SMT boolean:
+
+- `FormulaScrutineeCastWitness.v`, `NestedBranchScrutineeWitness.v`, `MergedBranchUntakenArmWitness.v` refute attempts 1, 2 and 3. Section 7.1 says how.
+- `RuntimeBranchWitnessesClosed.v` is new. It runs those three programs against the `fold_alts` the development has, and shows none of them breaks anything. Its five theorems are `a_ground_formula_scrutinee_agrees_with_its_instance`, `a_branch_inside_a_primitive_is_stuck`, `a_wrong_arity_formula_is_stuck`, `a_free_untaken_arm_is_not_a_symbolic_program` and `a_symbolic_untaken_arm_agrees_with_its_instance`. Both of its witness solvers satisfy the whole of `SymFCCostLaws`.
+
+`BoundedSoundnessFailsUnderLaws.v` is the witness for section 10, item 10. It no longer builds a full `SymFCCostLaws` instance: its cast is what `CastExprKeepsOutOfFuel` forbids, and the file proves that (`bot_cast_hides_the_spent_budget`) alongside every other cast law it still satisfies.
 
 Older files whose names describe their result:
 
@@ -427,20 +513,31 @@ Read a file's theorem names with `grep -n '^Theorem\|^Lemma' scratch/<file>.v`.
 
 ## 10. Open items and honest limits
 
-1. **The scope laws are settled.** `ReducePrimScoped` and `CastExprScoped` say that `reduce-prim` and `cast` do not create free variables. The user accepted them as common sense for any real solver. `CastExprScoped` is proved necessary (`scratch/SoundnessNeedsScopeLaws.v`). `ReducePrimScoped` is kept by analogy.
-2. **Determinism holds only at `Inf`**, and only for concrete runs. Section 6.1 explains why.
+1. **The scope laws are settled.** `ReducePrimScoped` and `CastExprScoped` say that `reduce-prim` and `cast` do not create free variables, and they now say it for open terms. The user accepted them as common sense for any real solver. `CastExprScoped` is proved necessary (`scratch/SoundnessNeedsScopeLaws.v`). `ReducePrimScoped` is kept by analogy.
+2. **Determinism holds only at `Inf`**, and only for closed concrete runs. Section 6.1 explains why.
 3. **`merge_keeps` is weaker than "merge never loses an instance".** Merging can lose the instance of a variable outside `S`. No theorem needs the strong form, and the paper must not claim it.
-4. **The theorems do not cover runtime branches. This is the largest open item.** A runtime branch is a symbolic branch whose guard is computed while the program runs, for example the comparison of a symbolic key inside `Map.insert`. The paper's first example, `mapLookupInsert`, needs one. The development has two ways to make such a branch, and the theorems cover neither:
-   - **A branch in code.** `λx. if x then e_t else e_f` has no instance under any model (`ConCore.v`: `branch_on_bound_variable_has_no_instance`; `scratch/BoundGuardHasNoInstance.v` shows that the model evaluates it). Soundness and completeness need an instance, so they say nothing about a program that contains such a function. Embedding code is where these functions appear.
-   - **A cast that makes a branch.** `CastExprContainsK` makes a cast keep the overhead index exactly, and a branch adds overhead. So a cast of a symbolic variable is never a branch (`CostLaws.v`: `cast_of_symvar_is_not_branch`), and a cast of an SMT term `t` is never `if t then D₁ else D₂` (`cast_of_smt_term_is_not_its_own_branch`).
+4. **Runtime branches are covered, with three narrow limits and one semantic hypothesis.** A runtime branch is a symbolic branch whose guard is computed while the program runs, for example the comparison of a symbolic key inside `Map.insert`. The paper's first example, `mapLookupInsert`, needs one.
 
-   So in every run the theorems cover, each symbolic branch is already in the starting term, and its guard mentions only symbolic variables. Every non-vacuity instance has this shape. The fix is a design decision that is still open. One option: let `contains` relate a branch whose guard is not known yet, and give ConCore a rule that picks an arm when the guard is a literal. Another option: relax `CastExprContainsK` to allow bounded extra overhead, and add a model cast that makes a branch. Nobody has checked that the completeness proof survives either change. Until this is fixed, the paper must state the theorems only for terms whose branches are all in the starting term.
+   **What is covered.** `NonVacuity.v` section `RuntimeBranch` holds the program `(λa. case (and a y) of True → true; False → false) x`, with `x` and `y` symbolic. Its guard `and a y` is built while the program runs, out of a variable the lambda binds. `rb_runtime_branch_fires` shows `FoldAlts_SymbolicFormula` firing on it. `rb_every_bounded_value_branches` shows that at every bound the value is either `⊥ₖ` or a branch, so the branch is not an accident of one bound. Soundness has an instance (`rb_soundness_instance`), and so do both completeness forms (`rb_completeness_budget_instance`, `rb_completeness_forall_instance`). The hypotheses hold: `rb_contains`, `rb_symbolic_program`, `rb_smt_bounded`.
+
+   So the paper may now say that the theorems cover code that branches on a value computed at run time. The residual limits are these, and they must be stated:
+
+   - **A branch written as `if` in the source, with a guard bound by a lambda, still has no instance.** `λx. if x then e_t else e_f` has no instance under any model (`ConCore.v`: `branch_on_bound_variable_has_no_instance`; `scratch/BoundGuardHasNoInstance.v` shows that the model evaluates it). So a source program must reach a runtime branch through `case` on a solver term, which is what SymFC's compilation of a comparison does, and not through a bare `if` on a bound variable.
+   - **A branch created by a cast is still ruled out.** `CastExprContainsK` makes a cast keep the overhead index exactly, and a branch adds overhead. So a cast of a symbolic variable is never a branch (`CostLaws.v`: `cast_of_symvar_is_not_branch`), and a cast of an SMT term `t` is never `if t then D₁ else D₂` (`cast_of_smt_term_is_not_its_own_branch`).
+   - **A solver that leaves a branch inside a primitive application makes such a `case` stuck.** That is the second stuck row of the table in section 3, item 11. Getting stuck is the sound answer, and `scratch/NestedBranchScrutineeWitness.v` shows that any other answer is not. The model's reducer never produces this shape, because it splits branches out of its arguments first.
+   - **Completeness needs `smt_bounded_run`, a second semantic hypothesis beside `budget_total`.** In plain words it rules out a program whose SMT terms grow without limit as the bound grows: a loop that keeps conjoining one more comparison onto a guard, so that at bound `n` the formula has about `n` operators. It does not rule out ordinary divergence, and it does not rule out a program that builds a large but fixed formula.
+
+     The unconditional version — completeness with no bound on SMT term size — is open. Two mechanized obstructions say why it is hard. `Model.v`: `merged_branch_size_is_not_bounded_by_the_instance_index` builds, for any `B`, a branch whose instance has index 2 and whose merged formula has size at least `B`, so that every instance of the resulting runtime branch has index at least `B`. The completeness proof carries exactly such an index bound, and this says no function of the instance index can supply it. `CostLaws.v`: `a_clean_value_can_come_from_a_derivation_that_ran_out_of_fuel` builds a lawful cast that drops a constructor field, so a run that spent its budget still answers a clean literal while the unbounded run has no value at all. Together they say that neither the index nor the value tells you the run was well behaved, so the bound has to come from somewhere else. `smt_bounded_run` is where it comes from now.
 5. **Several laws only make sense relative to ConCore or closed input.** `bounded_concrete_determinism_fails` shows the laws leave `cast` free on input that contains `⊥ₖ`.
 6. **`sat` is constantly true in the main model.** `NonVacuity.v` adds `pruning_solver` so that Rule Prune is exercised.
 7. **Stale comments may remain** in `SymCore.v` and `ConCore.v`. Before quoting a comment, check it against the code. Search with `grep -n 'WHNF\|EClos\|progressive\|solver_free\|Section 12.5'`.
 8. **The paper describes `contains` as a Boolean relation.** In the development it is a `Prop` relation with a semantic rule for SMT terms. Describe it as a relation.
 9. **The worked examples at the top of `Completeness.v`** sit in a section with only `ConCoreLaws`, and they predate the cost laws. The model instances in `NonVacuity.v` are the ones to cite.
-10. **No soundness theorem covers a bounded run.** Soundness needs a run at `Inf`, and such a run exists only when every path ends, including paths no model takes (`NonVacuity.v`: `nv_symbolic_run_diverges`). The tool reports counterexamples from bounded runs. The laws do not make those counterexamples real. `scratch/BoundedSoundnessFailsUnderLaws.v` builds a solver that satisfies every law in `SymFCCostLaws`. Its cast turns `⊥ₖ` into `true`, so `cast(Ω)` has the value `true` at bound 2, but the concrete run has no value (`lawful_solver_breaks_bounded_soundness`). The main model in `Model.v` does not do this. So the paper must not say "guaranteed counterexample" of a bounded run unless the tool re-runs the counterexample concretely. A fix would add a law that `cast` and `reduce-prim` keep `⊥ₖ` visible, and then prove soundness at a bound.
+10. **No soundness theorem covers a bounded run.** Soundness needs a run at `Inf`, and such a run exists only when every path ends, including paths no model takes (`NonVacuity.v`: `nv_symbolic_run_diverges`). The tool reports counterexamples from bounded runs. The laws do not make those counterexamples real.
+
+    The last handoff suggested a fix: add a law that `cast` and `reduce-prim` keep `⊥ₖ` visible. **That fix is now in place.** `ReducePrimKeepsOutOfFuel` and `CastExprKeepsOutOfFuel` are fields of `ConCoreLaws`, the model proves both, and `scratch/BoundedSoundnessFailsUnderLaws.v` shows that they are exactly what its `⊥ₖ`-hiding cast breaks.
+
+    **Bounded soundness itself is still unproved.** No theorem uses the two laws yet. `CostLaws.v` has two partial results towards it: `merge_folds_no_branch_that_ran_out_of_fuel` says merge never folds away a term that shows `⊥ₖ`, and `a_clean_value_can_come_from_a_derivation_that_ran_out_of_fuel` says the laws still allow a clean value from a spent budget, because a cast may drop a whole field. So the paper must not say "guaranteed counterexample" of a bounded run unless the tool re-runs the counterexample concretely.
 
 ---
 
@@ -471,7 +568,7 @@ Search contains_k merge.
 coqtop -q -Q . SymCoreTheory -batch -l probe/P.v
 ```
 
-If the command prints nothing for a proof you wrote, Rocq accepted it. Any error names a line.
+If the command prints nothing for a proof you wrote, Rocq accepted it. Any error names a line. `probe/` is in `.gitignore`.
 
 ### Useful commands
 
@@ -484,15 +581,17 @@ If the command prints nothing for a proof you wrote, Rocq accepted it. Any error
 ### Checking a claim you are about to write
 
 - **"Is this true?"** State it as a `Lemma` in a probe inside a section with `Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : SymFCCostLaws}.` Try to prove it.
-- **"Is this false?"** Prove its negation. For a claim about all solvers, prove the negation inside a concrete instance, the way the scratch counterexamples do. Copy the model from `Model.v`, and see `scratch/ZipLeakCounterexample.v` for a local `Instance` of the laws.
+- **"Is this false?"** Prove its negation. For a claim about all solvers, prove the negation inside a concrete instance, the way the scratch counterexamples do. Copy the model from `Model.v`, and see `scratch/RuntimeBranchWitnessesClosed.v` for a short local `SymFCCostLaws` instance.
 - **Look at a goal before writing a tactic.** Put `Show.` at the point where you are stuck and end the proof with `Abort.` Run coqtop and read the goal and hypothesis names. Never guess tactics and recompile repeatedly; that burns time and tokens.
 
 ### Traps
 
 - The notation `Φ ; Γ ⊢ e ⇓ v` means `eval Inf Φ Γ e v`. It clashes with `;` inside `pose proof (...)` and inside list literals `[a; b]`. Write `pose proof (...) as H` and `a :: b :: nil`.
 - In `match goal` patterns, write `eval _ Φ Γ e v` and `EmptyEnv`, not the notation and not `·`.
-- `destruct` or `induction` on an `eval Inf` hypothesis generalises the bound, and Out-Of-Fuel returns as a case. Use `remember`, or the tactics `inf_destruct` and `inf_induction` in `ConCore.v`.
+- `destruct` or `induction` on an `eval Inf` hypothesis generalises the bound, and Out-Of-Fuel returns as a case. Use `remember`, or the tactics `inf_destruct` and `inf_induction` in `ConCore.v`. `inversion` keeps the term's shape and is usually what you want instead.
 - You cannot predict hypothesis names after `inversion`. Read them from `Show`.
+- Inverting a `fold_alts` now gives seven cases, not five. Two of them, `FoldAlts_GroundFormula` and `FoldAlts_SymbolicFormula`, apply to a scrutinee of any shape, so they are not dropped by unification. Kill them with the `expr_to_pc … = Some …` premise.
+- In a model instance, literals may need their sort written out, as in `@ELit model_sorts true`.
 - The laws are section arguments. A lemma stated outside a section that provides them will not find them.
 
 ---
@@ -503,9 +602,10 @@ If the command prints nothing for a proof you wrote, Rocq accepted it. Any error
    - syntax with thunks and `⊥ₖ`;
    - `comp` in place of WHNF;
    - the rule table;
-   - `fold-alts` and merge.
+   - `fold-alts`, including the two boolean-formula clauses, and merge.
 2. Add a short "solver assumptions" paragraph listing the laws of section 5 in plain words, with the model as evidence that they are consistent.
-3. Define ConCore, instances (`contains`), `budget_total` and saturation.
+3. Define ConCore, instances (`contains`), `symbolic_program`, `smt_bounded_run`, `budget_total` and saturation.
 4. State determinism, soundness and completeness as in section 6.
 5. Before the completeness statement, present the stuck-arm counterexample. Then present the looping-arm example, which shows why the bound is needed.
-6. Write the proofs by following the proof structures in section 6. Check every lemma you rely on with `Check`.
+6. Present the runtime-branch example from `NonVacuity.v` after the theorems, and state the residual limits of section 10, item 4 honestly.
+7. Write the proofs by following the proof structures in section 6. Check every lemma you rely on with `Check`.
