@@ -308,6 +308,9 @@ Proof.
         [exact HΓ | exact HΓ | exact (decompose_con_app_saturated _ _ _ He Hd)].
     + exact (exact_at_least ep 0 (find_alt_saturated _ _ _ _ Halts Hfind)).
   - intros f Φ Γ b alts HΓ He _. exact He.
+  - intros f Φ Γ e pc alts r Hpc Hvar _ IH HΓ He Halts. exact (IH HΓ I Halts).
+  - intros f Φ Γ e pc alts r1 r2 Hpc Hvar Har _ IHt _ IHf HΓ He Halts.
+    exact (conj He (conj (IHt HΓ I Halts) (IHf HΓ I Halts))).
   - intros. exact I.
 Qed.
 
@@ -324,7 +327,9 @@ Theorem fold_alts_preserves_saturation : forall f Φ Γ e alts v,
 Proof.
   intros f Φ Γ e alts v HΓ He Halts Hfold.
   induction Hfold as [f Φ Γ ec et ef alts et' ef' pc_c _ _ IHt _ IHf
-                     | | f Φ Γ e d ea xs ep alts er Hd Hfind Hev | f Φ Γ b alts | ].
+                     | | f Φ Γ e d ea xs ep alts er Hd Hfind Hev | f Φ Γ b alts
+                     | f Φ Γ e pc alts r Hpc Hvar _ IHg
+                     | f Φ Γ e pc alts r1 r2 Hpc Hvar Har _ IHt _ IHf | ].
   - destruct He as [Hc [Ht Hf]].
     exact (conj Hc (conj (IHt HΓ Ht Halts) (IHf HΓ Hf Halts))).
   - exact I.
@@ -332,6 +337,8 @@ Proof.
     apply extend_multi_saturated; [exact HΓ | exact HΓ |].
     exact (decompose_con_app_saturated _ _ _ He Hd).
   - exact He.
+  - exact (IHg HΓ I Halts).
+  - exact (conj He (conj (IHt HΓ I Halts) (IHf HΓ I Halts))).
   - exact I.
 Qed.
 

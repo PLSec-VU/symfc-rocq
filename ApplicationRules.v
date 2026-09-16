@@ -110,10 +110,12 @@ Proof.
 Qed.
 
 Lemma concrete_evaluation_never_out_of_fuel : forall Γ e,
-  concrete_env Γ -> concore_expr e -> ~ Γ ⊢ᶜ e ⇓ᶜ EBot BOutOfFuel.
+  concrete_env Γ -> concore_expr e -> closed_program Γ e ->
+  ~ Γ ⊢ᶜ e ⇓ᶜ EBot BOutOfFuel.
 Proof.
-  intros Γ e Henv Hcon Heval.
-  exact (out_of_fuel_not_concore (concore_eval_closed Γ e (EBot BOutOfFuel) Henv Hcon Heval)).
+  intros Γ e Henv Hcon Hclosed Heval.
+  exact (out_of_fuel_not_concore
+           (concore_eval_closed Γ e (EBot BOutOfFuel) Henv Hcon Hclosed Heval)).
 Qed.
 
 End OutOfFuel.
