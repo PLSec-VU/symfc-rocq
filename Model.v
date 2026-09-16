@@ -1848,6 +1848,72 @@ Proof.
   cbn [and_chain smt_size]. lia.
 Qed.
 
+Lemma and_chain_not_if : forall n, is_if (and_chain n) = false.
+Proof. intros n. destruct n; reflexivity. Qed.
+
+Lemma and_chain_not_false_lit : forall n, is_false_lit (and_chain n) = false.
+Proof. intros n. destruct n; reflexivity. Qed.
+
+Lemma model_reduce_and_chain : forall n,
+  reduce_prim op_and (EVar "x"%string :: and_chain n :: nil)
+  = and_chain (Datatypes.S n).
+Proof.
+  intros n.
+  change (reduce_prim op_and (EVar "x"%string :: and_chain n :: nil))
+    with (model_reduce_prim PAnd (EVar "x"%string :: and_chain n :: nil)).
+  unfold model_reduce_prim.
+  rewrite split_args_not_if
+    by (constructor; [reflexivity | constructor; [apply and_chain_not_if | constructor]]).
+  unfold simplify_unbranched.
+  replace (simplify PAnd (EVar "x"%string :: and_chain n :: nil))
+    with (@None (@expr model_sorts)).
+  2: { unfold simplify. cbn [forallb]. rewrite (and_chain_smt_term n).
+       cbn [smt_term smt_need smt_ground andb negb rewrite_prim is_false_lit lit_of].
+       rewrite (and_chain_not_false_lit n). reflexivity. }
+  unfold reduce_unbranched. cbn [length model_arity Nat.eqb].
+  assert (Hflat : Forall (fun a => flat a = true)
+            (EVar "x"%string :: and_chain n :: nil)).
+  { constructor; [reflexivity |].
+    constructor; [exact (solvable_flat · _ (and_chain_solvable n · eq_refl)) | constructor]. }
+  rewrite (lift_flat _ (op_spine_flat PAnd _ Hflat)).
+  rewrite (fold_leaves_not_if _ (op_spine_not_if _ _)).
+  unfold fold_leaf.
+  replace (smt_ground (op_spine PAnd (EVar "x"%string :: and_chain n :: nil)))
+    with false by reflexivity.
+  reflexivity.
+Qed.
+
+Lemma and_chain_is_its_own_value : forall m Φ Γ n,
+  lookup_env Γ "x"%string = None -> m < n ->
+  eval (Fin n) Φ Γ (and_chain m) (and_chain m).
+Proof.
+  induction m as [| m IH]; intros Φ Γ n Hx Hn; destruct n as [| k]; try lia.
+  - apply Eval_Lit.
+  - change (and_chain (Datatypes.S m))
+      with (EApp (EApp (EPrimOp PAnd) (EVar "x"%string)) (and_chain m)) at 1.
+    rewrite <- (model_reduce_and_chain m).
+    eapply Eval_AppPrim with (args := EVar "x"%string :: and_chain m :: nil).
+    + reflexivity.
+    + reflexivity.
+    + cbn [dec]. constructor; [| constructor; [| constructor]].
+      * destruct k as [| k']; [lia |]. apply Eval_SymVar. exact Hx.
+      * apply IH; [exact Hx | lia].
+Qed.
+
+Lemma the_branch_is_its_own_value : forall B Φ n,
+  (Datatypes.S (Datatypes.S (Datatypes.S B)) <= n)%nat ->
+  eval (Fin n) Φ ·
+    (EIf (EVar "x"%string) (@ELit model_sorts true) (and_chain (Datatypes.S B)))
+    (EIf (EVar "x"%string) (@ELit model_sorts true) (and_chain (Datatypes.S B))).
+Proof.
+  intros B Φ n Hn. destruct n as [| k]; [lia |].
+  eapply Eval_If with (pc_c := PCVar "x"%string).
+  - cbn [dec]. destruct k as [| k']; [lia |]. apply Eval_SymVar. reflexivity.
+  - reflexivity.
+  - cbn [dec]. destruct k as [| k']; [lia |]. apply Eval_Lit.
+  - cbn [dec]. apply and_chain_is_its_own_value; [reflexivity | lia].
+Qed.
+
 Lemma merge_of_the_chain : forall n,
   merge · (EIf (EVar "x"%string) (ELit true) (and_chain (Datatypes.S n)))
   = op_spine PIte (EVar "x"%string :: ELit true :: and_chain (Datatypes.S n) :: nil).
@@ -1890,6 +1956,8 @@ Theorem merged_branch_size_is_not_bounded_by_the_instance_index : forall B,
   exists (σ : valuation) (S : symvars) (ec et ef e_c : expr),
     contains_k σ S 2 (EIf ec et ef) e_c
     /\ smt_size e_c = 1
+    /\ (forall Φ n, (Datatypes.S (Datatypes.S (Datatypes.S B)) <= n)%nat ->
+          eval (Fin n) Φ · (EIf ec et ef) (EIf ec et ef))
     /\ B <= smt_size (merge · (EIf ec et ef))
     /\ (forall k r1 r2 v_c,
           contains_k σ S k (EIf (merge · (EIf ec et ef)) r1 r2) v_c -> B <= k).
@@ -1906,7 +1974,10 @@ Proof.
                                             (and_chain (Datatypes.S B))))).
   { rewrite merge_of_the_chain. unfold op_spine. cbn [fold_left smt_size].
     pose proof (and_chain_grows (Datatypes.S B)). cbn [and_chain] in *. lia. }
-  split; [| split; [reflexivity | split; [exact Hsize |]]].
+  split;
+    [| split;
+       [reflexivity
+       | split; [exact (the_branch_is_its_own_value B) | split; [exact Hsize |]]]].
   - replace 2 with (1 + smt_size (EVar "x"%string) + 0) by reflexivity.
     apply ContK_If_True; [| apply ContK_Lit].
     exists (PCVar "x"%string). split; [exact Hden | reflexivity].
