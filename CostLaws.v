@@ -838,3 +838,67 @@ Proof.
 Qed.
 
 End CastsAddNoBranch.
+
+Section OutOfFuelSurvivesInsideADiscardedField.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
+
+Definition wrapping_cast (e : expr) : expr := EApp (ECon "D"%string) e.
+
+Definition field_dropping_program (γ : coercion) (l : lit) : expr :=
+  ECase (ECast self_app γ)
+    (Alt "D"%string ("z"%string :: nil) (ELit l) :: nil).
+
+Lemma wrapping_cast_concore : forall e,
+  concore_expr e -> concore_expr (wrapping_cast e).
+Proof. intros e H. apply Con_App; [apply Con_Con | exact H]. Qed.
+
+Lemma wrapping_cast_sym_scoped : forall S L e,
+  sym_scoped S L e -> sym_scoped S L (wrapping_cast e).
+Proof. intros S L e H. apply SymScoped_App; [apply SymScoped_Con | exact H]. Qed.
+
+Lemma wrapping_cast_contains_k : forall σ S k e e_c,
+  contains_k σ S k e e_c ->
+  contains_k σ S k (wrapping_cast e) (wrapping_cast e_c).
+Proof.
+  intros σ S k e e_c H. unfold wrapping_cast.
+  exact (ContK_App σ S 0 k _ _ _ _ (ContK_Con σ S "D"%string) H).
+Qed.
+
+Lemma wrapping_cast_keeps_out_of_fuel : forall e,
+  mentions_out_of_fuel e = true ->
+  mentions_out_of_fuel (wrapping_cast e) = true.
+Proof.
+  intros e H. unfold wrapping_cast. cbn [mentions_out_of_fuel]. rewrite H.
+  apply orb_true_r.
+Qed.
+
+Theorem a_clean_value_can_come_from_a_derivation_that_ran_out_of_fuel :
+  (forall e γ, cast_expr e γ = wrapping_cast e) ->
+  forall Φ Γ γ l,
+  sat Φ = true ->
+  exists n,
+    eval (Fin n) Φ Γ (field_dropping_program γ l) (ELit l)
+    /\ mentions_out_of_fuel (ELit l) = false
+    /\ Solvable · (ELit l)
+    /\ (forall v, ~ (Φ ; Γ ⊢ field_dropping_program γ l ⇓ v)).
+Proof.
+  intros Hcast Φ Γ γ l Hsat.
+  destruct (self_app_has_value_at_every_budget 0 Φ Γ) as [w Hw].
+  exists 2%nat. split; [| split; [reflexivity | split; [apply Solvable_Lit |]]].
+  - unfold field_dropping_program.
+    eapply Eval_Case with (es' := cast_expr w γ).
+    + apply Eval_Cast. exact Hw.
+    + rewrite Hcast. unfold wrapping_cast.
+      rewrite merge_not_if by reflexivity.
+      eapply FoldAlts_Con with (d := "D"%string) (ea := w :: nil)
+        (xs := "z"%string :: nil) (ep := ELit l).
+      * reflexivity.
+      * reflexivity.
+      * apply Eval_Lit.
+  - intros v Hv.
+    destruct (eval_case_inv Φ Γ _ _ v Hsat Hv) as [es' [Hes _]].
+    destruct (eval_cast_inv Φ Γ self_app γ es' Hsat Hes) as [w' [Hw' _]].
+    exact (self_app_diverges Φ Γ w' Hsat Hw').
+Qed.
+
+End OutOfFuelSurvivesInsideADiscardedField.
