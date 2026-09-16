@@ -772,6 +772,14 @@ Proof.
   exact IHf.
 Qed.
 
+Lemma solvable_no_out_of_fuel : forall Γ e,
+  Solvable Γ e -> mentions_out_of_fuel e = false.
+Proof.
+  intros Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa];
+    try reflexivity.
+  cbn [mentions_out_of_fuel]. rewrite IHf, IHa. reflexivity.
+Qed.
+
 Lemma solvable_unspool_not_if : forall Γ e args ec et ef args0,
   Solvable Γ e -> unspool_app e args = (EIf ec et ef, args0) -> False.
 Proof.
@@ -974,6 +982,22 @@ Proof.
   apply map_ext. apply delay_delay.
 Qed.
 
+Lemma mentions_out_of_fuel_fold_left_app : forall args h,
+  mentions_out_of_fuel (fold_left EApp args h)
+  = orb (mentions_out_of_fuel h) (existsb mentions_out_of_fuel args).
+Proof.
+  induction args as [| a tl IH]; intros h; cbn [fold_left existsb].
+  - rewrite orb_false_r. reflexivity.
+  - rewrite (IH (EApp h a)). cbn [mentions_out_of_fuel]. symmetry. apply orb_assoc.
+Qed.
+
+Lemma mentions_out_of_fuel_make_con_app : forall d args,
+  mentions_out_of_fuel (make_con_app d args) = existsb mentions_out_of_fuel args.
+Proof.
+  intros d args. unfold make_con_app. rewrite mentions_out_of_fuel_fold_left_app.
+  reflexivity.
+Qed.
+
 Lemma unspool_fold_left_app : forall args h acc,
   unspool_app (fold_left EApp args h) acc = unspool_app h (args ++ acc).
 Proof.
@@ -1144,6 +1168,111 @@ Lemma ite_cast : forall Γ ec e1 γ1 e2 γ2,
   (if dec_eqb coercion_eq_dec γ1 γ2 then ECast (ite Γ ec e1 e2) γ1
    else EIf ec (ECast e1 γ1) (ECast e2 γ2)).
 Proof. reflexivity. Qed.
+
+Lemma if_keeps_arm_out_of_fuel : forall ec et ef,
+  orb (mentions_out_of_fuel et) (mentions_out_of_fuel ef) = true ->
+  mentions_out_of_fuel (EIf ec et ef) = true.
+Proof.
+  intros ec et ef H. cbn [mentions_out_of_fuel]. rewrite H. apply orb_true_r.
+Qed.
+
+Lemma zip_if_keeps_out_of_fuel : forall ec a1 a2,
+  length a1 = length a2 ->
+  orb (existsb mentions_out_of_fuel a1) (existsb mentions_out_of_fuel a2) = true ->
+  existsb mentions_out_of_fuel (zip_if ec a1 a2) = true.
+Proof.
+  induction a1 as [| x1 t1 IH]; intros a2 Hlen H; destruct a2 as [| x2 t2];
+    try discriminate Hlen; [discriminate H |].
+  injection Hlen as Hlen. cbn [zip_if existsb] in H |- *.
+  apply orb_true_iff.
+  apply orb_true_iff in H as [H | H]; apply orb_true_iff in H as [H | H].
+  - left. apply if_keeps_arm_out_of_fuel. apply orb_true_iff. left. exact H.
+  - right. apply IH; [exact Hlen | apply orb_true_iff; left; exact H].
+  - left. apply if_keeps_arm_out_of_fuel. apply orb_true_iff. right. exact H.
+  - right. apply IH; [exact Hlen | apply orb_true_iff; right; exact H].
+Qed.
+
+Lemma ite_leaf_keeps_arm_out_of_fuel : forall Γ ec et ef,
+  orb (mentions_out_of_fuel et) (mentions_out_of_fuel ef) = true ->
+  mentions_out_of_fuel (ite_leaf Γ ec et ef) = true.
+Proof.
+  intros Γ ec et ef H. unfold ite_leaf.
+  assert (Hrest : mentions_out_of_fuel
+    (if solvable_dec Γ et then
+       if solvable_dec Γ ef then reduce_prim op_ite (ec :: et :: ef :: nil) else EIf ec et ef
+     else
+       match et, ef with
+       | EThunk Γ1 (ELam x1 b1), EThunk Γ2 (ELam x2 b2) =>
+           if andb (env_eqb Γ1 Γ2) (String.eqb x1 x2)
+           then EThunk Γ1 (ELam x1 (EIf ec b1 b2)) else EIf ec et ef
+       | EBot b1, EBot b2 => if bottom_eqb b1 b2 then EBot b1 else EIf ec et ef
+       | EType τ1, EType τ2 => if dec_eqb type_fc_eq_dec τ1 τ2 then EType τ1 else EIf ec et ef
+       | ECoercion γ1, ECoercion γ2 =>
+           if dec_eqb coercion_eq_dec γ1 γ2 then ECoercion γ1 else EIf ec et ef
+       | _, _ => EIf ec et ef
+       end) = true).
+  { destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
+    - rewrite (solvable_no_out_of_fuel Γ et Ht), (solvable_no_out_of_fuel Γ ef Hf) in H.
+      discriminate H.
+    - apply if_keeps_arm_out_of_fuel; exact H.
+    - destruct et as [ | | | | | | | | γ1 | τ1 | | b1 | Γ1 tbody];
+        try (apply if_keeps_arm_out_of_fuel; exact H).
+      + destruct ef; try (apply if_keeps_arm_out_of_fuel; exact H).
+        destruct (dec_eqb coercion_eq_dec γ1 c); [discriminate H |].
+        apply if_keeps_arm_out_of_fuel; exact H.
+      + destruct ef; try (apply if_keeps_arm_out_of_fuel; exact H).
+        destruct (dec_eqb type_fc_eq_dec τ1 t); [discriminate H |].
+        apply if_keeps_arm_out_of_fuel; exact H.
+      + destruct ef; try (apply if_keeps_arm_out_of_fuel; exact H).
+        destruct (bottom_eqb b1 b) eqn:Hb; [| apply if_keeps_arm_out_of_fuel; exact H].
+        rewrite (bottom_eqb_eq b1 b Hb) in H |- *.
+        cbn [mentions_out_of_fuel] in H |- *. rewrite orb_diag in H. exact H.
+      + destruct tbody as [ | | | | | x1 body1 | | | | | | | ];
+          try (apply if_keeps_arm_out_of_fuel; exact H).
+        destruct ef as [ | | | | | | | | | | | | Γ2 tbody2 ];
+          try (apply if_keeps_arm_out_of_fuel; exact H).
+        destruct tbody2 as [ | | | | | x2 body2 | | | | | | | ];
+          try (apply if_keeps_arm_out_of_fuel; exact H).
+        destruct (andb (env_eqb Γ1 Γ2) (String.eqb x1 x2)) eqn:Hx;
+          [| apply if_keeps_arm_out_of_fuel; exact H].
+        apply andb_prop in Hx as [Hxe _]. rewrite (env_eqb_eq Γ1 Γ2 Hxe) in H |- *.
+        cbn [mentions_out_of_fuel] in H |- *.
+        apply orb_true_iff in H as [H | H]; apply orb_true_iff in H as [H | H].
+        * rewrite H. reflexivity.
+        * rewrite H. repeat rewrite orb_true_r. reflexivity.
+        * rewrite H. reflexivity.
+        * rewrite H. repeat rewrite orb_true_r. reflexivity. }
+  destruct (decompose_con_app et) as [[d1 a1] |] eqn:E1;
+  destruct (decompose_con_app ef) as [[d2 a2] |] eqn:E2; try exact Hrest.
+  destruct (andb (String.eqb d1 d2) (Nat.eqb (length a1) (length a2))) eqn:Hg;
+    [| apply if_keeps_arm_out_of_fuel; exact H].
+  apply andb_prop in Hg as [_ Hlen]. apply Nat.eqb_eq in Hlen.
+  rewrite <- (unspool_make_con_app et d1 a1 (decompose_con_app_unspool _ _ _ E1)) in H.
+  rewrite <- (unspool_make_con_app ef d2 a2 (decompose_con_app_unspool _ _ _ E2)) in H.
+  rewrite !mentions_out_of_fuel_make_con_app in H.
+  rewrite mentions_out_of_fuel_make_con_app.
+  exact (zip_if_keeps_out_of_fuel ec a1 a2 Hlen H).
+Qed.
+
+Fixpoint ite_keeps_arm_out_of_fuel (Γ : environment) (ec et ef : expr) {struct et} :
+  orb (mentions_out_of_fuel et) (mentions_out_of_fuel ef) = true ->
+  mentions_out_of_fuel (ite Γ ec et ef) = true.
+Proof.
+  intros H.
+  destruct et; try (rewrite ite_leaf_of by (left; reflexivity);
+                    apply ite_leaf_keeps_arm_out_of_fuel; exact H).
+  destruct ef; try (rewrite ite_leaf_of by (right; reflexivity);
+                    apply ite_leaf_keeps_arm_out_of_fuel; exact H).
+  rewrite ite_cast.
+  destruct (dec_eqb coercion_eq_dec c c0); [| apply if_keeps_arm_out_of_fuel; exact H].
+  cbn [mentions_out_of_fuel] in H |- *.
+  exact (ite_keeps_arm_out_of_fuel Γ ec et ef H).
+Qed.
+
+Lemma merge_keeps_arm_out_of_fuel : forall Γ ec et ef,
+  orb (mentions_out_of_fuel et) (mentions_out_of_fuel ef) = true ->
+  mentions_out_of_fuel (merge Γ (EIf ec et ef)) = true.
+Proof. intros Γ ec et ef H. exact (ite_keeps_arm_out_of_fuel Γ ec et ef H). Qed.
 
 (** ------------------------------------------------------------------------- *)
 (** Fuel: a depth bound carried by the reduction judgement                     *)

@@ -759,6 +759,53 @@ Proof.
 Qed.
 
 
+Lemma contains_k_if_guard_no_out_of_fuel : forall σ S k ec et ef e_c,
+  contains_k σ S k (EIf ec et ef) e_c -> mentions_out_of_fuel ec = false.
+Proof.
+  intros σ S k ec et ef e_c H.
+  destruct (contains_k_if_inv σ S k ec et ef e_c H) as [k0 [_ [[Hm _] | [Hm _]]]];
+    destruct Hm as [pc [Hd _]];
+    exact (solvable_no_out_of_fuel · ec (denotes_solvable S ec pc Hd)).
+Qed.
+
+Lemma merge_keeps_out_of_fuel_of_a_related_term : forall σ S Γ k es e_c,
+  contains_k σ S k es e_c ->
+  mentions_out_of_fuel es = true ->
+  mentions_out_of_fuel (merge Γ es) = true.
+Proof.
+  intros σ S Γ k es e_c Hck Hm.
+  destruct es; try (rewrite merge_not_if by reflexivity; exact Hm).
+  apply merge_keeps_arm_out_of_fuel.
+  cbn [mentions_out_of_fuel] in Hm.
+  rewrite (contains_k_if_guard_no_out_of_fuel σ S k es1 es2 es3 e_c Hck) in Hm.
+  cbn [orb] in Hm. exact Hm.
+Qed.
+
+Lemma smt_ite_kept_k_has_no_out_of_fuel : forall σ S k m e_c,
+  smt_ite_kept_k σ S k m e_c -> mentions_out_of_fuel m = false.
+Proof.
+  intros σ S k m e_c [ec [et [ef [-> [Hc [Ht [Hf _]]]]]]].
+  apply (solvable_no_out_of_fuel ·). apply reduce_prim_solvable.
+  repeat constructor; assumption.
+Qed.
+
+Theorem merge_folds_no_branch_that_ran_out_of_fuel : forall σ S Γ k es e_c,
+  sym_scoped S nil es ->
+  contains_k σ S k es e_c ->
+  mentions_out_of_fuel es = true ->
+  (exists k', k' <= (1 + field_count e_c) * k /\ contains_k σ S k' (merge Γ es) e_c)
+  \/ (is_cast (merge Γ es) = true /\ is_cast e_c = true).
+Proof.
+  intros σ S Γ k es e_c Hsc Hck Hm.
+  destruct (merge_contains_k σ S Γ k es e_c Hsc Hck) as [Hkept | [Hsmt | Hcast]].
+  - left. exact Hkept.
+  - exfalso.
+    pose proof (merge_keeps_out_of_fuel_of_a_related_term σ S Γ k es e_c Hck Hm) as Htaint.
+    rewrite (smt_ite_kept_k_has_no_out_of_fuel σ S k (merge Γ es) e_c Hsmt) in Htaint.
+    discriminate Htaint.
+  - right. exact Hcast.
+Qed.
+
 End MergeCost.
 
 Section CastsAddNoBranch.
