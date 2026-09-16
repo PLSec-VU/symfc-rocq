@@ -1,6 +1,6 @@
 # SymCore in Rocq
 
-This repository is a Rocq proof of the theory section of the SymFC paper. Rocq is a proof assistant: it checks every definition and proof by machine. The proofs use no axioms. Each assumption about the SMT solver is a *law*, which is a Rocq class that a proof takes as a parameter. The folder `theories/Model` gives one solver that satisfies every law, so the laws do not contradict each other.
+This repository is a Rocq proof of the theory section of the SymFC paper.
 
 ## Build
 
@@ -14,8 +14,6 @@ rocq makefile -f _CoqProject -o Makefile
 make
 ```
 
-A full build takes about 20 seconds. `theories/Theorems.v` prints the main theorems and their assumptions. Each theorem must print "Closed under the global context", which means it uses no axiom.
-
 ## Main results
 
 | Paper | Rocq name | File |
@@ -24,7 +22,6 @@ A full build takes about 20 seconds. `theories/Theorems.v` prints the main theor
 | Theorem "Soundness" | `concore_soundness` | `theories/Soundness/Soundness.v` |
 | Theorem "Bounded completeness" | `concore_completeness_budget` | `theories/Completeness/Completeness.v` |
 
-The completeness file also has two related forms. `concore_completeness_forall` needs no budget-total hypothesis and says that every result at a large enough bound covers the concrete value. `concore_completeness_exists` says that some bound gives such a result.
 
 ## Files
 
