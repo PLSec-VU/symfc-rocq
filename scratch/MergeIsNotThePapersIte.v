@@ -56,11 +56,17 @@ Lemma merge_nonif_refutes :
 Proof.
   intros G ec et ef r pc alts Hpc Hfold Hnotif Hax.
   apply (Hax (PCVar "p") G (EIf ec et ef) alts r) in Hfold.
-  inversion Hfold; subst.
-  - simpl in Hnotif. discriminate.
-  - rewrite Hpc in *. discriminate.
-  - unfold decompose_con_app in *. simpl in *. discriminate.
-  - simpl in Hnotif. discriminate.
+  inversion Hfold; subst;
+    first
+      [ (simpl in Hnotif; discriminate Hnotif)
+      | match goal with
+        | [ H : expr_to_pc _ (EIf _ _ _) = Some _ |- _ ] => simpl in H; discriminate H
+        | [ H : decompose_con_app (EIf _ _ _) = Some _ |- _ ] =>
+            unfold decompose_con_app in H; simpl in H; discriminate H
+        | [ H : is_if (fst (unspool_app (EIf _ _ _) _)) = false |- _ ] =>
+            simpl in H; discriminate H
+        | [ H : expr_to_pc _ _ = None |- _ ] => rewrite Hpc in H; discriminate H
+        end ].
 Qed.
 
 (* The paper's first clause: a shared constructor head is kept and the
@@ -206,6 +212,12 @@ Proof.
     + simpl in *; discriminate.
     + simpl in *; discriminate.
     + rewrite sat_pc_true in *; discriminate.
+  - (* FoldAlts_GroundFormula: the scrutinee reads as no formula *)
+    match goal with [ Hp : expr_to_pc _ (EApp _ _) = Some _ |- _ ] =>
+      simpl in Hp; discriminate Hp end.
+  - (* FoldAlts_SymbolicFormula: the same *)
+    match goal with [ Hp : expr_to_pc _ (EApp _ _) = Some _ |- _ ] =>
+      simpl in Hp; discriminate Hp end.
   - (* FoldAlts_Otherwise: blocked, the alternative for D exists *)
     match goal with [ Hn : match decompose_con_app _ with _ => _ end |- _ ] =>
       simpl in Hn; discriminate Hn end.

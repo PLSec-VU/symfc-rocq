@@ -56,16 +56,37 @@ Proof.
     eapply Cont_Denote; eassumption.
 Qed.
 
-Lemma stack_scoped : forall L c k t, scoped L c -> scoped L t -> scoped L (stack c k t).
-Proof. intros L c k t Hc Ht. induction k; simpl; [exact Ht | apply Scoped_If; assumption]. Qed.
+Lemma stack_sym_scoped : forall S L c k t,
+  sym_scoped S L c -> sym_scoped S L t -> sym_scoped S L (stack c k t).
+Proof.
+  intros S L c k t Hc Ht. induction k; simpl; [exact Ht | apply SymScoped_If; assumption].
+Qed.
 
 #[local] Instance stacking_cast_scoped : CastExprScoped.
 Proof.
-  intros e γ H. change (scoped nil (stacking_cast e γ)). unfold closed_term in H.
+  intros S L e γ H. change (sym_scoped S L (stacking_cast e γ)).
   induction e; try exact H.
   inversion H; subst. simpl.
-  apply Scoped_If; [assumption | apply stack_scoped; [assumption | apply IHe2; assumption] |].
+  apply SymScoped_If; [assumption | apply stack_sym_scoped; [assumption | apply IHe2; assumption] |].
   apply IHe3. assumption.
+Qed.
+
+Lemma stack_keeps_out_of_fuel : forall c k t,
+  mentions_out_of_fuel t = true -> mentions_out_of_fuel (stack c k t) = true.
+Proof.
+  intros c k t H. induction k as [| k IH]; simpl; [exact H |].
+  rewrite IH, orb_true_r. reflexivity.
+Qed.
+
+#[local] Instance stacking_cast_keeps_out_of_fuel : CastExprKeepsOutOfFuel.
+Proof.
+  intros e γ H. change (mentions_out_of_fuel (stacking_cast e γ) = true).
+  induction e; try exact H.
+  cbn [stacking_cast mentions_out_of_fuel] in H |- *.
+  apply orb_true_iff in H as [H | H]; [rewrite H; reflexivity |].
+  apply orb_true_iff in H as [H | H].
+  - rewrite (stack_keeps_out_of_fuel _ _ _ (IHe2 H)), orb_true_r. reflexivity.
+  - rewrite (IHe3 H), !orb_true_r. reflexivity.
 Qed.
 
 #[local] Instance stacking_laws : ConCoreLaws.
@@ -74,9 +95,10 @@ Proof.
     model_reduce_prim_solvable model_reduce_prim_saturated
     model_reduce_prim_concore stacking_cast_concore
     model_reduce_prim_scoped stacking_cast_scoped
+    model_reduce_prim_keeps_out_of_fuel stacking_cast_keeps_out_of_fuel
     model_models_sat model_prim_value_and
     model_reduce_prim_contains model_reduce_prim_denote model_reduce_prim_ground_value
-    stacking_cast_contains
+    stacking_cast_contains model_reduce_prim_ite_wellformed
     model_subst_coerc_contains_env model_subst_type_contains_env).
 Qed.
 

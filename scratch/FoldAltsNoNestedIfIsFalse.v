@@ -18,7 +18,13 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
    including an application whose operator is a branch. The rule now reads the
    head of the scrutinee's application spine instead of the scrutinee itself,
    so it rejects that shape, and fold_alts_no_nested_if is a lemma proved from
-   the five rules rather than an assumption. *)
+   the rules rather than an assumption.
+
+   Rule FoldAlts_Otherwise now carries five premises: the scrutinee reads as
+   no formula, its spine head is no primitive, its spine head is no branch, no
+   alternative matches it, and it is no bottom. The proof below still dies on
+   the third of these, the spine-head premise, which is the one this file
+   checks. *)
 
 Definition nested_if : expr := EIf (EVar "x") (EBot BUndefined) (EBot BUndefined).
 Definition applied_if : expr := EApp nested_if (EBot BUndefined).
@@ -46,6 +52,8 @@ Lemma applied_if_folds :
   fold_alts Inf (PCVar "p") EmptyEnv applied_if [] (EBot BUndefined).
 Proof.
   apply FoldAlts_Otherwise.
+  - reflexivity.
+  - reflexivity.
   - reflexivity.
   - unfold decompose_con_app. simpl. exact I.
   - reflexivity.

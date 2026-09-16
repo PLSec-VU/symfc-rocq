@@ -30,6 +30,7 @@ Definition SoundnessStatement : Prop :=
     contains σ S e_sym e_con ->
     concore_expr e_con ->
     closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
     Φ ; Γs ⊢ e_sym ⇓ v_sym ->
     exists v_con, Γc ⊢ᶜ e_con ⇓ᶜ v_con /\ contains σ S v_sym v_con.
 
@@ -91,13 +92,16 @@ Qed.
 
 Theorem con_thunk_field_breaks_soundness : forall σ S c,
   OldThunkInversion σ S ->
-  S field_binder = false -> models_cond σ S c -> ~ SoundnessStatement.
+  S field_binder = false -> models_cond σ S c ->
+  symbolic_program S · (branch_field_program c) ->
+  ~ SoundnessStatement.
 Proof.
-  intros σ S c Hold Hy Hc Hsound.
+  intros σ S c Hold Hy Hc Hsym Hsound.
   pose proof (branch_field_contains_thunk_field σ S c Hy Hc) as Hcont.
   destruct Hc as [pc [_ Hm]].
   destruct (Hsound pc · · σ S _ thunk_field_program _ Hm (Cont_Env_Empty _ _) Hcont
-              thunk_field_program_concore thunk_field_program_closed (branch_field_symbolic_value pc c))
+              thunk_field_program_concore thunk_field_program_closed Hsym
+              (branch_field_symbolic_value pc c))
     as [v [Hv Hcv]].
   rewrite (thunk_field_concrete_value v Hv) in Hcv.
   exact (old_symbolic_value_misses_concrete_value σ S c Hold Hcv).
@@ -152,13 +156,25 @@ Proof.
   intros Γ Hfree. simpl. rewrite (Hfree guard_var eq_refl). reflexivity.
 Qed.
 
+Lemma guard_program_is_symbolic :
+  @symbolic_program model_sorts guard_symvars · (branch_field_program (EVar guard_var)).
+Proof.
+  split; [constructor |].
+  unfold branch_field_program.
+  apply SymScoped_App; [constructor |].
+  apply SymScoped_If.
+  - apply SymScoped_Var. right. reflexivity.
+  - apply SymScoped_Thunk; repeat constructor.
+  - apply SymScoped_Thunk; repeat constructor.
+Qed.
+
 Theorem model_con_thunk_field_breaks_soundness :
   @OldThunkInversion model_sorts guard_model guard_symvars ->
   ~ @SoundnessStatement model_sorts model_solver.
 Proof.
   intros Hold.
   exact (con_thunk_field_breaks_soundness guard_model guard_symvars (EVar guard_var)
-           Hold eq_refl guard_is_modelled).
+           Hold eq_refl guard_is_modelled guard_program_is_symbolic).
 Qed.
 
 Theorem model_current_contains_refutes_old_inversion :

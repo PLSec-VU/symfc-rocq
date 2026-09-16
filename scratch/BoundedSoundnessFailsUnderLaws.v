@@ -24,12 +24,15 @@ Proof.
   - destruct b; try reflexivity. inversion H.
 Qed.
 
-Fixpoint bot_cast_scoped (e : @expr model_sorts) {struct e} :
-  forall L, scoped L e -> scoped L (bot_cast e).
+Fixpoint bot_cast_sym_scoped (e : @expr model_sorts) {struct e} :
+  forall S L, sym_scoped S L e -> sym_scoped S L (bot_cast e).
 Proof.
-  intros L H. destruct e; simpl; try exact H.
-  - inversion H; subst. apply Scoped_If; [assumption | apply bot_cast_scoped; assumption | apply bot_cast_scoped; assumption].
-  - destruct b; try exact H. apply Scoped_Lit.
+  intros S L H. destruct e; simpl; try exact H.
+  - inversion H; subst.
+    apply SymScoped_If;
+      [assumption | apply bot_cast_sym_scoped; assumption
+       | apply bot_cast_sym_scoped; assumption].
+  - destruct b; try exact H. apply SymScoped_Lit.
 Qed.
 
 Fixpoint bot_cast_contains_k (es : @expr model_sorts) {struct es} :
@@ -86,25 +89,32 @@ Proof.
     + match goal with [ Hu : unspool_app (EThunk _ _) _ = _ |- _ ] => discriminate Hu end.
 Qed.
 
-Definition bot_cost_laws : @SymFCCostLaws model_sorts bot_solver.
+(* This solver used to satisfy the whole of SymFCCostLaws. The development has
+   since added the two laws that keep the out-of-fuel bottom visible, and this
+   cast is exactly what they forbid. Every other law about cast still holds for
+   it, so the counterexample below now measures what that one law buys. *)
+
+Definition bot_coercion : coercion := MkCoercion (TyCon tt) (TyCon tt) RoleNominal.
+
+Lemma bot_cast_concore_law : @CastExprConcore model_sorts bot_solver.
 Proof.
-  constructor; [constructor | |].
-  - exact model_reduce_prim_solvable.
-  - exact model_reduce_prim_saturated.
-  - exact model_reduce_prim_concore.
-  - intros e γ H. unfold cast_expr; simpl; unfold bot_cast_expr. rewrite (bot_cast_concore e H). exact H.
-  - exact model_reduce_prim_scoped.
-  - intros e γ H. exact (bot_cast_scoped e nil H).
-  - exact model_models_sat.
-  - exact model_prim_value_and.
-  - exact model_reduce_prim_contains.
-  - exact model_reduce_prim_denote.
-  - exact model_reduce_prim_ground_value.
-  - intros σ S es ec γ H. exact (bot_cast_contains es σ S ec H).
-  - exact model_subst_coerc_contains_env.
-  - exact model_subst_type_contains_env.
-  - intros σ S k es ec γ H. exact (bot_cast_contains_k es σ S k ec H).
-  - exact model_reduce_prim_contains_k.
+  intros e γ H. unfold cast_expr; simpl; unfold bot_cast_expr.
+  rewrite (bot_cast_concore e H). exact H.
+Qed.
+
+Lemma bot_cast_scoped_law : @CastExprScoped model_sorts bot_solver.
+Proof. intros S L e γ H. exact (bot_cast_sym_scoped e S L H). Qed.
+
+Lemma bot_cast_contains_law : @CastExprContains model_sorts bot_solver.
+Proof. intros σ S es ec γ H. exact (bot_cast_contains es σ S ec H). Qed.
+
+Lemma bot_cast_contains_k_law : @CastExprContainsK model_sorts bot_solver.
+Proof. intros σ S k es ec γ H. exact (bot_cast_contains_k es σ S k ec H). Qed.
+
+Lemma bot_cast_hides_the_spent_budget :
+  ~ @CastExprKeepsOutOfFuel model_sorts bot_solver.
+Proof.
+  intros Hlaw. discriminate (Hlaw (EBot BOutOfFuel) bot_coercion eq_refl).
 Qed.
 
 Definition BoundedSoundnessForLiterals {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
@@ -120,10 +130,19 @@ Definition BoundedSoundnessForLiterals {sorts : SymCoreSorts} {solver : SymCoreS
 Definition some_coercion : coercion := MkCoercion (TyCon tt) (TyCon tt) RoleRepresentational.
 Definition cast_loop : @expr model_sorts := ECast self_app some_coercion.
 
-Theorem lawful_solver_breaks_bounded_soundness :
-  @SymFCCostLaws model_sorts bot_solver /\ ~ @BoundedSoundnessForLiterals model_sorts bot_solver.
+Theorem solver_lawful_but_for_the_spent_budget_breaks_bounded_soundness :
+  @CastExprConcore model_sorts bot_solver /\
+  @CastExprScoped model_sorts bot_solver /\
+  @CastExprContains model_sorts bot_solver /\
+  @CastExprContainsK model_sorts bot_solver /\
+  ~ @CastExprKeepsOutOfFuel model_sorts bot_solver /\
+  ~ @BoundedSoundnessForLiterals model_sorts bot_solver.
 Proof.
-  split; [exact bot_cost_laws |].
+  split; [exact bot_cast_concore_law |].
+  split; [exact bot_cast_scoped_law |].
+  split; [exact bot_cast_contains_law |].
+  split; [exact bot_cast_contains_k_law |].
+  split; [exact bot_cast_hides_the_spent_budget |].
   intros Hbs.
   assert (Hrun : @eval model_sorts bot_solver (Fin 2) (PCLit true) · cast_loop (ELit true)).
   { unfold cast_loop.
@@ -154,4 +173,4 @@ Proof.
 Qed.
 
 
-Print Assumptions lawful_solver_breaks_bounded_soundness.
+Print Assumptions solver_lawful_but_for_the_spent_budget_breaks_bounded_soundness.

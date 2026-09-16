@@ -31,7 +31,7 @@ Fixpoint wild_cast (e : expr) (γ : coercion) : expr :=
   match e with
   | EIf c t f => EIf c (wild_cast t γ) (wild_cast f γ)
   | EThunk _ _ => nest (5 * esize e) e
-  | _ => EApp (ECon wrap_con) (EThunk · e)
+  | _ => EApp (ECon wrap_con) e
   end.
 
 Definition wild_solver : SymCoreSolver :=
@@ -93,7 +93,7 @@ Proof.
 Qed.
 
 Lemma wild_cast_plain : forall e γ,
-  is_if e = false -> is_thunk e = false -> wild_cast e γ = EApp (ECon wrap_con) (EThunk · e).
+  is_if e = false -> is_thunk e = false -> wild_cast e γ = EApp (ECon wrap_con) e.
 Proof. intros e γ Hi Ht. destruct e; try discriminate; reflexivity. Qed.
 
 #[local] Instance wild_cast_expr_contains : CastExprContains.
@@ -101,7 +101,7 @@ Proof.
   intros σ S es. induction es; intros ec γ H; cbn [cast_expr wild_solver];
     try (destruct (contains_plain_right _ _ _ _ H eq_refl eq_refl) as [Hi Ht];
          rewrite (wild_cast_plain ec γ Hi Ht); rewrite wild_cast_plain by reflexivity;
-         apply Cont_App; [apply Cont_Con | apply Cont_Thunk; [apply Cont_Env_Empty | exact H]]).
+         apply Cont_App; [apply Cont_Con | exact H]).
   - inversion H; subst; cbn [wild_cast].
     + apply Cont_If_True; [assumption | apply IHes2; assumption].
     + apply Cont_If_False; [assumption | apply IHes3; assumption].
@@ -123,7 +123,7 @@ Qed.
 #[local] Instance wild_cast_expr_concore : CastExprConcore.
 Proof.
   intros e γ H. destruct e;
-    try (apply Con_App; [apply Con_Con | apply Con_Thunk; [apply CEnv_Empty | exact H]]).
+    try (apply Con_App; [apply Con_Con | exact H]).
   - exfalso. exact (not_concore_if _ _ _ H).
   - apply nest_concore. exact H.
 Qed.
@@ -140,20 +140,57 @@ Definition ReducePrimBranch {sorts : SymCoreSorts} {solver : SymCoreSolver} : Pr
 Lemma wild_cast_expr_branch : CastExprBranch.
 Proof. intros ec et ef γ. reflexivity. Qed.
 
-Lemma nest_scoped : forall k t, closed_term t -> closed_term (nest k t).
+Lemma nest_sym_scoped : forall S k t,
+  sym_scoped S (dom_env ·) t -> sym_scoped S (dom_env ·) (nest k t).
 Proof.
-  intros k t H. induction k as [| k IH]; simpl; [exact H |].
-  apply Scoped_Thunk; [apply Scoped_Env_Empty | exact IH].
+  intros S k t H. induction k as [| k IH]; simpl; [exact H |].
+  apply SymScoped_Thunk; [apply SymScoped_Env_Empty | exact IH].
 Qed.
 
 #[local] Instance wild_cast_expr_scoped : CastExprScoped.
 Proof.
-  intros e γ H. change (closed_term (wild_cast e γ)).
+  intros S L e γ H. change (sym_scoped S L (wild_cast e γ)).
   induction e;
-    try (apply Scoped_App; [apply Scoped_Con | apply Scoped_Thunk; [apply Scoped_Env_Empty | exact H]]).
-  - unfold closed_term in H. inversion H; subst. simpl.
-    apply Scoped_If; [assumption | apply IHe2 | apply IHe3]; assumption.
-  - apply nest_scoped. exact H.
+    try (apply SymScoped_App; [apply SymScoped_Con | exact H]).
+  - inversion H; subst. simpl.
+    apply SymScoped_If; [assumption | apply IHe2 | apply IHe3]; assumption.
+  - inversion H; subst. cbn [wild_cast].
+    apply (SymScoped_Thunk S L ·); [apply SymScoped_Env_Empty |].
+    apply nest_sym_scoped. apply SymScoped_Thunk; assumption.
+Qed.
+
+Lemma nest_keeps_out_of_fuel : forall k t,
+  mentions_out_of_fuel t = true -> mentions_out_of_fuel (nest k t) = true.
+Proof.
+  intros k t H. induction k as [| k IH]; simpl; [exact H |]. rewrite IH. reflexivity.
+Qed.
+
+Lemma app_mentions_right : forall f a,
+  mentions_out_of_fuel a = true -> mentions_out_of_fuel (EApp f a) = true.
+Proof.
+  intros f a H.
+  change (mentions_out_of_fuel (EApp f a))
+    with (orb (mentions_out_of_fuel f) (mentions_out_of_fuel a)).
+  rewrite H. apply orb_true_r.
+Qed.
+
+#[local] Instance wild_cast_expr_keeps_out_of_fuel : CastExprKeepsOutOfFuel.
+Proof.
+  intros e γ H. change (mentions_out_of_fuel (wild_cast e γ) = true).
+  induction e; try (cbn [wild_cast]; apply app_mentions_right; exact H).
+  - cbn [wild_cast].
+    change (mentions_out_of_fuel (EIf e1 e2 e3))
+      with (orb (mentions_out_of_fuel e1)
+              (orb (mentions_out_of_fuel e2) (mentions_out_of_fuel e3))) in H.
+    change (mentions_out_of_fuel (EIf e1 (wild_cast e2 γ) (wild_cast e3 γ)))
+      with (orb (mentions_out_of_fuel e1)
+              (orb (mentions_out_of_fuel (wild_cast e2 γ))
+                 (mentions_out_of_fuel (wild_cast e3 γ)))).
+    apply orb_true_iff in H as [H | H]; [rewrite H; reflexivity |].
+    apply orb_true_iff in H as [H | H].
+    + rewrite (IHe2 H), orb_true_r. reflexivity.
+    + rewrite (IHe3 H), !orb_true_r. reflexivity.
+  - cbn [wild_cast]. apply nest_keeps_out_of_fuel. exact H.
 Qed.
 
 #[local] Instance wild_laws : ConCoreLaws.
@@ -162,9 +199,10 @@ Proof.
     model_reduce_prim_solvable model_reduce_prim_saturated
     model_reduce_prim_concore wild_cast_expr_concore
     model_reduce_prim_scoped wild_cast_expr_scoped
+    model_reduce_prim_keeps_out_of_fuel wild_cast_expr_keeps_out_of_fuel
     model_models_sat model_prim_value_and
     model_reduce_prim_contains model_reduce_prim_denote model_reduce_prim_ground_value
-    wild_cast_expr_contains
+    wild_cast_expr_contains model_reduce_prim_ite_wellformed
     model_subst_coerc_contains_env model_subst_type_contains_env).
 Qed.
 
@@ -391,9 +429,9 @@ Definition consumer : expr := ELam kv (EApp (EVar kv) (@ELit model_sorts true)).
 Definition sym_prog : expr := EApp consumer (ECase scrut alts).
 Definition con_prog : expr := EApp consumer (ECase arm_t alts).
 
-Definition unit_field : expr := EThunk · (ECon unit_con).
+Definition unit_field : expr := ECon unit_con.
 Definition leak_env (Γ : environment) (J : expr) : environment :=
-  ExtendEnv zv (MkClosure Γ (EIf (@ELit model_sorts true) unit_field (EThunk · J))) Γ.
+  ExtendEnv zv (MkClosure Γ (EIf (@ELit model_sorts true) unit_field J)) Γ.
 Definition leak_clos (Γ : environment) (J : expr) : expr := EThunk (leak_env Γ J) id_fun.
 
 Lemma case_value : forall Φ Γ k v,
@@ -420,7 +458,7 @@ Proof.
   | [ Hu : eval _ _ _ (ECon unit_con) _, Hj : eval _ _ _ junk ?J |- _ ] =>
       rewrite dec_remaining in Hu, Hj; inversion Hu; subst; try kill_rule;
       exists J; split; [| exact Hj];
-      assert (Hplain : cast_expr J coerc0 = EApp (ECon wrap_con) (EThunk · J))
+      assert (Hplain : cast_expr J coerc0 = EApp (ECon wrap_con) J)
         by (destruct (proj1 (junk_value_bound _ _ _ _ Hj)); reflexivity)
   end.
   match goal with
@@ -444,6 +482,12 @@ Proof.
     end.
     reflexivity.
   - match goal with
+    | [ Hp : expr_to_pc _ (EApp _ _) = Some _ |- _ ] => cbn in Hp; discriminate Hp
+    end.
+  - match goal with
+    | [ Hp : expr_to_pc _ (EApp _ _) = Some _ |- _ ] => cbn in Hp; discriminate Hp
+    end.
+  - match goal with
     | [ Hn : match decompose_con_app _ with _ => _ end |- _ ] => cbn in Hn; discriminate Hn
     end.
 Qed.
@@ -454,7 +498,7 @@ Proof.
   destruct e1; simpl in *; lia.
 Qed.
 
-Lemma leak_clos_size : forall Γ J, nots J + 8 <= esize (leak_clos Γ J).
+Lemma leak_clos_size : forall Γ J, nots J + 6 <= esize (leak_clos Γ J).
 Proof. intros Γ J. pose proof (nots_le_esize J) as HJ. simpl. lia. Qed.
 
 Lemma nest_walk : forall k m t Φ Γ v,
@@ -556,7 +600,7 @@ Lemma case_total : forall k J,
     (nest (5 * esize (leak_clos · J)) (leak_clos · J)).
 Proof.
   intros k J HJ.
-  assert (Hplain : cast_expr J coerc0 = EApp (ECon wrap_con) (EThunk · J))
+  assert (Hplain : cast_expr J coerc0 = EApp (ECon wrap_con) J)
     by (destruct (proj1 (junk_value_bound _ _ _ _ HJ)); reflexivity).
   apply Eval_Case with
     (es' := EIf (@ELit model_sorts true) (cast_expr (ECon unit_con) coerc0) (cast_expr J coerc0)).
@@ -567,8 +611,8 @@ Proof.
     + unfold arm_f. apply Eval_Cast. exact HJ.
   - rewrite Hplain.
     change (merge · (EIf (@ELit model_sorts true) (cast_expr (ECon unit_con) coerc0)
-                        (EApp (ECon wrap_con) (EThunk · J))))
-      with (EApp (ECon wrap_con) (EIf (@ELit model_sorts true) unit_field (EThunk · J))).
+                        (EApp (ECon wrap_con) J)))
+      with (EApp (ECon wrap_con) (EIf (@ELit model_sorts true) unit_field J)).
     eapply FoldAlts_Con; [reflexivity | reflexivity |].
     exact (Eval_Cast (Remaining (S (S k))) pc_true (leak_env · J) id_fun coerc0
              (EThunk (leak_env · J) id_fun) (Eval_Lam _ _ _ _ _)).
@@ -625,6 +669,14 @@ Proof.
   repeat constructor.
 Qed.
 
+Lemma sym_prog_is_symbolic : symbolic_program no_symvars · sym_prog.
+Proof.
+  split; [apply SymScoped_Env_Empty |].
+  unfold sym_prog, consumer, scrut, arm_t, arm_f, junk, junk_fun, junk_body,
+    junk_arg, alts, id_fun.
+  repeat (constructor; simpl; auto).
+Qed.
+
 Lemma nest_eval_inf : forall i Φ Γ Γc,
   eval Inf Φ Γ (nest i (EThunk Γc id_fun)) (EThunk Γc id_fun).
 Proof.
@@ -671,6 +723,7 @@ Proof.
       first [ left; reflexivity
             | match goal with
               | [ Hd : decompose_con_app _ = Some _ |- _ ] => discriminate Hd
+              | [ Hp : expr_to_pc _ (EBot _) = Some _ |- _ ] => discriminate Hp
               | [ Hb : is_bot _ = false |- _ ] => discriminate Hb
               end ].
   - unfold scrut in H5. inversion H5; subst; try kill_rule.
@@ -699,6 +752,12 @@ Proof.
           rewrite dec_remaining in Hl; unfold id_fun in Hl; inversion Hl; subst; try kill_rule
       end.
       right. do 2 eexists. split; reflexivity.
+    + match goal with
+      | [ Hp : expr_to_pc _ (EApp _ _) = Some _ |- _ ] => cbn in Hp; discriminate Hp
+      end.
+    + match goal with
+      | [ Hp : expr_to_pc _ (EApp _ _) = Some _ |- _ ] => cbn in Hp; discriminate Hp
+      end.
     + match goal with
       | [ Hn : match decompose_con_app _ with _ => _ end |- _ ] => cbn in Hn; discriminate Hn
       end.
@@ -758,32 +817,78 @@ Proof.
   rewrite (sym_prog_runs_out _ _ Hv). apply bot_not_contains_lit.
 Qed.
 
-Theorem target_completeness_is_false : ~ @target_completeness model_sorts wild_solver.
+(* The shipped completeness statements now carry a second semantic premise,
+   smt_bounded_run, which bounds the size of every SMT term the symbolic run
+   builds. This program fails that premise: its untaken arm builds a tower of
+   negations that grows with the bound. So the refutations below are stated
+   against the completeness statements WITHOUT that premise, which is the form
+   this counterexample was written for and the form that is still open. *)
+
+Definition target_completeness_unbounded {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall Φ Γs Γc σ S e_sym e_con v_con,
+    σ ⊨ Φ ->
+    contains_env σ S Γs Γc ->
+    contains σ S e_sym e_con ->
+    concore_expr e_con ->
+    closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
+    budget_total Φ Γs e_sym ->
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+    exists h, forall n, (h <= n)%nat ->
+      exists v_sym, eval (Fin n) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
+
+Definition existential_corollary_unbounded {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall Φ Γs Γc σ S e_sym e_con v_con,
+    σ ⊨ Φ ->
+    contains_env σ S Γs Γc ->
+    contains σ S e_sym e_con ->
+    concore_expr e_con ->
+    closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
+    budget_total Φ Γs e_sym ->
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+    exists k v_sym, eval (Fin k) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
+
+Definition forall_form_lemma_unbounded {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall Γc e_con v_con,
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+    forall Φ Γs σ S e_sym,
+      σ ⊨ Φ ->
+      contains_env σ S Γs Γc ->
+      contains σ S e_sym e_con ->
+      concore_expr e_con ->
+      closed_program Γc e_con ->
+      symbolic_program S Γs e_sym ->
+      exists h, forall n, (h <= n)%nat ->
+        forall v_sym, eval (Fin n) Φ Γs e_sym v_sym -> contains σ S v_sym v_con.
+
+Theorem target_completeness_is_false : ~ @target_completeness_unbounded model_sorts wild_solver.
 Proof.
   intros Htarget.
   destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hcl [Hb [Hrun Hout]]]]]]].
   destruct (Htarget pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
-              Hm Henv Hc Hcc Hcl Hb Hrun) as [h Hh].
+              Hm Henv Hc Hcc Hcl sym_prog_is_symbolic Hb Hrun) as [h Hh].
   destruct (Hh (8 + h) ltac:(lia)) as [v [Hv Hcv]].
   exact (Hout (8 + h) ltac:(lia) v Hv Hcv).
 Qed.
 
-Theorem existential_corollary_is_false : ~ @existential_corollary model_sorts wild_solver.
+Theorem existential_corollary_is_false :
+  ~ @existential_corollary_unbounded model_sorts wild_solver.
 Proof.
   intros Hex.
   destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hcl [Hb [Hrun _]]]]]]].
   destruct (Hex pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
-              Hm Henv Hc Hcc Hcl Hb Hrun) as [k [v [Hv Hcv]]].
+              Hm Henv Hc Hcc Hcl sym_prog_is_symbolic Hb Hrun) as [k [v [Hv Hcv]]].
   rewrite (sym_prog_value_is_bot k v Hv) in Hcv.
   exact (bot_not_contains_lit _ _ _ _ Hcv).
 Qed.
 
-Theorem forall_form_lemma_is_false : ~ @forall_form_lemma model_sorts wild_solver.
+Theorem forall_form_lemma_is_false : ~ @forall_form_lemma_unbounded model_sorts wild_solver.
 Proof.
   intros Hall.
   destruct zip_leak_counterexample as [Hm [Henv [Hc [Hcc [Hcl [_ [Hrun Hout]]]]]]].
   destruct (Hall · con_prog (@ELit model_sorts true) Hrun pc_true · sigma_all no_symvars sym_prog
-              Hm Henv Hc Hcc Hcl) as [h Hh].
+              Hm Henv Hc Hcc Hcl sym_prog_is_symbolic) as [h Hh].
   destruct (sym_prog_total h) as [v Hv].
   exact (Hout (8 + h) ltac:(lia) v Hv (Hh (8 + h) ltac:(lia) v Hv)).
 Qed.
@@ -791,9 +896,9 @@ Qed.
 Theorem branch_lawful_instance_refutes_target :
   (@ConCoreLaws model_sorts wild_solver /\ @ReducePrimBranch model_sorts wild_solver
      /\ @CastExprBranch model_sorts wild_solver)
-  /\ ~ @target_completeness model_sorts wild_solver
-  /\ ~ @existential_corollary model_sorts wild_solver
-  /\ ~ @forall_form_lemma model_sorts wild_solver.
+  /\ ~ @target_completeness_unbounded model_sorts wild_solver
+  /\ ~ @existential_corollary_unbounded model_sorts wild_solver
+  /\ ~ @forall_form_lemma_unbounded model_sorts wild_solver.
 Proof.
   exact (conj (conj wild_laws (conj wild_reduce_prim_branch wild_cast_expr_branch))
            (conj target_completeness_is_false

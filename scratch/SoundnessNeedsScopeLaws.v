@@ -68,10 +68,14 @@ Qed.
 Theorem leaky_cast_not_scoped : ~ CastExprScoped.
 Proof.
   intros Hlaw.
-  pose proof (Hlaw (ELam "z" (EVar "z")) (MkCoercion (TyCon tt) (TyCon tt) RoleNominal)
-                (Scoped_Lam nil "z" (EVar "z") (Scoped_Var ("z" :: nil) "z" (or_introl eq_refl)))) as H.
-  change (scoped nil (EVar "z")) in H.
-  inversion H as [L x Hin | | | | | | | | | | | |]; subst. destruct Hin.
+  pose proof (Hlaw no_symvars nil (ELam "z" (EVar "z"))
+                (MkCoercion (TyCon tt) (TyCon tt) RoleNominal)
+                (SymScoped_Lam no_symvars nil "z" (EVar "z")
+                   (SymScoped_Var no_symvars ("z" :: nil) "z"
+                      (or_introl (in_eq "z" nil))))) as H.
+  change (sym_scoped no_symvars nil (EVar "z")) in H.
+  inversion H as [L x Hin | | | | | | | | | | | |]; subst.
+  destruct Hin as [Hin | Hin]; [destruct Hin | discriminate Hin].
 Qed.
 
 Definition leak_coercion : coercion := MkCoercion (TyCon tt) (TyCon tt) RoleNominal.
@@ -137,6 +141,56 @@ Proof.
   constructor; [apply Eval_Lit | constructor].
 Qed.
 
+(* The leaky solver has no CastExprScoped, so concore_eval_deterministic is out
+   of reach here. The concrete program's value is pinned by inversion instead. *)
+Lemma leaky_sat_everything : forall Φ, sat Φ = true.
+Proof. reflexivity. Qed.
+
+Ltac leaky_no_prune :=
+  match goal with [ Hs : sat _ = false |- _ ] =>
+    rewrite leaky_sat_everything in Hs; discriminate Hs end.
+
+Ltac no_con_spine :=
+  match goal with [ Hu : unspool_app _ nil = (ECon _, _) |- _ ] =>
+    simpl in Hu; discriminate Hu end.
+
+Lemma leak_arg_value_unique : forall Φ Γ v,
+  eval Inf Φ Γ leak_arg v -> v = EVar "z".
+Proof.
+  intros Φ Γ v H. unfold leak_arg in H.
+  inversion H; subst.
+  - no_con_spine.
+  - match goal with [ Hb : eval _ _ _ (ELam _ _) _ |- _ ] => inversion Hb; subst end.
+    + no_con_spine.
+    + reflexivity.
+    + leaky_no_prune.
+  - leaky_no_prune.
+Qed.
+
+Lemma leak_con_value_unique : forall v, · ⊢ᶜ leak_con ⇓ᶜ v -> v = ELit true.
+Proof.
+  intros v H. unfold eval_con, leak_con, ite3 in H.
+  inversion H; subst.
+  - no_con_spine.
+  - match goal with [ Hc : Comp _ _ |- _ ] => pose proof (comp_not_op_app _ _ Hc) as Hop end.
+    simpl in Hop. discriminate.
+  - match goal with [ Hu : unspool_app _ nil = (EPrimOp _, _) |- _ ] =>
+      simpl in Hu; injection Hu as Hp Ha end.
+    subst.
+    match goal with [ Hf : Forall2 _ _ _ |- _ ] =>
+      inversion Hf as [| ? v1 ? r1 Hv1 H1r]; subst;
+      inversion H1r as [| ? v2 ? r2 Hv2 H2r]; subst;
+      inversion H2r as [| ? v3 ? r3 Hv3 H3r]; subst;
+      inversion H3r; subst end.
+    rewrite (leak_arg_value_unique _ _ _ Hv1).
+    rewrite (eval_lit_same _ _ _ _ (leaky_sat_everything _) Hv2).
+    rewrite (eval_lit_same _ _ _ _ (leaky_sat_everything _) Hv3).
+    reflexivity.
+  - match goal with [ Hu : unspool_app _ nil = (EIf _ _ _, _) |- _ ] =>
+      simpl in Hu; discriminate Hu end.
+  - leaky_no_prune.
+Qed.
+
 Lemma leak_residual_not_instance : ~ contains leak_sigma leak_S leak_residual (ELit true).
 Proof.
   intros H. inversion H; subst.
@@ -174,8 +228,7 @@ Proof.
   split; [exact leak_con_closed |].
   split; [exact leak_sym_evaluates |].
   intros [v_con [Hev Hc]].
-  rewrite (concore_eval_deterministic_top leak_con v_con (@ELit model_sorts true) leak_con_concore Hev
-             leak_con_evaluates) in Hc.
+  rewrite (leak_con_value_unique v_con Hev) in Hc.
   exact (leak_residual_not_instance Hc).
 Qed.
 

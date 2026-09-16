@@ -1,5 +1,5 @@
 From SymCoreTheory Require Import SymCore ConCore CostLaws Completeness Model.
-From Stdlib Require Import Strings.String Lists.List Lia.
+From Stdlib Require Import Strings.String Lists.List Bool.Bool Lia.
 Import ListNotations.
 Open Scope string_scope.
 
@@ -117,6 +117,10 @@ End ProposedCalculus.
 Definition negate_cast (e : @expr model_sorts) (γ : coercion) : @expr model_sorts :=
   EApp (@EPrimOp model_sorts PNot) e.
 
+Lemma app_mentions_right : forall (f a : @expr model_sorts),
+  mentions_out_of_fuel a = true -> mentions_out_of_fuel (EApp f a) = true.
+Proof. intros f a H. simpl. rewrite H. apply orb_true_r. Qed.
+
 Definition negate_solver : @SymCoreSolver model_sorts :=
   Build_SymCoreSolver model_sat (@PCLit model_sorts true) eq_refl model_reduce_prim
     negate_cast keep_coercion keep_type.
@@ -129,13 +133,16 @@ Proof.
   - exact model_reduce_prim_concore.
   - intros e γ H. repeat constructor. exact H.
   - exact model_reduce_prim_scoped.
-  - intros e γ H. apply Scoped_App; [apply Scoped_PrimOp | exact H].
+  - intros S L e γ H. apply SymScoped_App; [apply SymScoped_PrimOp | exact H].
+  - exact model_reduce_prim_keeps_out_of_fuel.
+  - intros e γ H. exact (app_mentions_right (EPrimOp PNot) e H).
   - exact model_models_sat.
   - exact model_prim_value_and.
   - exact model_reduce_prim_contains.
   - exact model_reduce_prim_denote.
   - exact model_reduce_prim_ground_value.
   - intros σ S es ec γ H. apply Cont_App; [apply Cont_PrimOp | exact H].
+  - exact model_reduce_prim_ite_wellformed.
   - exact model_subst_coerc_contains_env.
   - exact model_subst_type_contains_env.
   - intros σ S k es ec γ H. change k with (0 + k)%nat.

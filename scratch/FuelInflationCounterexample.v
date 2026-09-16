@@ -146,31 +146,53 @@ Proof.
   - exfalso. rewrite (if_thunk_not_ground _ Hshape) in H. discriminate.
 Qed.
 
-Lemma nest_scoped : forall k t, closed_term t -> closed_term (nest k t).
+Lemma nest_sym_scoped : forall S L k t,
+  sym_scoped S L t -> is_thunk t = true -> sym_scoped S L (nest k t).
 Proof.
-  intros k t H. induction k as [| k IH]; simpl; [exact H |].
-  apply Scoped_Thunk; [apply Scoped_Env_Empty | exact IH].
+  intros S L k t H Ht. induction k as [| k IH]; simpl; [exact H |].
+  destruct t; try discriminate Ht.
+  inversion H; subst.
+  apply SymScoped_Thunk; [apply SymScoped_Env_Empty |].
+  destruct k; [apply SymScoped_Thunk; assumption |].
+  cbn [nest] in IH |- *. apply SymScoped_Thunk; [apply SymScoped_Env_Empty |].
+  inversion IH; assumption.
 Qed.
 
-Lemma inflate_not_scoped : forall a, closed_term a -> closed_term (inflate_not a).
+Lemma inflate_not_sym_scoped : forall S L a,
+  sym_scoped S L a -> sym_scoped S L (inflate_not a).
 Proof.
-  intros a. induction a; intros H;
-    try (exact (model_reduce_prim_scoped PNot (a :: nil) (Forall_cons _ H (Forall_nil _))));
-    try (exact (model_reduce_prim_scoped PNot _ (Forall_cons _ H (Forall_nil _)))).
-  - unfold closed_term in H. inversion H; subst.
-    destruct (inflate_not_if a1 a2 a3) as [Heq | [_ [_ Heq]]]; rewrite Heq.
-    + apply Scoped_If; [assumption | apply IHa2 | apply IHa3]; assumption.
-    + apply nest_scoped. assumption.
+  intros S L a. induction a; intros H;
+    try (exact (model_reduce_prim_scoped S L PNot (a :: nil) (Forall_cons _ H (Forall_nil _))));
+    try (exact (model_reduce_prim_scoped S L PNot _ (Forall_cons _ H (Forall_nil _)))).
+  - inversion H; subst.
+    destruct (inflate_not_if a1 a2 a3) as [Heq | [_ [Ht Heq]]]; rewrite Heq.
+    + apply SymScoped_If; [assumption | apply IHa2 | apply IHa3]; assumption.
+    + apply nest_sym_scoped; assumption.
   - exact H.
 Qed.
 
 #[local] Instance fuel_reduce_prim_scoped : ReducePrimScoped.
 Proof.
-  intros p args H.
-  destruct p; [exact (model_reduce_prim_scoped PAnd args H) | | exact (model_reduce_prim_scoped PIte args H)].
-  destruct args as [| a [| b rest]]; [exact (model_reduce_prim_scoped PNot _ H) | | exact (model_reduce_prim_scoped PNot _ H)].
+  intros S L p args H.
+  destruct p; [exact (model_reduce_prim_scoped S L PAnd args H) | | exact (model_reduce_prim_scoped S L PIte args H)].
+  destruct args as [| a [| b rest]];
+    [exact (model_reduce_prim_scoped S L PNot _ H) | | exact (model_reduce_prim_scoped S L PNot _ H)].
   cbn [reduce_prim fuel_solver fuel_reduce_prim].
-  exact (inflate_not_scoped a (Forall_inv H)).
+  exact (inflate_not_sym_scoped S L a (Forall_inv H)).
+Qed.
+
+(* The development has since added the law that reduce-prim keeps the
+   out-of-fuel bottom visible. This reducer breaks exactly that law: its
+   inflating clause throws the untaken arm away, and that arm is where the
+   spent budget shows. Every other law it satisfies still holds. *)
+Lemma fuel_reduce_prim_hides_the_spent_budget :
+  ~ @ReducePrimKeepsOutOfFuel model_sorts fuel_solver.
+Proof.
+  intros Hlaw.
+  pose proof (Hlaw PNot
+                (EIf (@ELit model_sorts true) (EThunk · (ECon "U")) (EBot BOutOfFuel) :: nil)
+                eq_refl eq_refl) as H.
+  vm_compute in H. discriminate H.
 Qed.
 
 Lemma contains_thunk_right : forall σ S Γ e X,
@@ -242,16 +264,40 @@ Proof.
   - exact (model_reduce_prim_contains σ S PNot _ _ Hcl (Forall2_cons _ _ Ha (Forall2_cons _ _ Hb Hr))).
 Qed.
 
-#[local] Instance fuel_laws : ConCoreLaws.
+Definition fuel_laws_except_the_spent_budget : Prop :=
+  @ReducePrimSolvable model_sorts fuel_solver /\
+  @ReducePrimSaturated model_sorts fuel_solver /\
+  @ReducePrimConcore model_sorts fuel_solver /\
+  @CastExprConcore model_sorts fuel_solver /\
+  @ReducePrimScoped model_sorts fuel_solver /\
+  @CastExprScoped model_sorts fuel_solver /\
+  @CastExprKeepsOutOfFuel model_sorts fuel_solver /\
+  @ModelsSat model_sorts fuel_solver /\
+  @PrimValueAnd model_sorts /\
+  @ReducePrimContains model_sorts fuel_solver /\
+  @ReducePrimDenote model_sorts fuel_solver /\
+  @ReducePrimGroundValue model_sorts fuel_solver /\
+  @CastExprContains model_sorts fuel_solver /\
+  @SubstCoercContainsEnv model_sorts fuel_solver /\
+  @SubstTypeContainsEnv model_sorts fuel_solver.
+
+#[local] Lemma fuel_laws : fuel_laws_except_the_spent_budget.
 Proof.
-  exact (@concore_laws model_sorts fuel_solver
-    fuel_reduce_prim_solvable fuel_reduce_prim_saturated
-    fuel_reduce_prim_concore model_cast_expr_concore
-    fuel_reduce_prim_scoped model_cast_expr_scoped
-    model_models_sat model_prim_value_and
-    fuel_reduce_prim_contains fuel_reduce_prim_denote fuel_reduce_prim_ground_value
-    model_cast_expr_contains
-    model_subst_coerc_contains_env model_subst_type_contains_env).
+  split; [exact fuel_reduce_prim_solvable |].
+  split; [exact fuel_reduce_prim_saturated |].
+  split; [exact fuel_reduce_prim_concore |].
+  split; [exact model_cast_expr_concore |].
+  split; [exact fuel_reduce_prim_scoped |].
+  split; [exact model_cast_expr_scoped |].
+  split; [exact model_cast_expr_keeps_out_of_fuel |].
+  split; [exact model_models_sat |].
+  split; [exact model_prim_value_and |].
+  split; [exact fuel_reduce_prim_contains |].
+  split; [exact fuel_reduce_prim_denote |].
+  split; [exact fuel_reduce_prim_ground_value |].
+  split; [exact model_cast_expr_contains |].
+  split; [exact model_subst_coerc_contains_env |].
+  exact model_subst_type_contains_env.
 Qed.
 
 Inductive tower : expr -> Prop :=
@@ -662,19 +708,53 @@ Proof.
   rewrite (sym_prog_runs_out _ _ Hv). apply bot_not_contains_lit.
 Qed.
 
-Theorem target_completeness_is_false : ~ @target_completeness model_sorts fuel_solver.
+(* The shipped completeness statement now carries a second semantic premise,
+   smt_bounded_run, which bounds the size of every SMT term the symbolic run
+   builds. This program fails that premise: the untaken arm builds a tower of
+   negations that grows with the bound. The refutation below is therefore
+   stated against the completeness statement WITHOUT that premise, which is
+   the form this counterexample was written for and the form that is open. *)
+
+Definition target_completeness_unbounded
+  {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
+  forall Φ Γs Γc σ S e_sym e_con v_con,
+    σ ⊨ Φ ->
+    contains_env σ S Γs Γc ->
+    contains σ S e_sym e_con ->
+    concore_expr e_con ->
+    closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
+    budget_total Φ Γs e_sym ->
+    Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
+    exists h, forall n, (h <= n)%nat ->
+      exists v_sym, eval (Fin n) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
+
+Lemma sym_prog_is_symbolic : symbolic_program no_symvars · sym_prog.
+Proof.
+  split; [apply SymScoped_Env_Empty |].
+  unfold sym_prog, consumer, model_arm, id_fun, junk, junk_fun, junk_body, junk_arg.
+  repeat (constructor; simpl; auto).
+Qed.
+
+Theorem target_completeness_is_false :
+  ~ @target_completeness_unbounded model_sorts fuel_solver.
 Proof.
   intros Htarget.
   destruct fuel_inflation_counterexample as [Hm [Henv [Hc [Hcc [Hcl [Hb [Hrun Hout]]]]]]].
   destruct (Htarget pc_true · · sigma_all no_symvars sym_prog con_prog (@ELit model_sorts true)
-              Hm Henv Hc Hcc Hcl Hb Hrun) as [h Hh].
+              Hm Henv Hc Hcc Hcl sym_prog_is_symbolic Hb Hrun) as [h Hh].
   destruct (Hh (7 + h) ltac:(lia)) as [v [Hv Hcv]].
   exact (Hout (7 + h) ltac:(lia) v Hv Hcv).
 Qed.
 
 Theorem lawful_instance_refutes_target :
-  @ConCoreLaws model_sorts fuel_solver /\ ~ @target_completeness model_sorts fuel_solver.
-Proof. exact (conj fuel_laws target_completeness_is_false). Qed.
+  fuel_laws_except_the_spent_budget /\
+  ~ @ReducePrimKeepsOutOfFuel model_sorts fuel_solver /\
+  ~ @target_completeness_unbounded model_sorts fuel_solver.
+Proof.
+  exact (conj fuel_laws
+           (conj fuel_reduce_prim_hides_the_spent_budget target_completeness_is_false)).
+Qed.
 
 Lemma branch_stuck_at_fuel_one : forall Φ Γ ec et ef v,
   ~ eval (Fin 1) Φ Γ (EIf ec et ef) v.

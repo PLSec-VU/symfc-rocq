@@ -1,4 +1,4 @@
-From SymCoreTheory Require Import SymCore.
+From SymCoreTheory Require Import SymCore ConCore.
 From Stdlib Require Import Strings.String.
 From Stdlib Require Import Lists.List.
 Import ListNotations.
@@ -6,7 +6,9 @@ Import ListNotations.
 Section Scratch.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
   {reduce_prim_solvable_law : ReducePrimSolvable}
-  {reduce_prim_saturated_law : ReducePrimSaturated}.
+  {reduce_prim_saturated_law : ReducePrimSaturated}
+  {reduce_prim_scoped_law : ReducePrimScoped}
+  {cast_expr_scoped_law : CastExprScoped}.
 
 (* ==========================================================================
    The proposed restriction on concore_expr IS preserved by evaluation, and
@@ -232,6 +234,16 @@ Proof.
   apply IH. split; [apply Con_App; assumption | reflexivity].
 Qed.
 
+Lemma merge_scoped_closed : forall Γ e, closed_term e -> closed_term (merge Γ e).
+Proof.
+  intros Γ e H.
+  apply sym_scoped_no_symvars.
+  assert (Hs : sym_scoped no_symvars nil e) by (apply scoped_no_symvars; exact H).
+  destruct e as [ | | | | | | | | | | vc vt vf | | ]; simpl; try exact Hs.
+  inversion Hs as [| | | | | | | | | | L2 vc2 vt2 vf2 Hvc Hvt Hvf | |]; subst.
+  apply ite_sym_scoped; assumption.
+Qed.
+
 Section AbstractSolverContracts.
 
 (* The contracts ConCore.v uses, read against the stricter predicate. No
@@ -255,11 +267,14 @@ Hypothesis cast_expr_concore : forall e γ,
 
 Fixpoint concore_eval_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e v : expr)
   (Heval : eval f0 Φ Γ e v) {struct Heval} :
-  f0 = Inf -> sat Φ = true -> concrete_env Γ -> concore_relaxed e -> concore_expr v
+  f0 = Inf -> sat Φ = true -> concrete_env Γ -> concore_relaxed e -> closed_program Γ e ->
+  concore_expr v /\ closed_term v
 with concore_fold_closed_fix (f0 : fuel) (Φ : path_condition) (Γ : environment) (e : expr)
   (alts : list alt) (er : expr)
   (Hfold : fold_alts f0 Φ Γ e alts er) {struct Hfold} :
-  f0 = Inf -> sat Φ = true -> concrete_env Γ -> concore_expr e -> Forall concore_alt alts -> concore_expr er.
+  f0 = Inf -> sat Φ = true -> concrete_env Γ -> concore_expr e -> Forall concore_alt alts ->
+  scoped_env Γ -> closed_term e -> Forall (scoped_alt (dom_env Γ)) alts ->
+  concore_expr er /\ closed_term er.
 Proof.
 {
   destruct Heval as
@@ -283,13 +298,20 @@ Proof.
     | k Φ Γ τ
     | k Φ Γ Γ' e e' Heval_t
     | Φ Γ e
-    ]; intros Hk0 Hsat Henv Hcon; try (injection Hk0 as Hk0; subst).
+    ]; intros Hk0 Hsat Henv Hcon [HΓ Hsc]; try (injection Hk0 as Hk0; subst).
   - (* Eval_Var *)
     destruct (lookup_env_concrete Γ x Γ' e Henv Hlook) as [Henv' He].
-    exact (concore_eval_closed_fix Inf Φ Γ' e e' Heval_x eq_refl Hsat Henv' (Rel_Exact e He)).
-  - (* Eval_SymVar *) constructor.
-  - (* Eval_Lit *) constructor.
+    destruct (lookup_env_scoped Γ x Γ' e HΓ Hlook) as [HΓ' Hsc'].
+    exact (concore_eval_closed_fix Inf Φ Γ' e e' Heval_x eq_refl Hsat Henv'
+             (Rel_Exact e He) (conj HΓ' Hsc')).
+  - (* Eval_SymVar: impossible in a closed program *)
+    exfalso. inversion Hsc; subst.
+    match goal with [Hi : In x _ |- _] => exact (in_dom_lookup_env Γ x Hi Hnone) end.
+  - (* Eval_Lit *) split; [constructor | apply Scoped_Lit].
   - (* Eval_Con *)
+    destruct (unspool_app_scoped _ esp [] (ECon d) args Hunspool_con Hsc (Forall_nil _))
+      as [_ Hsc_args].
+    split; [| exact (scoped_con_value nil Γ d args HΓ Hsc_args)].
     apply concore_con_value; [exact Henv |].
     inversion Hcon as [e0 Hc | f a Hf Ha | e0 γ Hr]; subst.
     + exact (proj2 (unspool_app_concore _ [] _ _ Hunspool_con Hc (Forall_nil _))).
@@ -298,46 +320,69 @@ Proof.
                       (Forall_cons a Ha (Forall_nil _)))).
     + no_con_head.
   - (* Eval_Cast *)
-    apply cast_expr_concore.
-    exact (concore_eval_closed_fix Inf Φ Γ e e' Heval_e eq_refl Hsat Henv (relaxed_cast_inv e γ Hcon)).
+    inversion Hsc as [| | | | | | | L1 e1 γ1 Hsce | | | | |]; subst.
+    destruct (concore_eval_closed_fix Inf Φ Γ e e' Heval_e eq_refl Hsat Henv
+                (relaxed_cast_inv e γ Hcon) (conj HΓ Hsce)) as [Hcv Hsv].
+    split; [apply cast_expr_concore; exact Hcv | apply cast_expr_scoped_closed; exact Hsv].
   - (* Eval_AppAbs *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
     inversion Hf as [| | | | | | | | | | | | | Γ0 e0 Henv' Hlam]; subst.
     inversion Hlam as [| | | | | x0 body Hbody | | | | | | | | ]; subst.
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    inversion Hscf as [| | | | | | | | | | | | L1 Γ1 e1 HΓ' Hsclam]; subst.
+    inversion Hsclam as [| | | | | L2 x2 b2 Hscb | | | | | | |]; subst.
     apply (concore_eval_closed_fix Inf Φ (extend_env Γ' x Γ ea) eb eb' Heval_b eq_refl Hsat).
     + apply concrete_env_extend; assumption.
     + apply Rel_Exact; assumption.
+    + split; [apply Scoped_Env_Extend; assumption | exact Hscb].
   - (* Eval_AppSpine: the operator's value goes back in operator position,
        and nothing is known about its shape. Rel_App is what absorbs that. *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    destruct (concore_eval_closed_fix Inf Φ Γ ef ef' Heval_f eq_refl Hsat Henv
+                (Rel_Exact ef Hf) (conj HΓ Hscf)) as [Hcf' Hsf'].
     apply (concore_eval_closed_fix Inf Φ Γ (EApp ef' ea) er Heval_app2 eq_refl Hsat Henv).
-    apply Rel_App; [| exact Ha].
-    exact (concore_eval_closed_fix Inf Φ Γ ef ef' Heval_f eq_refl Hsat Henv (Rel_Exact ef Hf)).
+    + apply Rel_App; [exact Hcf' | exact Ha].
+    + split; [exact HΓ | apply Scoped_App; [apply closed_term_scoped; exact Hsf' | exact Hsca]].
   - (* Eval_Bot *)
-    exact (relaxed_plain (EBot b) Hcon).
+    split; [exact (relaxed_plain (EBot b) Hcon) | apply Scoped_Bot].
   - (* Eval_AppPrim *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
-    simpl in Hunspool.
     assert (Hcon_args : Forall concore_expr args).
-    { destruct (unspool_app_concore ef [ea] (EPrimOp p) args Hunspool Hf
+    { simpl in Hunspool.
+      destruct (unspool_app_concore ef [ea] (EPrimOp p) args Hunspool Hf
                  (Forall_cons ea Ha (Forall_nil _))) as [_ Hforall]. exact Hforall. }
-    apply reduce_prim_concore.
-    clear Hunspool Harity Hcon Hf Ha.
-    induction Hargs as [| a a' args_tl args'_tl Ha Hargs_tl IH].
-    + constructor.
-    + inversion Hcon_args as [| a0 tl0 Hcon_a Hcon_tl]; subst.
-      constructor.
-      * exact (concore_eval_closed_fix Inf Φ Γ a a' Ha eq_refl Hsat Henv (Rel_Exact a Hcon_a)).
-      * exact (IH Hcon_tl).
+    assert (Hsc_args : Forall (scoped (dom_env Γ)) args).
+    { destruct (unspool_app_scoped _ (EApp ef ea) [] (EPrimOp p) args Hunspool Hsc
+                 (Forall_nil _)) as [_ Hforall]. exact Hforall. }
+    assert (Hres : Forall concore_expr args' /\ Forall closed_term args').
+    { clear Hunspool Harity Hcon Hf Ha.
+      revert Hcon_args Hsc_args.
+      induction Hargs as [| a a' args_tl args'_tl Ha0 Hargs_tl IH]; intros Hcon_args Hsc_args.
+      - split; constructor.
+      - inversion Hcon_args as [| a0 tl0 Hcon_a Hcon_tl]; subst.
+        inversion Hsc_args as [| a1 tl1 Hsc_a Hsc_tl]; subst.
+        destruct (concore_eval_closed_fix Inf Φ Γ a a' Ha0 eq_refl Hsat Henv
+                    (Rel_Exact a Hcon_a) (conj HΓ Hsc_a)) as [Hca Hsa].
+        destruct (IH Hcon_tl Hsc_tl) as [Hct Hst].
+        split; constructor; assumption. }
+    destruct Hres as [Hcon' Hsc'].
+    split; [apply reduce_prim_concore; exact Hcon' | apply reduce_prim_scoped_closed; exact Hsc'].
   - (* Eval_Lam *)
-    apply Con_Thunk; [assumption | exact (relaxed_plain (ELam x e) Hcon)].
+    inversion Hsc as [| | | | | L2 x2 b2 Hscb | | | | | | |]; subst.
+    split; [apply Con_Thunk; [assumption | exact (relaxed_plain (ELam x e) Hcon)]
+           | apply Scoped_Thunk; [exact HΓ | apply Scoped_Lam; exact Hscb]].
   - (* Eval_AppCast: the pushed term is an application under a cast, and its
        operator is whatever was under the arrow cast. Rel_Cast of Rel_App. *)
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
     inversion Hf as [| | | | | | | e0 γ0 He | | | | | | ]; subst.
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    inversion Hscf as [| | | | | | | L1 e1 γ1 Hsce | | | | |]; subst.
     apply (concore_eval_closed_fix Inf Φ Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r)
              er Heval_pushed eq_refl Hsat Henv).
-    apply Rel_Cast. apply Rel_App; [exact He | apply Con_Cast; exact Ha].
+    + apply Rel_Cast. apply Rel_App; [exact He | apply Con_Cast; exact Ha].
+    + split; [exact HΓ |].
+      apply Scoped_Cast. apply Scoped_App; [assumption | apply Scoped_Cast; assumption].
   - (* Eval_AppIf: a ConCore spine has no branch at its head *)
     exfalso.
     destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
@@ -346,24 +391,30 @@ Proof.
                 (Forall_cons e2 Ha (Forall_nil _))) as [Hhead _].
     exact (not_concore_if ec et ef Hhead).
   - (* Eval_AppBot *)
-    destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha]. exact Hf.
+    destruct (relaxed_app_inv _ _ Hcon) as [Hf Ha].
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    split; [exact Hf | apply Scoped_Bot].
   - (* Eval_Case *)
     pose proof (relaxed_plain (ECase es alts) Hcon) as Hc.
     inversion Hc as [| | | | | | es0 alts0 Hcon_es Hcon_alts | | | | | | | ]; subst.
+    inversion Hsc as [| | | | | | L0 es1 alts1 Hsc_es Hsc_alts | | | | | |]; subst.
+    destruct (concore_eval_closed_fix Inf Φ Γ es es' Heval_es eq_refl Hsat Henv
+                (Rel_Exact es Hcon_es) (conj HΓ Hsc_es)) as [Hcon_es' Hsc_es'].
     apply (concore_fold_closed_fix Inf Φ Γ (merge Γ es') alts er Hfold eq_refl Hsat Henv);
-      [| assumption].
-    apply merge_concore.
-    exact (concore_eval_closed_fix Inf Φ Γ es es' Heval_es eq_refl Hsat Henv (Rel_Exact es Hcon_es)).
+      [apply merge_concore; exact Hcon_es' | exact Hcon_alts | exact HΓ | | exact Hsc_alts].
+    exact (merge_scoped_closed Γ es' Hsc_es').
   - (* Eval_If *)
     exfalso. apply (not_concore_if ec et ef).
     exact (relaxed_plain (EIf ec et ef) Hcon).
-  - (* Eval_Coercion *) constructor.
-  - (* Eval_Prune *) constructor.
-  - (* Eval_Type *) constructor.
+  - (* Eval_Coercion *) split; [constructor | apply Scoped_Coercion].
+  - (* Eval_Prune *) split; [constructor | apply Scoped_Bot].
+  - (* Eval_Type *) split; [constructor | apply Scoped_Type].
   - (* Eval_Thunk *)
     pose proof (relaxed_plain (EThunk Γ' e) Hcon) as Hc.
     inversion Hc as [| | | | | | | | | | | | | Γ0 e0 Henv' He]; subst.
-    exact (concore_eval_closed_fix Inf Φ Γ' e e' Heval_t eq_refl Hsat Henv' (Rel_Exact e He)).
+    inversion Hsc as [| | | | | | | | | | | | L1 Γ1 e1 HΓ' Hsce]; subst.
+    exact (concore_eval_closed_fix Inf Φ Γ' e e' Heval_t eq_refl Hsat Henv'
+             (Rel_Exact e He) (conj HΓ' Hsce)).
   - (* Eval_OutOfFuel: the budget gives up with EBot BOutOfFuel, which no
        ConCore expression is, so the statement is about the unlimited budget *)
     discriminate Hk0.
@@ -374,8 +425,10 @@ Proof.
     | k Φ Γ ec et ef alts Hpc_none
     | k Φ Γ e d ea xs ep alts er Hdec Halt Heval_ep
     | k Φ Γ b alts
-    | k Φ Γ e alts Hnotif Hnoalt Hnotbot
-    ]; intros Hk0 Hsat Henv Hcon Halts; subst k.
+    | k Φ Γ e pc alts r Hpc Hvar Hrec
+    | k Φ Γ e pc alts r1 r2 Hpc Hvar Har Hf1 Hf2
+    | k Φ Γ e alts Hpcnone Hop Hnotif Hnoalt Hnotbot
+    ]; intros Hk0 Hsat Henv Hcon Halts HΓ Hsc Hsc_alts; subst k.
   - exfalso. apply (not_concore_if ec et ef). assumption.
   - exfalso. apply (not_concore_if ec et ef). assumption.
   - (* FoldAlts_Con *)
@@ -383,11 +436,26 @@ Proof.
     { apply decompose_con_app_concore with (e := e) (d := d); assumption. }
     assert (Hep : concore_expr ep).
     { apply find_alt_concore with (d := d) (alts := alts) (xs := xs); assumption. }
+    assert (Hsc_ea : Forall closed_term ea).
+    { exact (proj2 (unspool_app_scoped nil e [] (ECon d) ea
+                      (decompose_con_app_unspool e d ea Hdec) Hsc (Forall_nil _))). }
     apply (concore_eval_closed_fix Inf Φ (extend_env_multi Γ xs ea Γ) ep er Heval_ep eq_refl Hsat).
     + apply concrete_env_extend_multi; assumption.
     + apply Rel_Exact; assumption.
-  - (* FoldAlts_Bot *) exact Hcon.
-  - (* FoldAlts_Otherwise *) constructor.
+    + split.
+      * apply scoped_env_extend_multi; [exact HΓ | exact HΓ |].
+        eapply Forall_impl; [| exact Hsc_ea]. intros a Ha. exact (closed_term_scoped _ a Ha).
+      * rewrite dom_env_extend_multi. exact (find_alt_scoped _ d alts xs ep Hsc_alts Halt).
+  - (* FoldAlts_Bot *) split; [exact Hcon | apply Scoped_Bot].
+  - (* FoldAlts_GroundFormula *)
+    exact (concore_fold_closed_fix Inf Φ Γ (ECon (truth_constructor (pc_closed_value pc))) alts r
+             Hrec eq_refl Hsat Henv (Con_Con _) Halts HΓ (Scoped_Con nil _) Hsc_alts).
+  - (* FoldAlts_SymbolicFormula: a closed scrutinee's formula has no variable,
+       so this rule never fires on a concrete run *)
+    exfalso.
+    pose proof (expr_to_pc_scoped_no_var Γ e pc (closed_term_scoped (dom_env Γ) e Hsc) Hpc) as Hnv.
+    rewrite Hnv in Hvar. discriminate.
+  - (* FoldAlts_Otherwise *) split; [constructor | apply Scoped_Bot].
 }
 Qed.
 
@@ -397,11 +465,13 @@ Qed.
 Lemma concore_eval_closed : forall Γ e v,
   concrete_env Γ ->
   concore_expr e ->
+  closed_program Γ e ->
   pc_true ; Γ ⊢ e ⇓ v ->
   concore_expr v.
 Proof.
-  intros Γ e v Henv Hcon Heval.
-  exact (concore_eval_closed_fix Inf pc_true Γ e v Heval eq_refl sat_pc_true Henv (Rel_Exact e Hcon)).
+  intros Γ e v Henv Hcon Hcl Heval.
+  exact (proj1 (concore_eval_closed_fix Inf pc_true Γ e v Heval eq_refl sat_pc_true Henv
+                  (Rel_Exact e Hcon) Hcl)).
 Qed.
 
 (* And the restriction means what it was meant to mean. *)

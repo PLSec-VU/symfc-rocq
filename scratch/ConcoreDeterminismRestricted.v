@@ -47,16 +47,17 @@ Lemma restriction_must_reach_the_environment : forall (x y : var),
 Proof. exact unsatisfiable_guard_in_environment_breaks_concore_determinism. Qed.
 
 (* Restrict the environment the same way and it holds. This is the
-   statement ConCore.v proves. *)
+   statement ConCore.v proves. The statement also asks the program to be closed: a free variable would
+   let Rule Sym-Var and Rule Var both fire. *)
 Lemma concore_determinism_in_a_concore_environment : forall Γ e v1 v2,
-  concrete_env Γ -> concore_expr e ->
+  concrete_env Γ -> concore_expr e -> closed_program Γ e ->
   Γ ⊢ᶜ e ⇓ᶜ v1 -> Γ ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
 Proof. exact concore_eval_deterministic. Qed.
 
-(* A whole program starts in the empty environment, so for programs the
-   restriction on the expression alone is enough after all. *)
+(* A whole program starts in the empty environment, so for closed programs
+   the restriction on the expression alone is enough after all. *)
 Lemma concore_program_determinism : forall e v1 v2,
-  concore_expr e -> ⊢ᶜ e ⇓ᶜ v1 -> ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
+  concore_expr e -> closed_term e -> ⊢ᶜ e ⇓ᶜ v1 -> ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
 Proof. exact concore_eval_deterministic_top. Qed.
 
 End Scratch.

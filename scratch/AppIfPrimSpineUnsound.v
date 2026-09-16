@@ -16,8 +16,43 @@ Fixpoint has_con_arg (e : expr) : bool :=
 
 Definition result_con : dcon := "Result"%string.
 
+Fixpoint all_con_args (e : expr) : bool :=
+  match e with
+  | EPrimOp _ => true
+  | EApp f a => is_con a && all_con_args f
+  | _ => false
+  end.
+
+Definition answers_con (e : expr) : bool :=
+  match e with
+  | EApp f a => is_con a && all_con_args f
+  | _ => false
+  end.
+
 Definition answer_con_arg (e : expr) : expr :=
-  if has_con_arg e then ECon result_con else e.
+  if answers_con e then ECon result_con else e.
+
+Lemma answers_con_needs_a_con_arg : forall e,
+  has_con_arg e = false -> answers_con e = false.
+Proof.
+  intros e H. destruct e; try reflexivity.
+  simpl in *. apply orb_false_elim in H as [Ha _]. rewrite Ha. reflexivity.
+Qed.
+
+Lemma all_con_args_mention_nothing : forall e,
+  all_con_args e = true -> mentions_out_of_fuel e = false.
+Proof.
+  induction e; intros H; simpl in *; try discriminate; try reflexivity.
+  apply andb_prop in H as [Ha Hf]. rewrite (IHe1 Hf).
+  destruct e2; simpl in Ha |- *; try discriminate. reflexivity.
+Qed.
+
+Lemma answers_con_mentions_nothing : forall e,
+  answers_con e = true -> mentions_out_of_fuel e = false.
+Proof.
+  intros e H. destruct e; try discriminate.
+  exact (all_con_args_mention_nothing (EApp e1 e2) H).
+Qed.
 
 Fixpoint answer_leaves (e : expr) : expr :=
   match e with
@@ -52,7 +87,7 @@ Proof.
   intros Γ e pc H.
   assert (Hif : is_if e = false) by (destruct e; simpl in *; try reflexivity; discriminate).
   rewrite (answer_leaves_not_if e Hif). unfold answer_con_arg.
-  rewrite (expr_to_pc_no_con_arg Γ e pc H). reflexivity.
+  rewrite (answers_con_needs_a_con_arg e (expr_to_pc_no_con_arg Γ e pc H)). reflexivity.
 Qed.
 
 Lemma answer_leaves_of_denote : forall σ S e l, denote σ S e l -> answer_leaves e = e.
@@ -72,7 +107,7 @@ Proof.
   intros Γ e H.
   assert (Hif : is_if e = false) by (destruct H; reflexivity).
   rewrite (answer_leaves_not_if e Hif). unfold answer_con_arg.
-  rewrite (solvable_no_con_arg Γ e H). reflexivity.
+  rewrite (answers_con_needs_a_con_arg e (solvable_no_con_arg Γ e H)). reflexivity.
 Qed.
 
 Lemma contains_keeps_not_if : forall σ S es ec,
@@ -107,13 +142,43 @@ Proof.
     exact (expr_to_pc_no_con_arg · es pc (Hd · (sym_free_env_empty S))).
 Qed.
 
+Lemma contains_flat_all_con_args : forall σ S es ec,
+  contains σ S es ec -> flat es = true -> all_con_args ec = all_con_args es.
+Proof.
+  intros σ S es ec H. induction H; intros Hflat; simpl in *; try reflexivity; try discriminate.
+  - apply andb_prop in Hflat as [Hf Ha].
+    rewrite (contains_keeps_is_con σ S a_s a_c H0 (flat_not_if a_s Ha)), (IHcontains1 Hf).
+    reflexivity.
+  - destruct ec; try discriminate; reflexivity.
+  - symmetry. destruct H2 as [pc [Hd _]].
+    pose proof (expr_to_pc_no_con_arg · es pc (Hd · (sym_free_env_empty S))) as Hno.
+    destruct (cont_denote_is_app es _ _ H H1) as [f [a ->]].
+    simpl in Hno |- *. apply orb_false_elim in Hno as [Ha _]. rewrite Ha. reflexivity.
+Qed.
+
+Lemma contains_flat_answers_con : forall σ S es ec,
+  contains σ S es ec -> flat es = true -> answers_con ec = answers_con es.
+Proof.
+  intros σ S es ec H Hflat.
+  destruct H; simpl in *; try reflexivity; try discriminate.
+  - apply andb_prop in Hflat as [Hf Ha].
+    rewrite (contains_keeps_is_con σ S a_s a_c H0 (flat_not_if a_s Ha)),
+            (contains_flat_all_con_args σ S f_s f_c H Hf).
+    reflexivity.
+  - destruct ec; try discriminate; reflexivity.
+  - symmetry. destruct H2 as [pc [Hd _]].
+    pose proof (expr_to_pc_no_con_arg · es pc (Hd · (sym_free_env_empty S))) as Hno.
+    destruct (cont_denote_is_app es _ _ H H1) as [f [a ->]].
+    simpl in Hno |- *. apply orb_false_elim in Hno as [Ha _]. rewrite Ha. reflexivity.
+Qed.
+
 Lemma answer_con_arg_contains : forall σ S L X,
   contains σ S L X -> flat L = true ->
   contains σ S (answer_con_arg L) (answer_con_arg X).
 Proof.
   intros σ S L X Hc Hf. unfold answer_con_arg.
-  rewrite (contains_flat_con_arg σ S L X Hc Hf).
-  destruct (has_con_arg L); [apply Cont_Con | exact Hc].
+  rewrite (contains_flat_answers_con σ S L X Hc Hf).
+  destruct (answers_con L); [apply Cont_Con | exact Hc].
 Qed.
 
 Lemma picks_answer_leaves : forall σ S T L,
@@ -121,7 +186,7 @@ Lemma picks_answer_leaves : forall σ S T L,
 Proof.
   intros σ S T L H. induction H as [e Hif | c t f L Hm Hp IH | c t f L Hm Hp IH].
   - rewrite (answer_leaves_not_if e Hif). apply picks_leaf.
-    unfold answer_con_arg. destruct (has_con_arg e); [reflexivity | exact Hif].
+    unfold answer_con_arg. destruct (answers_con e); [reflexivity | exact Hif].
   - apply picks_then; assumption.
   - apply picks_else; assumption.
 Qed.
@@ -167,7 +232,7 @@ Proof.
   destruct (is_if (reduce_unbranched p args)) eqn:Hif.
   - destruct (reduce_unbranched p args); simpl in Hif, H; discriminate.
   - rewrite (answer_leaves_not_if _ Hif) in *. unfold answer_con_arg in *.
-    destruct (has_con_arg (reduce_unbranched p args)); [discriminate H |].
+    destruct (answers_con (reduce_unbranched p args)); [discriminate H |].
     exact (@unbranched_ground_value p args H).
 Qed.
 
@@ -179,7 +244,7 @@ Proof.
   destruct (is_if (reduce_unbranched p args)) eqn:Hif.
   - destruct (reduce_unbranched p args); simpl in Hif, H; discriminate.
   - rewrite (answer_leaves_not_if _ Hif) in H. unfold answer_con_arg in H.
-    destruct (has_con_arg (reduce_unbranched p args)); [discriminate H |].
+    destruct (answers_con (reduce_unbranched p args)); [discriminate H |].
     exact (@unbranched_saturated p args p0 args0 H).
 Qed.
 
@@ -200,7 +265,7 @@ Proof.
   change (concore_expr (con_reduce_prim p args)).
   unfold con_reduce_prim.
   rewrite (answer_leaves_not_if _ (concore_not_if _ H)). unfold answer_con_arg.
-  destruct (has_con_arg (reduce_unbranched p args)); [apply Con_Con | exact H].
+  destruct (answers_con (reduce_unbranched p args)); [apply Con_Con | exact H].
 Qed.
 
 Definition ReducePrimIteContains {sorts : SymCoreSorts} {solver : SymCoreSolver} : Prop :=
@@ -227,18 +292,75 @@ Proof.
   unfold con_reduce_prim; rewrite (answer_leaves_of_denote σ S _ _ Hden); exact H.
 Qed.
 
-Lemma answer_leaves_scoped : forall L e, scoped L e -> scoped L (answer_leaves e).
+Lemma answer_leaves_sym_scoped : forall S L e,
+  sym_scoped S L e -> sym_scoped S L (answer_leaves e).
 Proof.
-  intros L e. induction e; intros H;
-    try (simpl; unfold answer_con_arg; destruct (has_con_arg _); [apply Scoped_Con | exact H]).
-  inversion H; subst. simpl. apply Scoped_If; auto.
+  intros S L e. induction e; intros H;
+    try (simpl; unfold answer_con_arg; destruct (answers_con _);
+         [apply SymScoped_Con | exact H]).
+  inversion H; subst. simpl. apply SymScoped_If; auto.
 Qed.
 
 Instance con_reduce_prim_scoped : @ReducePrimScoped model_sorts con_solver.
 Proof.
-  intros p args H.
-  change (closed_term (con_reduce_prim p args)). unfold con_reduce_prim.
-  apply answer_leaves_scoped. exact (unbranched_scoped p args H).
+  intros S L p args H.
+  change (sym_scoped S L (con_reduce_prim p args)). unfold con_reduce_prim.
+  apply answer_leaves_sym_scoped. exact (unbranched_sym_scoped S L p args H).
+Qed.
+
+Lemma answer_leaves_keeps_out_of_fuel : forall e,
+  mentions_out_of_fuel e = true -> mentions_out_of_fuel (answer_leaves e) = true.
+Proof.
+  intros e. induction e; intros H; try exact H.
+  - cbn [answer_leaves]. unfold answer_con_arg.
+    destruct (answers_con (EApp e1 e2)) eqn:Hans;
+      [rewrite (answers_con_mentions_nothing _ Hans) in H; discriminate H | exact H].
+  - cbn [answer_leaves mentions_out_of_fuel] in H |- *.
+    apply orb_true_iff in H as [H | H]; [rewrite H; reflexivity |].
+    apply orb_true_iff in H as [H | H].
+    + rewrite (IHe2 H), orb_true_r. reflexivity.
+    + rewrite (IHe3 H), !orb_true_r. reflexivity.
+Qed.
+
+Instance con_reduce_prim_keeps_out_of_fuel :
+  @ReducePrimKeepsOutOfFuel model_sorts con_solver.
+Proof.
+  intros p args Hlen Hargs.
+  change (mentions_out_of_fuel (con_reduce_prim p args) = true).
+  unfold con_reduce_prim, reduce_unbranched.
+  rewrite Hlen, Nat.eqb_refl.
+  apply answer_leaves_keeps_out_of_fuel.
+  apply fold_leaves_keeps_out_of_fuel. apply lift_branches_keeps_out_of_fuel.
+  apply op_spine_keeps_out_of_fuel. exact Hargs.
+Qed.
+
+Lemma answer_leaves_denotes_source : forall S e pc,
+  denotes S (answer_leaves e) pc -> denotes S e pc.
+Proof.
+  intros S e pc H.
+  pose proof (H · (sym_free_env_empty S)) as H0.
+  assert (He : answer_leaves e = e).
+  { destruct e; try reflexivity.
+    - cbn [answer_leaves] in H0 |- *. unfold answer_con_arg in H0 |- *.
+      destruct (answers_con (EApp e1 e2)); [cbn in H0; discriminate H0 | reflexivity].
+    - cbn [answer_leaves expr_to_pc] in H0. discriminate H0. }
+  rewrite He in H. exact H.
+Qed.
+
+Instance con_reduce_prim_ite_wellformed :
+  @ReducePrimIteWellformed model_sorts con_solver.
+Proof.
+  intros σ S ec et ef pcc pc pca Hsc Hst Hsf Hdc Hdm Hok Hda.
+  assert (Hflat : Forall (fun a => flat a = true) (ec :: et :: ef :: nil))
+    by (repeat constructor; eapply solvable_flat; eassumption).
+  change (denotes S (con_reduce_prim PIte (ec :: et :: ef :: nil)) pc) in Hdm.
+  unfold con_reduce_prim in Hdm.
+  apply answer_leaves_denotes_source in Hdm.
+  unfold reduce_unbranched in Hdm. cbn [length model_arity Nat.eqb] in Hdm.
+  rewrite (lift_flat _ (op_spine_flat PIte _ Hflat)) in Hdm.
+  rewrite (fold_leaves_not_if _ (op_spine_not_if _ _)) in Hdm.
+  apply (model_ite_wellformed_spine S ec et ef pc pca Hdm Hok).
+  destruct (lit_eq_dec (pc_value σ pcc) lit_true); [left | right]; exact Hda.
 Qed.
 
 Instance con_laws : @ConCoreLaws model_sorts con_solver.
@@ -250,12 +372,15 @@ Proof.
   - exact model_cast_expr_concore.
   - exact con_reduce_prim_scoped.
   - exact model_cast_expr_scoped.
+  - exact con_reduce_prim_keeps_out_of_fuel.
+  - exact model_cast_expr_keeps_out_of_fuel.
   - exact model_models_sat.
   - exact model_prim_value_and.
   - exact con_reduce_prim_contains.
   - exact con_reduce_prim_denote.
   - exact con_reduce_prim_ground_value.
   - exact model_cast_expr_contains.
+  - exact con_reduce_prim_ite_wellformed.
   - exact model_subst_coerc_contains_env.
   - exact model_subst_type_contains_env.
 Qed.
@@ -270,18 +395,18 @@ Qed.
    has a value, and app_if_breaks_soundness shows that this refutes
    soundness. Rule App-If now pushes the whole spine into the arms, so the
    arms are (not D true), which is as stuck as the concrete program:
-   symbolic_program_has_no_value. *)
+   branching_program_has_no_value. *)
 
 Definition guard_var : var := "x"%string.
 Definition branch_operator : expr := EIf (EVar guard_var) (EPrimOp PNot) (EPrimOp PNot).
 Definition field_con : expr := ECon "D"%string.
-Definition symbolic_program : expr := EApp (EApp branch_operator field_con) (ELit true).
+Definition branching_program : expr := EApp (EApp branch_operator field_con) (ELit true).
 Definition concrete_program : expr := EApp (EApp (EPrimOp PNot) field_con) (ELit true).
 Definition branch_symvars : symvars := fun y => String.eqb y guard_var.
 Definition branch_model : valuation := fun _ => true.
 
 Definition OldSymbolicValue : Prop :=
-  exists v, @eval model_sorts con_solver Inf (PCLit true) · symbolic_program v.
+  exists v, @eval model_sorts con_solver Inf (PCLit true) · branching_program v.
 
 Lemma negation_of_field_is_a_constructor :
   con_reduce_prim PNot (field_con :: nil) = ECon result_con.
@@ -304,13 +429,23 @@ Lemma concrete_program_is_stuck :
   forall v, ~ @eval model_sorts con_solver Inf (PCLit true) · concrete_program v.
 Proof. intros v. apply over_applied_negation_is_stuck. Qed.
 
-Lemma symbolic_program_contains_concrete_program :
-  contains branch_model branch_symvars symbolic_program concrete_program.
+Lemma branching_program_contains_concrete_program :
+  contains branch_model branch_symvars branching_program concrete_program.
 Proof.
   apply Cont_App; [apply Cont_App; [| apply Cont_Con] | apply Cont_Lit].
   apply Cont_If_True; [| apply Cont_PrimOp].
   exists (PCVar guard_var). split; [| reflexivity].
   intros Γ Hfree. simpl. rewrite (Hfree guard_var eq_refl). reflexivity.
+Qed.
+
+Lemma branching_program_is_symbolic :
+  symbolic_program branch_symvars · branching_program.
+Proof.
+  split; [constructor |].
+  unfold branching_program, branch_operator, field_con.
+  apply SymScoped_App; [apply SymScoped_App; [| constructor] | constructor].
+  apply SymScoped_If; [| constructor | constructor].
+  apply SymScoped_Var. right. reflexivity.
 Qed.
 
 Lemma concrete_program_concore : concore_expr concrete_program.
@@ -327,6 +462,7 @@ Theorem app_if_breaks_soundness :
        contains σ S e_sym e_con ->
        concore_expr e_con ->
        closed_program Γc e_con ->
+       symbolic_program S Γs e_sym ->
        @eval model_sorts con_solver Inf Φ Γs e_sym v_sym ->
        exists v_con,
          @eval model_sorts con_solver Inf (PCLit true) Γc e_con v_con /\
@@ -334,15 +470,16 @@ Theorem app_if_breaks_soundness :
 Proof.
   intros [v_sym Hv] Hsound.
   assert (Hm : @models model_sorts branch_model (PCLit true)) by reflexivity.
-  destruct (Hsound _ · · branch_model branch_symvars symbolic_program concrete_program
-              v_sym Hm (Cont_Env_Empty _ _) symbolic_program_contains_concrete_program
-              concrete_program_concore concrete_program_closed Hv) as [v_con [Hc _]].
+  destruct (Hsound _ · · branch_model branch_symvars branching_program concrete_program
+              v_sym Hm (Cont_Env_Empty _ _) branching_program_contains_concrete_program
+              concrete_program_concore concrete_program_closed
+              branching_program_is_symbolic Hv) as [v_con [Hc _]].
   exact (concrete_program_is_stuck v_con Hc).
 Qed.
 
-Theorem symbolic_program_has_no_value : ~ OldSymbolicValue.
+Theorem branching_program_has_no_value : ~ OldSymbolicValue.
 Proof.
-  intros [v H]. unfold symbolic_program, branch_operator, field_con in H.
+  intros [v H]. unfold branching_program, branch_operator, field_con in H.
   inversion H; subst.
   - match goal with Hu : unspool_app _ _ = (ECon _, _) |- _ => simpl in Hu; discriminate Hu end.
   - match goal with Hc : Comp _ _ |- _ => inversion Hc as [| | | | ? ? Hh]; simpl in Hh; discriminate Hh end.
@@ -362,7 +499,7 @@ Proof.
 Qed.
 
 Print Assumptions app_if_breaks_soundness.
-Print Assumptions symbolic_program_has_no_value.
+Print Assumptions branching_program_has_no_value.
 
 (* The double-thunk counterexample. Under the one-argument Rule App-If, the
    program (if x then D else D) l1 l2 ran Rule Con twice on each arm: once
