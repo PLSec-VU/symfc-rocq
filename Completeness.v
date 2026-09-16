@@ -6,6 +6,176 @@ From Stdlib Require Import Lia.
 From Stdlib Require Import Arith.PeanoNat.
 Import ListNotations.
 
+Section SymReach.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
+
+Inductive sym_state : Type :=
+  | SEval : environment -> expr -> sym_state
+  | SFold : environment -> expr -> list alt -> sym_state.
+
+Inductive sym_step : path_condition -> sym_state -> path_condition -> sym_state -> Prop :=
+  | SymStep_Var : forall Φ Γ x Γ' e,
+      lookup_env Γ x = Some (Γ', e) -> sym_step Φ (SEval Γ (EVar x)) Φ (SEval Γ' e)
+  | SymStep_Cast : forall Φ Γ e γ, sym_step Φ (SEval Γ (ECast e γ)) Φ (SEval Γ e)
+  | SymStep_AppAbs : forall Φ Γ Γ' x eb ea,
+      sym_step Φ (SEval Γ (EApp (EThunk Γ' (ELam x eb)) ea)) Φ (SEval (extend_env Γ' x Γ ea) eb)
+  | SymStep_AppFun : forall Φ Γ ef ea,
+      sym_step Φ (SEval Γ (EApp ef ea)) Φ (SEval Γ ef)
+  | SymStep_AppValue : forall Φ Γ ef ea ef' n,
+      eval (Fin n) Φ Γ ef ef' -> sym_step Φ (SEval Γ (EApp ef ea)) Φ (SEval Γ (EApp ef' ea))
+  | SymStep_AppArg : forall Φ Γ e h args a,
+      unspool_app e nil = (h, args) -> In a args -> sym_step Φ (SEval Γ e) Φ (SEval Γ a)
+  | SymStep_AppCast : forall Φ Γ ef γ ea γ_a γ_r,
+      sym_step Φ (SEval Γ (EApp (ECast ef γ) ea)) Φ
+               (SEval Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r))
+  | SymStep_AppIf : forall Φ Γ e1 e2 ec et ef args,
+      unspool_app (EApp e1 e2) nil = (EIf ec et ef, args) ->
+      sym_step Φ (SEval Γ (EApp e1 e2)) Φ
+               (SEval Γ (EIf ec (fold_left EApp args et) (fold_left EApp args ef)))
+  | SymStep_Thunk : forall Φ Γ Γ' e, sym_step Φ (SEval Γ (EThunk Γ' e)) Φ (SEval Γ' e)
+  | SymStep_IfGuard : forall Φ Γ ec et ef, sym_step Φ (SEval Γ (EIf ec et ef)) Φ (SEval Γ ec)
+  | SymStep_IfTrue : forall Φ Γ ec et ef pc,
+      sym_step Φ (SEval Γ (EIf ec et ef)) (Φ ∧ pc) (SEval Γ et)
+  | SymStep_IfFalse : forall Φ Γ ec et ef pc,
+      sym_step Φ (SEval Γ (EIf ec et ef)) (Φ ∧ ¬ pc) (SEval Γ ef)
+  | SymStep_CaseScrut : forall Φ Γ es alts, sym_step Φ (SEval Γ (ECase es alts)) Φ (SEval Γ es)
+  | SymStep_CaseFold : forall Φ Γ es alts es' n,
+      eval (Fin n) Φ Γ es es' ->
+      sym_step Φ (SEval Γ (ECase es alts)) Φ (SFold Γ (merge Γ es') alts)
+  | SymStep_FoldIfTrue : forall Φ Γ ec et ef alts pc,
+      sym_step Φ (SFold Γ (EIf ec et ef) alts) (Φ ∧ pc) (SFold Γ et alts)
+  | SymStep_FoldIfFalse : forall Φ Γ ec et ef alts pc,
+      sym_step Φ (SFold Γ (EIf ec et ef) alts) (Φ ∧ ¬ pc) (SFold Γ ef alts)
+  | SymStep_FoldCon : forall Φ Γ m alts d ea xs ep,
+      decompose_con_app m = Some (d, ea) -> find_alt d alts = Some (xs, ep) ->
+      sym_step Φ (SFold Γ m alts) Φ (SEval (extend_env_multi Γ xs ea Γ) ep)
+  | SymStep_FoldGround : forall Φ Γ m alts d,
+      sym_step Φ (SFold Γ m alts) Φ (SFold Γ (ECon d) alts)
+  | SymStep_FoldTrue : forall Φ Γ m alts pc,
+      sym_step Φ (SFold Γ m alts) (Φ ∧ pc) (SFold Γ (ECon dcon_true) alts)
+  | SymStep_FoldFalse : forall Φ Γ m alts pc,
+      sym_step Φ (SFold Γ m alts) (Φ ∧ ¬ pc) (SFold Γ (ECon dcon_false) alts).
+
+Definition sym_state_scoped (S : symvars) (st : sym_state) : Prop :=
+  match st with
+  | SEval Γ e => sym_scoped_env S Γ /\ sym_scoped S (dom_env Γ) e
+  | SFold Γ m alts =>
+      sym_scoped_env S Γ /\ sym_scoped S nil m /\ Forall (sym_scoped_alt S (dom_env Γ)) alts
+  end.
+
+Lemma sym_step_scoped : forall S Φ st Φ' st',
+  sym_state_scoped S st -> sym_step Φ st Φ' st' -> sym_state_scoped S st'.
+Proof.
+  intros S Φ st Φ' st' Hsc Hstep. destruct Hstep; simpl in *.
+  - destruct Hsc as [HΓ Hsc].
+    exact (sym_lookup_env_scoped S Γ x Γ' e HΓ H).
+  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc].
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    inversion Hscf as [| | | | | | | | | | | | L1 Γ1 e1 HΓ' Hsclam]; subst.
+    inversion Hsclam as [| | | | | L2 x2 b2 Hscb | | | | | | |]; subst.
+    split; [apply SymScoped_Env_Extend; assumption | exact Hscb].
+  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc].
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    split; [exact HΓ |].
+    apply SymScoped_App; [apply sym_scoped_nil_any;
+      exact (sym_eval_scoped_fix _ _ _ _ _ H S HΓ Hscf) | exact Hsca].
+  - destruct Hsc as [HΓ Hsc]. split; [exact HΓ |].
+    destruct (sym_unspool_app_scoped S (dom_env Γ) e [] h args H Hsc (Forall_nil _)) as [_ Hargs].
+    rewrite Forall_forall in Hargs. exact (Hargs a H0).
+  - destruct Hsc as [HΓ Hsc].
+    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
+    inversion Hscf as [| | | | | | | L1 e1 γ1 Hsce | | | | |]; subst.
+    split; [exact HΓ |].
+    apply SymScoped_Cast. apply SymScoped_App; [assumption | apply SymScoped_Cast; assumption].
+  - destruct Hsc as [HΓ Hsc]. split; [exact HΓ |].
+    destruct (sym_unspool_app_scoped S (dom_env Γ) (EApp e1 e2) [] (EIf ec et ef) args H Hsc
+                (Forall_nil _)) as [Hif Hargs].
+    inversion Hif as [| | | | | | | | | | L1 ec1 et1 ef1 Hscc Hsct Hscf | |]; subst.
+    apply SymScoped_If;
+      [exact Hscc | apply sym_scoped_fold_left_app; assumption
+       | apply sym_scoped_fold_left_app; assumption].
+  - destruct Hsc as [HΓ Hsc].
+    inversion Hsc as [| | | | | | | | | | | | L1 Γ1 e1 HΓ' Hsce]; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
+  - destruct Hsc as [HΓ Hsc].
+    inversion Hsc as [| | | | | | L0 es1 alts1 Hsc_es Hsc_alts | | | | | |]; subst.
+    pose proof (sym_eval_scoped_fix _ _ _ _ _ H S HΓ Hsc_es) as Hsc_es'.
+    split; [exact HΓ |]. split; [| exact Hsc_alts].
+    destruct es' as [ | | | | | | | | | | vc vt vf | | ]; simpl; try exact Hsc_es'.
+    inversion Hsc_es' as [| | | | | | | | | | L1 vc1 vt1 vf1 Hvc Hvt Hvf | |]; subst.
+    apply ite_sym_scoped; assumption.
+  - destruct Hsc as [HΓ [Hm Halts]]. inversion Hm; subst. split; [exact HΓ | split; assumption].
+  - destruct Hsc as [HΓ [Hm Halts]]. inversion Hm; subst. split; [exact HΓ | split; assumption].
+  - destruct Hsc as [HΓ [Hm Halts]].
+    assert (Hea : Forall (sym_scoped S (dom_env Γ)) ea).
+    { pose proof (proj2 (sym_unspool_app_scoped S nil m [] (ECon d) ea
+                    (decompose_con_app_unspool m d ea H) Hm (Forall_nil _))) as H1.
+      eapply Forall_impl; [| exact H1]. intros a Ha. apply sym_scoped_nil_any. exact Ha. }
+    split.
+    + apply sym_scoped_env_extend_multi; [exact HΓ | exact HΓ | exact Hea].
+    + rewrite dom_env_extend_multi.
+      exact (sym_find_alt_scoped S (dom_env Γ) d alts xs ep Halts H0).
+  - destruct Hsc as [HΓ [Hm Halts]]. split; [exact HΓ | split; [apply SymScoped_Con | exact Halts]].
+  - destruct Hsc as [HΓ [Hm Halts]]. split; [exact HΓ | split; [apply SymScoped_Con | exact Halts]].
+  - destruct Hsc as [HΓ [Hm Halts]]. split; [exact HΓ | split; [apply SymScoped_Con | exact Halts]].
+Qed.
+
+Inductive sym_reach : path_condition -> sym_state -> path_condition -> sym_state -> Prop :=
+  | SymReach_Refl : forall Φ st, sym_reach Φ st Φ st
+  | SymReach_Step : forall Φ st Φ1 st1 Φ2 st2,
+      sym_step Φ st Φ1 st1 -> sym_reach Φ1 st1 Φ2 st2 -> sym_reach Φ st Φ2 st2.
+
+Definition smt_terms_bounded (bs : nat) (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
+  forall Φ' Γ' e' n v,
+    sym_reach Φ (SEval Γ e) Φ' (SEval Γ' e') ->
+    eval (Fin n) Φ' Γ' e' v ->
+    smt_size (merge Γ' v) <= bs.
+
+Definition smt_bounded_run (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
+  exists bs, smt_terms_bounded bs Φ Γ e.
+
+Definition sym_ok (S : symvars) (bs : nat) (Φ : path_condition) (st : sym_state) : Prop :=
+  forall Φ' st', sym_reach Φ st Φ' st' ->
+    sym_state_scoped S st' /\
+    (forall Γ' e' n v, st' = SEval Γ' e' -> eval (Fin n) Φ' Γ' e' v ->
+       smt_size (merge Γ' v) <= bs).
+
+Lemma sym_ok_step : forall S bs Φ st Φ' st',
+  sym_ok S bs Φ st -> sym_step Φ st Φ' st' -> sym_ok S bs Φ' st'.
+Proof.
+  intros S bs Φ st Φ' st' H Hstep Φ2 st2 Hreach.
+  exact (H Φ2 st2 (SymReach_Step Φ st Φ' st' Φ2 st2 Hstep Hreach)).
+Qed.
+
+Lemma sym_ok_scoped : forall S bs Φ st, sym_ok S bs Φ st -> sym_state_scoped S st.
+Proof. intros S bs Φ st H. exact (proj1 (H Φ st (SymReach_Refl Φ st))). Qed.
+
+Lemma sym_ok_value_bound : forall S bs Φ Γ e n v,
+  sym_ok S bs Φ (SEval Γ e) -> eval (Fin n) Φ Γ e v -> smt_size (merge Γ v) <= bs.
+Proof.
+  intros S bs Φ Γ e n v H Hev.
+  exact (proj2 (H Φ (SEval Γ e) (SymReach_Refl Φ (SEval Γ e))) Γ e n v eq_refl Hev).
+Qed.
+
+Lemma sym_ok_intro : forall S bs Φ Γ e,
+  symbolic_program S Γ e -> smt_terms_bounded bs Φ Γ e -> sym_ok S bs Φ (SEval Γ e).
+Proof.
+  intros S bs Φ Γ e [HΓ Hsc] Hb Φ' st' Hreach.
+  assert (Hsc0 : sym_state_scoped S (SEval Γ e)) by (split; assumption).
+  split.
+  - clear Hb. revert Hsc0. induction Hreach as [| Φ0 st0 Φ1 st1 Φ2 st2 Hstep Hreach IH];
+      intros Hsc0; [exact Hsc0 |].
+    exact (IH (sym_step_scoped S Φ0 st0 Φ1 st1 Hsc0 Hstep)).
+  - intros Γ' e' n v -> Hev. exact (Hb Φ' Γ' e' n v Hreach Hev).
+Qed.
+
+End SymReach.
+
 Section Completeness.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
 
@@ -16,6 +186,8 @@ Definition target_completeness : Prop :=
     contains σ S e_sym e_con ->
     concore_expr e_con ->
     closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
+    smt_bounded_run Φ Γs e_sym ->
     budget_total Φ Γs e_sym ->
     Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
     exists h, forall n, (h <= n)%nat ->
@@ -30,6 +202,8 @@ Definition forall_form_lemma : Prop :=
       contains σ S e_sym e_con ->
       concore_expr e_con ->
       closed_program Γc e_con ->
+      symbolic_program S Γs e_sym ->
+      smt_bounded_run Φ Γs e_sym ->
       exists h, forall n, (h <= n)%nat ->
         forall v_sym, eval (Fin n) Φ Γs e_sym v_sym -> contains σ S v_sym v_con.
 
@@ -40,6 +214,8 @@ Definition existential_corollary : Prop :=
     contains σ S e_sym e_con ->
     concore_expr e_con ->
     closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
+    smt_bounded_run Φ Γs e_sym ->
     budget_total Φ Γs e_sym ->
     Γc ⊢ᶜ e_con ⇓ᶜ v_con ->
     exists k v_sym, eval (Fin k) Φ Γs e_sym v_sym /\ contains σ S v_sym v_con.
@@ -47,8 +223,8 @@ Definition existential_corollary : Prop :=
 Lemma existential_corollary_of_target :
   target_completeness -> existential_corollary.
 Proof.
-  intros Htarget Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hcl Hbud Hevalc.
-  destruct (Htarget Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hcl Hbud Hevalc)
+  intros Htarget Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hcl Hsym Hbnd Hbud Hevalc.
+  destruct (Htarget Φ Γs Γc σ S e_sym e_con v_con Hmod Henv Hcont Hcon Hcl Hsym Hbnd Hbud Hevalc)
     as [h Hh].
   destruct (Hh h ltac:(lia)) as [v_sym [Heval Hcv]].
   exists h, v_sym. split; assumption.
@@ -619,172 +795,6 @@ Qed.
 
 End SmtCost.
 
-Section SymReach.
-Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : ConCoreLaws}.
-
-Inductive sym_state : Type :=
-  | SEval : environment -> expr -> sym_state
-  | SFold : environment -> expr -> list alt -> sym_state.
-
-Inductive sym_step : path_condition -> sym_state -> path_condition -> sym_state -> Prop :=
-  | SymStep_Var : forall Φ Γ x Γ' e,
-      lookup_env Γ x = Some (Γ', e) -> sym_step Φ (SEval Γ (EVar x)) Φ (SEval Γ' e)
-  | SymStep_Cast : forall Φ Γ e γ, sym_step Φ (SEval Γ (ECast e γ)) Φ (SEval Γ e)
-  | SymStep_AppAbs : forall Φ Γ Γ' x eb ea,
-      sym_step Φ (SEval Γ (EApp (EThunk Γ' (ELam x eb)) ea)) Φ (SEval (extend_env Γ' x Γ ea) eb)
-  | SymStep_AppFun : forall Φ Γ ef ea,
-      sym_step Φ (SEval Γ (EApp ef ea)) Φ (SEval Γ ef)
-  | SymStep_AppValue : forall Φ Γ ef ea ef' n,
-      eval (Fin n) Φ Γ ef ef' -> sym_step Φ (SEval Γ (EApp ef ea)) Φ (SEval Γ (EApp ef' ea))
-  | SymStep_AppArg : forall Φ Γ e h args a,
-      unspool_app e nil = (h, args) -> In a args -> sym_step Φ (SEval Γ e) Φ (SEval Γ a)
-  | SymStep_AppCast : forall Φ Γ ef γ ea γ_a γ_r,
-      sym_step Φ (SEval Γ (EApp (ECast ef γ) ea)) Φ
-               (SEval Γ (ECast (EApp ef (ECast ea (sym_coerc γ_a))) γ_r))
-  | SymStep_AppIf : forall Φ Γ e1 e2 ec et ef args,
-      unspool_app (EApp e1 e2) nil = (EIf ec et ef, args) ->
-      sym_step Φ (SEval Γ (EApp e1 e2)) Φ
-               (SEval Γ (EIf ec (fold_left EApp args et) (fold_left EApp args ef)))
-  | SymStep_Thunk : forall Φ Γ Γ' e, sym_step Φ (SEval Γ (EThunk Γ' e)) Φ (SEval Γ' e)
-  | SymStep_IfGuard : forall Φ Γ ec et ef, sym_step Φ (SEval Γ (EIf ec et ef)) Φ (SEval Γ ec)
-  | SymStep_IfTrue : forall Φ Γ ec et ef pc,
-      sym_step Φ (SEval Γ (EIf ec et ef)) (Φ ∧ pc) (SEval Γ et)
-  | SymStep_IfFalse : forall Φ Γ ec et ef pc,
-      sym_step Φ (SEval Γ (EIf ec et ef)) (Φ ∧ ¬ pc) (SEval Γ ef)
-  | SymStep_CaseScrut : forall Φ Γ es alts, sym_step Φ (SEval Γ (ECase es alts)) Φ (SEval Γ es)
-  | SymStep_CaseFold : forall Φ Γ es alts es' n,
-      eval (Fin n) Φ Γ es es' ->
-      sym_step Φ (SEval Γ (ECase es alts)) Φ (SFold Γ (merge Γ es') alts)
-  | SymStep_FoldIfTrue : forall Φ Γ ec et ef alts pc,
-      sym_step Φ (SFold Γ (EIf ec et ef) alts) (Φ ∧ pc) (SFold Γ et alts)
-  | SymStep_FoldIfFalse : forall Φ Γ ec et ef alts pc,
-      sym_step Φ (SFold Γ (EIf ec et ef) alts) (Φ ∧ ¬ pc) (SFold Γ ef alts)
-  | SymStep_FoldCon : forall Φ Γ m alts d ea xs ep,
-      decompose_con_app m = Some (d, ea) -> find_alt d alts = Some (xs, ep) ->
-      sym_step Φ (SFold Γ m alts) Φ (SEval (extend_env_multi Γ xs ea Γ) ep)
-  | SymStep_FoldGround : forall Φ Γ m alts d,
-      sym_step Φ (SFold Γ m alts) Φ (SFold Γ (ECon d) alts)
-  | SymStep_FoldTrue : forall Φ Γ m alts pc,
-      sym_step Φ (SFold Γ m alts) (Φ ∧ pc) (SFold Γ (ECon dcon_true) alts)
-  | SymStep_FoldFalse : forall Φ Γ m alts pc,
-      sym_step Φ (SFold Γ m alts) (Φ ∧ ¬ pc) (SFold Γ (ECon dcon_false) alts).
-
-Definition sym_state_scoped (S : symvars) (st : sym_state) : Prop :=
-  match st with
-  | SEval Γ e => sym_scoped_env S Γ /\ sym_scoped S (dom_env Γ) e
-  | SFold Γ m alts =>
-      sym_scoped_env S Γ /\ sym_scoped S nil m /\ Forall (sym_scoped_alt S (dom_env Γ)) alts
-  end.
-
-Lemma sym_step_scoped : forall S Φ st Φ' st',
-  sym_state_scoped S st -> sym_step Φ st Φ' st' -> sym_state_scoped S st'.
-Proof.
-  intros S Φ st Φ' st' Hsc Hstep. destruct Hstep; simpl in *.
-  - destruct Hsc as [HΓ Hsc].
-    exact (sym_lookup_env_scoped S Γ x Γ' e HΓ H).
-  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc].
-    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
-    inversion Hscf as [| | | | | | | | | | | | L1 Γ1 e1 HΓ' Hsclam]; subst.
-    inversion Hsclam as [| | | | | L2 x2 b2 Hscb | | | | | | |]; subst.
-    split; [apply SymScoped_Env_Extend; assumption | exact Hscb].
-  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc].
-    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
-    split; [exact HΓ |].
-    apply SymScoped_App; [apply sym_scoped_nil_any;
-      exact (sym_eval_scoped_fix _ _ _ _ _ H S HΓ Hscf) | exact Hsca].
-  - destruct Hsc as [HΓ Hsc]. split; [exact HΓ |].
-    destruct (sym_unspool_app_scoped S (dom_env Γ) e [] h args H Hsc (Forall_nil _)) as [_ Hargs].
-    rewrite Forall_forall in Hargs. exact (Hargs a H0).
-  - destruct Hsc as [HΓ Hsc].
-    inversion Hsc as [| | | | L0 f0 a0 Hscf Hsca | | | | | | | |]; subst.
-    inversion Hscf as [| | | | | | | L1 e1 γ1 Hsce | | | | |]; subst.
-    split; [exact HΓ |].
-    apply SymScoped_Cast. apply SymScoped_App; [assumption | apply SymScoped_Cast; assumption].
-  - destruct Hsc as [HΓ Hsc]. split; [exact HΓ |].
-    destruct (sym_unspool_app_scoped S (dom_env Γ) (EApp e1 e2) [] (EIf ec et ef) args H Hsc
-                (Forall_nil _)) as [Hif Hargs].
-    inversion Hif as [| | | | | | | | | | L1 ec1 et1 ef1 Hscc Hsct Hscf | |]; subst.
-    apply SymScoped_If;
-      [exact Hscc | apply sym_scoped_fold_left_app; assumption
-       | apply sym_scoped_fold_left_app; assumption].
-  - destruct Hsc as [HΓ Hsc].
-    inversion Hsc as [| | | | | | | | | | | | L1 Γ1 e1 HΓ' Hsce]; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc]. inversion Hsc; subst. split; assumption.
-  - destruct Hsc as [HΓ Hsc].
-    inversion Hsc as [| | | | | | L0 es1 alts1 Hsc_es Hsc_alts | | | | | |]; subst.
-    pose proof (sym_eval_scoped_fix _ _ _ _ _ H S HΓ Hsc_es) as Hsc_es'.
-    split; [exact HΓ |]. split; [| exact Hsc_alts].
-    destruct es' as [ | | | | | | | | | | vc vt vf | | ]; simpl; try exact Hsc_es'.
-    inversion Hsc_es' as [| | | | | | | | | | L1 vc1 vt1 vf1 Hvc Hvt Hvf | |]; subst.
-    apply ite_sym_scoped; assumption.
-  - destruct Hsc as [HΓ [Hm Halts]]. inversion Hm; subst. split; [exact HΓ | split; assumption].
-  - destruct Hsc as [HΓ [Hm Halts]]. inversion Hm; subst. split; [exact HΓ | split; assumption].
-  - destruct Hsc as [HΓ [Hm Halts]].
-    assert (Hea : Forall (sym_scoped S (dom_env Γ)) ea).
-    { pose proof (proj2 (sym_unspool_app_scoped S nil m [] (ECon d) ea
-                    (decompose_con_app_unspool m d ea H) Hm (Forall_nil _))) as H1.
-      eapply Forall_impl; [| exact H1]. intros a Ha. apply sym_scoped_nil_any. exact Ha. }
-    split.
-    + apply sym_scoped_env_extend_multi; [exact HΓ | exact HΓ | exact Hea].
-    + rewrite dom_env_extend_multi.
-      exact (sym_find_alt_scoped S (dom_env Γ) d alts xs ep Halts H0).
-  - destruct Hsc as [HΓ [Hm Halts]]. split; [exact HΓ | split; [apply SymScoped_Con | exact Halts]].
-  - destruct Hsc as [HΓ [Hm Halts]]. split; [exact HΓ | split; [apply SymScoped_Con | exact Halts]].
-  - destruct Hsc as [HΓ [Hm Halts]]. split; [exact HΓ | split; [apply SymScoped_Con | exact Halts]].
-Qed.
-
-Inductive sym_reach : path_condition -> sym_state -> path_condition -> sym_state -> Prop :=
-  | SymReach_Refl : forall Φ st, sym_reach Φ st Φ st
-  | SymReach_Step : forall Φ st Φ1 st1 Φ2 st2,
-      sym_step Φ st Φ1 st1 -> sym_reach Φ1 st1 Φ2 st2 -> sym_reach Φ st Φ2 st2.
-
-Definition smt_terms_bounded (bs : nat) (Φ : path_condition) (Γ : environment) (e : expr) : Prop :=
-  forall Φ' Γ' e' n v,
-    sym_reach Φ (SEval Γ e) Φ' (SEval Γ' e') ->
-    eval (Fin n) Φ' Γ' e' v ->
-    smt_size (merge Γ' v) <= bs.
-
-Definition sym_ok (S : symvars) (bs : nat) (Φ : path_condition) (st : sym_state) : Prop :=
-  forall Φ' st', sym_reach Φ st Φ' st' ->
-    sym_state_scoped S st' /\
-    (forall Γ' e' n v, st' = SEval Γ' e' -> eval (Fin n) Φ' Γ' e' v ->
-       smt_size (merge Γ' v) <= bs).
-
-Lemma sym_ok_step : forall S bs Φ st Φ' st',
-  sym_ok S bs Φ st -> sym_step Φ st Φ' st' -> sym_ok S bs Φ' st'.
-Proof.
-  intros S bs Φ st Φ' st' H Hstep Φ2 st2 Hreach.
-  exact (H Φ2 st2 (SymReach_Step Φ st Φ' st' Φ2 st2 Hstep Hreach)).
-Qed.
-
-Lemma sym_ok_scoped : forall S bs Φ st, sym_ok S bs Φ st -> sym_state_scoped S st.
-Proof. intros S bs Φ st H. exact (proj1 (H Φ st (SymReach_Refl Φ st))). Qed.
-
-Lemma sym_ok_value_bound : forall S bs Φ Γ e n v,
-  sym_ok S bs Φ (SEval Γ e) -> eval (Fin n) Φ Γ e v -> smt_size (merge Γ v) <= bs.
-Proof.
-  intros S bs Φ Γ e n v H Hev.
-  exact (proj2 (H Φ (SEval Γ e) (SymReach_Refl Φ (SEval Γ e))) Γ e n v eq_refl Hev).
-Qed.
-
-Lemma sym_ok_intro : forall S bs Φ Γ e,
-  symbolic_program S Γ e -> smt_terms_bounded bs Φ Γ e -> sym_ok S bs Φ (SEval Γ e).
-Proof.
-  intros S bs Φ Γ e [HΓ Hsc] Hb Φ' st' Hreach.
-  assert (Hsc0 : sym_state_scoped S (SEval Γ e)) by (split; assumption).
-  split.
-  - clear Hb. revert Hsc0. induction Hreach as [| Φ0 st0 Φ1 st1 Φ2 st2 Hstep Hreach IH];
-      intros Hsc0; [exact Hsc0 |].
-    exact (IH (sym_step_scoped S Φ0 st0 Φ1 st1 Hsc0 Hstep)).
-  - intros Γ' e' n v -> Hev. exact (Hb Φ' Γ' e' n v Hreach Hev).
-Qed.
-
-End SymReach.
 
 Ltac sym_absurd :=
   first
@@ -2440,36 +2450,36 @@ Theorem concrete_good : forall Γc e_c v_c,
 Proof.
   intros Γc e_c v_c H.
   refine (eval_nested_ind eval_motive fold_motive _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
-            _ _ _ _ _ Inf pc_true Γc e_c v_c H eq_refl eq_refl);
+            _ _ _ _ _ _ _ Inf pc_true Γc e_c v_c H eq_refl eq_refl);
     unfold eval_motive, fold_motive.
   - intros f Φ Γ x Γ' e e' Hl _ IH Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     destruct (lookup_env_concrete Γ x Γ' e Hg Hl) as [Hg' He].
     destruct (lookup_env_scoped Γ x Γ' e (proj1 Hcl) Hl) as [HΓ' Hse].
-    apply good_at_of_core. intros bk be _.
-    exact (var_core σ S Γ x Γ' e e' bk be Hl (IH eq_refl eq_refl He Hg' (conj HΓ' Hse))).
-  - intros f Φ Γ x Hl _ _ _ _ _. apply good_at_of_core. intros bk be _.
-    exact (symvar_core σ S Γ x bk be Hl).
-  - intros f Φ Γ l _ _ _ _ _. apply good_at_of_core. intros bk be _. apply lit_core.
-  - intros f Φ Γ e d args Hu _ _ _ _ _. apply good_at_of_core. intros bk be _.
-    exact (con_core σ S Γ e d args bk be Hu).
+    apply good_at_of_core. intros bk be bs _.
+    exact (var_core σ S Γ x Γ' e e' bk be bs Hl (IH eq_refl eq_refl He Hg' (conj HΓ' Hse))).
+  - intros f Φ Γ x Hl _ _ _ _ _. apply good_at_of_core. intros bk be bs _.
+    exact (symvar_core σ S Γ x bk be bs Hl).
+  - intros f Φ Γ l _ _ _ _ _. apply good_at_of_core. intros bk be bs _. apply lit_core.
+  - intros f Φ Γ e d args Hu _ _ _ _ _. apply good_at_of_core. intros bk be bs _.
+    exact (con_core σ S Γ e d args bk be bs Hu).
   - intros f Φ Γ e γ e' _ IH Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
-    apply good_at_of_core. intros bk be _.
-    exact (cast_core σ S Γ e γ e' bk be
+    apply good_at_of_core. intros bk be bs _.
+    exact (cast_core σ S Γ e γ e' bk be bs
              (IH eq_refl eq_refl (concore_expr_cast e γ Hc) Hg (closed_program_cast _ _ _ Hcl))).
   - intros f Φ Γ Γ' x eb ea eb' _ IH Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     pose proof (concore_expr_app_l _ _ Hc) as Hcf.
     pose proof (concore_expr_app_r _ _ Hc) as Hca.
     pose proof (concore_expr_lam _ _ (concore_expr_thunk _ _ Hcf)) as Hcb.
     pose proof (concore_expr_thunk_env _ _ Hcf) as Hg'.
-    apply good_at_of_core. intros bk be _.
+    apply good_at_of_core. intros bk be bs _.
     exact (app_abs_core σ S Γ Γ' x eb ea eb'
              (IH eq_refl eq_refl Hcb (concrete_env_extend Γ' x Γ ea Hg' Hg Hca)
-                (closed_program_abs _ _ _ _ _ Hcl)) Hca bk be).
+                (closed_program_abs _ _ _ _ _ Hcl)) Hca bk be bs).
   - intros f Φ Γ ef ea ef' er Hcomp Hev1 IH1 _ IH2 Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     pose proof (concore_expr_app_l _ _ Hc) as Hcf.
     pose proof (concore_expr_app_r _ _ Hc) as Hca.
-    pose proof (concore_eval_closed Γ ef ef' Hg Hcf Hev1) as Hcf'.
     pose proof (closed_program_app_l _ _ _ Hcl) as Hclf.
+    pose proof (concore_eval_closed Γ ef ef' Hg Hcf Hclf Hev1) as Hcf'.
     pose proof (closed_eval Γ ef ef' Hg Hcf Hclf Hev1) as Hclf'.
     assert (Hcl2 : closed_program Γ (EApp ef' ea)).
     { split; [exact (proj1 Hcl) |].
@@ -2477,46 +2487,46 @@ Proof.
     assert (Hl : forall l, spine_head ef <> ELit l).
     { intros l Hsh. pose proof (eval_spine_head_lit _ _ _ _ _ Hev1 eq_refl eq_refl l Hsh) as ->.
       inversion Hcomp. }
-    apply good_at_of_core. intros bk be _.
-    exact (app_spine_core σ S Γ ef ea ef' er bk be Hcomp Hl (IH1 eq_refl eq_refl Hcf Hg Hclf)
+    apply good_at_of_core. intros bk be bs _.
+    exact (app_spine_core σ S Γ ef ea ef' er bk be bs Hcomp Hl (IH1 eq_refl eq_refl Hcf Hg Hclf)
              (IH2 eq_refl eq_refl (Con_App _ _ Hcf' Hca) Hg Hcl2)).
-  - intros f Φ Γ b _ _ _ _ _. apply good_at_of_core. intros bk be _. apply bot_core.
+  - intros f Φ Γ b _ _ _ _ _. apply good_at_of_core. intros bk be bs _. apply bot_core.
   - intros f Φ Γ ef ea p args args' Hu _ HF Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     destruct (unspool_app_concore _ _ _ _ Hu Hc (Forall_nil _)) as [_ Hargs].
     destruct (unspool_app_scoped _ _ [] _ args Hu (proj2 Hcl) (Forall_nil _)) as [_ Hsargs].
-    apply good_at_of_core. intros bk be _.
-    exact (app_prim_core σ S Γ ef ea p args args' bk be Hu
+    apply good_at_of_core. intros bk be bs _.
+    exact (app_prim_core σ S Γ ef ea p args args' bk be bs Hu
              (forall2_closed_of_ind Γ args args' HF Hargs Hg (proj1 Hcl) Hsargs)
              (forall2_good_of_ind Γ args args' HF Hargs Hg (proj1 Hcl) Hsargs)).
-  - intros f Φ Γ x e _ _ _ _ _. apply good_at_of_core. intros bk be _. apply lam_core.
+  - intros f Φ Γ x e _ _ _ _ _. apply good_at_of_core. intros bk be bs _. apply lam_core.
   - intros f Φ Γ ef γ ea γ_a γ_r er Hd _ IH Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     pose proof (concore_expr_app_l _ _ Hc) as Hcf.
     pose proof (concore_expr_app_r _ _ Hc) as Hca.
     pose proof (concore_expr_cast _ _ Hcf) as Hcf0.
-    apply good_at_of_core. intros bk be _.
-    exact (app_cast_core σ S Γ ef γ ea γ_a γ_r er bk be Hd
+    apply good_at_of_core. intros bk be bs _.
+    exact (app_cast_core σ S Γ ef γ ea γ_a γ_r er bk be bs Hd
              (IH eq_refl eq_refl (Con_Cast _ _ (Con_App _ _ Hcf0 (Con_Cast _ _ Hca))) Hg
                 (closed_program_push _ _ _ _ _ _ Hcl))).
   - intros f Φ Γ e1 e2 ec et ef args er Hu _ _ _ _ Hc _ _. exfalso.
     destruct (unspool_app_concore _ _ _ _ Hu Hc (Forall_nil _)) as [Hh _].
     exact (not_concore_if _ _ _ Hh).
-  - intros f Φ Γ b ea _ _ _ _ _. apply good_at_of_core. intros bk be _. apply app_bot_core.
+  - intros f Φ Γ b ea _ _ _ _ _. apply good_at_of_core. intros bk be bs _. apply app_bot_core.
   - intros f Φ Γ es alts es' er Hev1 IH1 Hfold IHF Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     inversion Hc as [| | | | | | es0 alts0 Hces Halts | | | | | | |]; subst.
-    pose proof (concore_eval_closed Γ es es' Hg Hces Hev1) as Hces'.
     pose proof (closed_program_case_es _ _ _ Hcl) as Hcles.
+    pose proof (concore_eval_closed Γ es es' Hg Hces Hcles Hev1) as Hces'.
     pose proof (closed_eval Γ es es' Hg Hces Hcles Hev1) as Hcles'.
     change (dec Unlimited) with Inf in *.
     rewrite (merge_concore_id Γ es' Hces') in Hfold, IHF.
-    apply good_at_of_core. intros bk be _.
-    exact (case_core σ S Γ es alts es' er bk be (IH1 eq_refl eq_refl Hces Hg Hcles)
-             (IHF eq_refl eq_refl Hces' Halts Hg (proj1 Hcl) Hcles' (closed_program_case_alts _ _ _ Hcl))
-             (fun Hi => fold_alts_inert _ _ _ _ _ _ Hi Hfold)).
+    apply good_at_of_core. intros bk be bs _.
+    exact (case_core σ S Γ es alts es' er bk be bs (IH1 eq_refl eq_refl Hces Hg Hcles)
+             (IHF eq_refl eq_refl Hces' Halts Hg (proj1 Hcl) Hcles'
+                (closed_program_case_alts _ _ _ Hcl))).
   - intros. exfalso. match goal with [ Hc : concore_expr (EIf _ _ _) |- _ ] =>
       exact (not_concore_if _ _ _ Hc) end.
-  - intros f Φ Γ γ _ _ _ _ _. apply good_at_of_core. intros bk be _. apply coercion_core.
+  - intros f Φ Γ γ _ _ _ _ _. apply good_at_of_core. intros bk be bs _. apply coercion_core.
   - intros f Φ Γ e Hs _ HΦ _ _ _. subst Φ. rewrite sat_pc_true in Hs. discriminate Hs.
-  - intros f Φ Γ τ _ _ _ _ _. apply good_at_of_core. intros bk be _. apply type_core.
+  - intros f Φ Γ τ _ _ _ _ _. apply good_at_of_core. intros bk be bs _. apply type_core.
   - intros f Φ Γ Γ' e e' _ IH Hf HΦ Hc Hg Hcl. injection Hf as ->. subst Φ.
     apply (good_weaken σ S (fun _ => True)); [intros; exact I |].
     apply thunk_good.
@@ -2530,13 +2540,22 @@ Proof.
   - intros f Φ Γ e d ea xs ep alts er Hd Hfa _ IH Hf HΦ Hc Halts Hg HΓ Hcle Hsalts. subst f Φ.
     pose proof (decompose_con_app_concore e d ea Hd Hc) as Hea.
     pose proof (find_alt_concore d alts xs ep Hfa Halts) as Hep.
-    apply fgood_of_core. intros bk be _.
-    exact (fcon_core σ S Γ e d ea xs ep alts er bk be Hd Hfa Hea
+    apply fgood_of_core. intros bk be bs bm.
+    exact (fcon_core σ S Γ e d ea xs ep alts er bk be bs bm Hd Hfa Hea
              (IH eq_refl eq_refl Hep (concrete_env_extend_multi xs ea Γ Γ Hg Hg Hea)
                 (closed_program_fold_con Γ e d ea alts xs ep HΓ Hcle Hsalts Hd Hfa))).
-  - intros f Φ Γ b alts _ _ _ _ _ _ _ _. apply fgood_of_core. intros bk be _. apply fbot_core.
-  - intros f Φ Γ e alts _ Hmatch Hbot _ _ _ _ _ _ _ _. apply fgood_of_core. intros bk be _.
-    exact (fotherwise_core σ S Γ e alts bk be Hmatch Hbot).
+  - intros f Φ Γ b alts _ _ _ _ _ _ _ _. apply fgood_of_core. intros bk be bs bm. apply fbot_core.
+  - intros f Φ Γ e pc alts r Hpc Hvar _ IH Hf HΦ Hc Halts Hg HΓ Hcle Hsalts. subst f Φ.
+    apply fgood_of_core. intros bk be bs bm.
+    exact (fground_core σ S Γ e pc alts r bk be bs bm Hpc Hvar Hcle
+             (IH eq_refl eq_refl (Con_Con _) Halts Hg HΓ (Scoped_Con nil _) Hsalts)).
+  - intros f Φ Γ e pc alts r1 r2 Hpc Hvar Har _ _ _ _ Hf HΦ Hc Halts Hg HΓ Hcle Hsalts.
+    subst f Φ. exfalso.
+    rewrite (expr_to_pc_scoped_no_var Γ e pc (closed_term_scoped (dom_env Γ) e Hcle) Hpc) in Hvar.
+    discriminate Hvar.
+  - intros f Φ Γ e alts Hpcn Hopn Hhead Hmatch Hbot _ _ _ _ _ _ Hcle _.
+    apply fgood_of_core. intros bk be bs bm.
+    exact (fotherwise_core σ S Γ e alts bk be bs bm Hpcn Hopn Hcle Hmatch Hbot).
 Qed.
 
 Theorem forall_form : forall Γc e_con v_con,
@@ -2547,17 +2566,19 @@ Theorem forall_form : forall Γc e_con v_con,
     contains σ S e_sym e_con ->
     concore_expr e_con ->
     closed_program Γc e_con ->
+    symbolic_program S Γs e_sym ->
+    smt_bounded_run Φ Γs e_sym ->
     exists h, forall n, (h <= n)%nat ->
       forall v_sym, eval (Fin n) Φ Γs e_sym v_sym -> contains σ S v_sym v_con.
 Proof.
-  intros Γc e_con v_con Hevc Φ Γs e_sym Hm Henv Hcont Hcon Hcl.
+  intros Γc e_con v_con Hevc Φ Γs e_sym Hm Henv Hcont Hcon Hcl Hsym [bs Hbnd].
   destruct (contains_k_of_contains _ _ _ _ Hcont) as [k Hk].
   destruct (contains_env_k_of_contains_env _ _ _ _ Henv) as [kenv Hkenv].
   destruct (concrete_good Γc e_con v_con Hevc Hcon (contains_env_concrete σ S Γs Γc Henv) Hcl
-              (k + kenv) (k + kenv)) as [h [K H]].
+              (k + kenv) (k + kenv) bs) as [h [K H]].
   exists h. intros n Hn v_sym Hv.
-  destruct (H Γc Φ Γs e_sym k kenv n v_sym eq_refl ltac:(lia) ltac:(lia) Hm Hkenv Hk Hn Hv)
-    as [k' [_ Hc']].
+  destruct (H Γc Φ Γs e_sym k kenv n v_sym eq_refl ltac:(lia) ltac:(lia) Hm Hkenv Hk
+              (sym_ok_intro S bs Φ Γs e_sym Hsym Hbnd) Hn Hv) as [k' [_ Hc']].
   exact (contains_k_erase _ _ _ _ _ Hc').
 Qed.
 
@@ -2568,14 +2589,15 @@ Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : SymFCCostLaws}.
 
 Theorem concore_completeness_forall : forall_form_lemma.
 Proof.
-  intros Γc e_con v_con Hevc Φ Γs σ S e_sym Hm Henv Hcont Hcon Hcl.
-  exact (forall_form σ S Γc e_con v_con Hevc Φ Γs e_sym Hm Henv Hcont Hcon Hcl).
+  intros Γc e_con v_con Hevc Φ Γs σ S e_sym Hm Henv Hcont Hcon Hcl Hsym Hbnd.
+  exact (forall_form σ S Γc e_con v_con Hevc Φ Γs e_sym Hm Henv Hcont Hcon Hcl Hsym Hbnd).
 Qed.
 
 Theorem concore_completeness_budget : target_completeness.
 Proof.
-  intros Φ Γs Γc σ S e_sym e_con v_con Hm Henv Hcont Hcon Hcl [hb Hb] Hevc.
-  destruct (forall_form σ S Γc e_con v_con Hevc Φ Γs e_sym Hm Henv Hcont Hcon Hcl) as [h Hh].
+  intros Φ Γs Γc σ S e_sym e_con v_con Hm Henv Hcont Hcon Hcl Hsym Hbnd [hb Hb] Hevc.
+  destruct (forall_form σ S Γc e_con v_con Hevc Φ Γs e_sym Hm Henv Hcont Hcon Hcl Hsym Hbnd)
+    as [h Hh].
   exists (h + hb). intros n Hn.
   destruct (Hb n ltac:(lia)) as [v Hv].
   exists v. split; [exact Hv | exact (Hh n ltac:(lia) v Hv)].
