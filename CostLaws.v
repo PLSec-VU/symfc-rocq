@@ -357,8 +357,7 @@ Proof. destruct laws; assumption. Qed.
 
 
 Section MergeCost.
-Context {sorts : SymCoreSorts} {solver : SymCoreSolver}
-  {reduce_prim_solvable_law : ReducePrimSolvable}.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver} {laws : SymFCCostLaws}.
 
 Fixpoint field_count (e : expr) : nat :=
   match e with
@@ -459,9 +458,143 @@ Proof.
   - match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end.
 Qed.
 
+Fixpoint smt_instance (σ : valuation) (S : symvars) (e : expr) : expr :=
+  match e with
+  | EVar x => if S x then ELit (σ x) else EVar x
+  | EApp f a => EApp (smt_instance σ S f) (smt_instance σ S a)
+  | _ => e
+  end.
+
+Lemma smt_instance_smt_size : forall σ S e, smt_size (smt_instance σ S e) = smt_size e.
+Proof.
+  intros σ S e. induction e; simpl; try reflexivity.
+  - destruct (S v); reflexivity.
+  - rewrite IHe1, IHe2. reflexivity.
+Qed.
+
+Lemma smt_instance_is_op_app : forall σ S e, is_op_app (smt_instance σ S e) = is_op_app e.
+Proof.
+  intros σ S e. induction e; simpl; try reflexivity.
+  - destruct (S v); reflexivity.
+  - exact IHe1.
+Qed.
+
+Lemma smt_instance_contains_k : forall σ S Γ e,
+  Solvable Γ e -> contains_k σ S 0 e (smt_instance σ S e).
+Proof.
+  intros σ S Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; simpl.
+  - apply ContK_Lit.
+  - destruct (S x) eqn:Hs; [apply ContK_Var_Sym | apply ContK_Var_Bound]; exact Hs.
+  - apply ContK_PrimOp.
+  - exact (ContK_App σ S 0 0 f a _ _ IHf IHa).
+Qed.
+
+Lemma smt_instance_smt_ground : forall σ S Γ e,
+  Solvable Γ e -> sym_scoped S nil e -> smt_ground (smt_instance σ S e) = true.
+Proof.
+  intros σ S Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; intros Hsc; simpl.
+  - reflexivity.
+  - inversion Hsc; subst.
+    match goal with
+    | [ Hin : In _ nil \/ _ = true |- _ ] =>
+        destruct Hin as [[] | Hsym]; rewrite Hsym; reflexivity
+    end.
+  - reflexivity.
+  - simpl in Hop. inversion Hsc; subst.
+    match goal with
+    | [ Hscf : sym_scoped _ _ f, Hsca : sym_scoped _ _ a |- _ ] =>
+        rewrite smt_instance_is_op_app, Hop, (IHf Hscf), (IHa Hsca); reflexivity
+    end.
+Qed.
+
+Lemma smt_ground_scoped : forall e L, smt_ground e = true -> scoped L e.
+Proof.
+  induction e; intros L H; simpl in H; try discriminate.
+  - apply Scoped_Lit.
+  - apply Scoped_PrimOp.
+  - apply andb_prop in H as [H12 H2]. apply andb_prop in H12 as [_ H1].
+    apply Scoped_App; [apply IHe1; exact H1 | apply IHe2; exact H2].
+Qed.
+
+Lemma closed_solvable_smt_ground : forall Γ e,
+  Solvable Γ e -> closed_term e -> smt_ground e = true.
+Proof.
+  intros Γ e H. induction H as [l | x Hx | p | f a Hop Hf IHf Ha IHa]; intros Hcl; simpl.
+  - reflexivity.
+  - inversion Hcl; subst. match goal with [ Hin : In _ nil |- _ ] => destruct Hin end.
+  - reflexivity.
+  - simpl in Hop. inversion Hcl; subst.
+    match goal with
+    | [ Hclf : scoped _ f, Hcla : scoped _ a |- _ ] =>
+        rewrite Hop, (IHf Hclf), (IHa Hcla); reflexivity
+    end.
+Qed.
+
+Lemma smt_ite_smt_size_bound : forall (σ : valuation) (S : symvars) ec et ef,
+  Solvable · ec -> Solvable · et -> Solvable · ef ->
+  sym_scoped S nil ec -> sym_scoped S nil et -> sym_scoped S nil ef ->
+  smt_size (reduce_prim op_ite (ec :: et :: ef :: nil))
+    <= 5 + smt_size ec + smt_size et + smt_size ef.
+Proof.
+  intros σ S ec et ef Hsc Hst Hsf Hscc Hsct Hscf.
+  pose (gc := smt_instance σ S ec). pose (gt := smt_instance σ S et).
+  pose (gf := smt_instance σ S ef).
+  assert (Hgc : smt_ground gc = true) by exact (smt_instance_smt_ground σ S · ec Hsc Hscc).
+  assert (Hgt : smt_ground gt = true) by exact (smt_instance_smt_ground σ S · et Hst Hsct).
+  assert (Hgf : smt_ground gf = true) by exact (smt_instance_smt_ground σ S · ef Hsf Hscf).
+  assert (Hcl : Forall closed_term (gc :: gt :: gf :: nil)).
+  { repeat constructor; apply smt_ground_scoped; assumption. }
+  assert (HF : Forall3 (contains_k σ S) (0 :: 0 :: 0 :: nil)
+                 (ec :: et :: ef :: nil) (gc :: gt :: gf :: nil)).
+  { repeat (apply Forall3_cons; [eapply smt_instance_contains_k; eassumption |]).
+    apply Forall3_nil. }
+  destruct (reduce_prim_contains_k σ S op_ite (0 :: 0 :: 0 :: nil)
+              (ec :: et :: ef :: nil) (gc :: gt :: gf :: nil) Hcl HF) as [k' [Hk' Hck]].
+  assert (Hgr : smt_ground (reduce_prim op_ite (gc :: gt :: gf :: nil)) = true).
+  { apply (closed_solvable_smt_ground ·).
+    - apply reduce_prim_solvable.
+      repeat constructor; apply (smt_ground_solvable _ ·); assumption.
+    - apply reduce_prim_scoped_closed. exact Hcl. }
+  destruct (reduce_prim_ground_value op_ite (gc :: gt :: gf :: nil) Hgr) as [l Hl].
+  rewrite Hl in Hck.
+  pose proof (smt_size_contains_k σ S k' _ _ Hck) as Hsz.
+  unfold prim_slack, ground_size in Hk'. simpl in Hk', Hsz.
+  rewrite Hgc, Hgt, Hgf in Hk'. unfold gc, gt, gf in Hk'.
+  rewrite (smt_instance_smt_size σ S ec), (smt_instance_smt_size σ S et),
+    (smt_instance_smt_size σ S ef) in Hk'.
+  lia.
+Qed.
+
+Definition smt_ite_kept_k (σ : valuation) (S : symvars) (k : nat) (m e_c : expr) : Prop :=
+  exists ec et ef,
+    m = reduce_prim op_ite (ec :: et :: ef :: nil) /\
+    Solvable · ec /\ Solvable · et /\ Solvable · ef /\
+    smt_size m <= 5 + smt_size ec + smt_size et + smt_size ef /\
+    smt_size ec + Nat.min (smt_size et) (smt_size ef) <= k + smt_size e_c /\
+    (forall pc, denotes S m pc ->
+       (pc_arities_ok pc = true \/ pc_has_var pc = false) ->
+       denote σ S e_c (pc_value σ pc)).
+
 Definition merge_keeps_k (σ : valuation) (S : symvars) (k : nat) (m e_c : expr) : Prop :=
   (exists k', k' <= (1 + field_count e_c) * k /\ contains_k σ S k' m e_c)
-  \/ (inert_scrutinee m /\ inert_scrutinee e_c).
+  \/ smt_ite_kept_k σ S k m e_c
+  \/ (is_cast m = true /\ is_cast e_c = true).
+
+Lemma smt_ite_kept_k_erase : forall σ S k m e_c,
+  smt_ite_kept_k σ S k m e_c -> smt_ite_kept σ S m e_c.
+Proof.
+  intros σ S k m e_c [ec [et [ef [Hm [Hc [Ht [Hf [_ [_ Hden]]]]]]]]].
+  exists ec, et, ef. repeat (split; [assumption |]). exact Hden.
+Qed.
+
+Lemma merge_keeps_k_erase : forall σ S k m e_c,
+  merge_keeps_k σ S k m e_c -> merge_keeps σ S m e_c.
+Proof.
+  intros σ S k m e_c [[k' [_ Hc]] | [Hsmt | Hcast]].
+  - left. exact (contains_k_erase _ _ _ _ _ Hc).
+  - right. left. exact (smt_ite_kept_k_erase σ S k m e_c Hsmt).
+  - right. right. exact Hcast.
+Qed.
 
 Lemma merge_keeps_k_same : forall σ S k m e_c,
   contains_k σ S k m e_c -> merge_keeps_k σ S k m e_c.
@@ -519,10 +652,34 @@ Ltac merge_leaf_rest_k et ef Hc Hcases :=
       apply merge_keeps_k_zero; constructor
   end.
 
+Lemma smt_ite_prove_k : forall σ S Γ k ec et ef e_c,
+  sym_scoped S nil ec -> sym_scoped S nil et -> sym_scoped S nil ef ->
+  Solvable Γ et -> Solvable Γ ef ->
+  contains_k σ S k (EIf ec et ef) e_c ->
+  smt_ite_kept_k σ S k (reduce_prim op_ite (ec :: et :: ef :: nil)) e_c.
+Proof.
+  intros σ S Γ k ec et ef e_c Hscc Hsct Hscf Ht Hf Hck.
+  pose proof (contains_k_erase _ _ _ _ _ Hck) as Hc.
+  assert (Het : Solvable · et) by exact (solvable_in_empty_env Γ et Ht).
+  assert (Hef : Solvable · ef) by exact (solvable_in_empty_env Γ ef Hf).
+  assert (Hec : Solvable · ec).
+  { destruct (contains_if_inv σ S ec et ef e_c Hc) as [[[pc [Hd _]] _] | [[pc [Hd _]] _]];
+      exact (denotes_solvable S ec pc Hd). }
+  destruct (smt_ite_prove σ S Γ ec et ef e_c Hscc Hsct Hscf Ht Hf Hc)
+    as [ec0 [et0 [ef0 [_ [_ [_ [_ Hden]]]]]]].
+  exists ec, et, ef.
+  split; [reflexivity |]. split; [exact Hec |]. split; [exact Het |]. split; [exact Hef |].
+  split; [exact (smt_ite_smt_size_bound σ S ec et ef Hec Het Hef Hscc Hsct Hscf) |].
+  split; [| exact Hden].
+  destruct (contains_k_if_inv σ S k ec et ef e_c Hck) as [k0 [-> [[_ Harm] | [_ Harm]]]];
+    pose proof (smt_size_contains_k σ S k0 _ _ Harm) as Hsz; lia.
+Qed.
+
 Lemma ite_leaf_contains_k : forall σ S Γ k ec et ef e_c,
+  sym_scoped S nil ec -> sym_scoped S nil et -> sym_scoped S nil ef ->
   contains_k σ S k (EIf ec et ef) e_c -> merge_keeps_k σ S k (ite_leaf Γ ec et ef) e_c.
 Proof.
-  intros σ S Γ k ec et ef e_c Hc.
+  intros σ S Γ k ec et ef e_c Hscc Hsct Hscf Hc.
   assert (Hcases := contains_k_if_inv σ S k ec et ef e_c Hc).
   unfold ite_leaf.
   destruct (decompose_con_app et) as [[d1 a1]|] eqn:E1;
@@ -558,58 +715,47 @@ Proof.
         exact (contains_k_fold_left_app σ S _ _ _ 0 _ _
                  (zip_if_contains_k_false σ S ec a1 a2 ks args_c Hmc Hl HFa) (ContK_Con σ S d1)).
   - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
-    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf (contains_k_erase _ _ _ _ _ Hc)).
+    + right. left. exact (smt_ite_prove_k σ S Γ k ec et ef e_c Hscc Hsct Hscf Ht Hf Hc).
     + apply merge_keeps_k_same. exact Hc.
     + merge_leaf_rest_k et ef Hc Hcases.
   - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
-    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf (contains_k_erase _ _ _ _ _ Hc)).
+    + right. left. exact (smt_ite_prove_k σ S Γ k ec et ef e_c Hscc Hsct Hscf Ht Hf Hc).
     + apply merge_keeps_k_same. exact Hc.
     + merge_leaf_rest_k et ef Hc Hcases.
   - destruct (solvable_dec Γ et) as [Ht |]; [destruct (solvable_dec Γ ef) as [Hf |] |].
-    + right. exact (smt_ite_inert σ S Γ ec et ef e_c Ht Hf (contains_k_erase _ _ _ _ _ Hc)).
+    + right. left. exact (smt_ite_prove_k σ S Γ k ec et ef e_c Hscc Hsct Hscf Ht Hf Hc).
     + apply merge_keeps_k_same. exact Hc.
     + merge_leaf_rest_k et ef Hc Hcases.
 Qed.
 
 Lemma ite_contains_k : forall σ S Γ et ec ef k e_c,
+  sym_scoped S nil ec -> sym_scoped S nil et -> sym_scoped S nil ef ->
   contains_k σ S k (EIf ec et ef) e_c -> merge_keeps_k σ S k (ite Γ ec et ef) e_c.
 Proof.
-  intros σ S Γ et. induction et; intros ec ef k e_c Hc;
+  intros σ S Γ et. induction et; intros ec ef k e_c Hscc Hsct Hscf Hc;
     try (rewrite ite_leaf_of by (left; reflexivity);
-         apply ite_leaf_contains_k; exact Hc).
+         apply ite_leaf_contains_k; assumption).
   destruct ef; try (rewrite ite_leaf_of by (right; reflexivity);
-                    apply ite_leaf_contains_k; exact Hc).
+                    apply ite_leaf_contains_k; assumption).
   rewrite ite_cast.
   destruct (dec_eqb coercion_eq_dec c c0) eqn:Hx; [| apply merge_keeps_k_same; exact Hc].
   apply dec_eqb_eq in Hx. subst c0.
+  right. right. split; [reflexivity |].
   destruct (contains_k_if_inv σ S _ ec (ECast et c) (ECast ef c) e_c Hc)
-    as [k0 [-> [[Hmc Hct] | [Hmc Hcf]]]].
-  - inversion Hct; subst;
-      [| match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end].
-    match goal with
-    | [ Hi : contains_k _ _ k0 et ?ec0 |- _ ] =>
-        destruct (IHet ec ef _ _ (ContK_If_True σ S k0 ec et ef _ Hmc Hi))
-          as [[k' [Hk' Hc']] | _];
-        [ left; exists k'; split; [simpl; exact Hk' | apply ContK_Cast; exact Hc']
-        | right; split; apply inert_cast ]
-    end.
-  - inversion Hcf; subst;
-      [| match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end].
-    match goal with
-    | [ Hi : contains_k _ _ k0 ef ?ec0 |- _ ] =>
-        destruct (IHet ec ef _ _ (ContK_If_False σ S k0 ec et ef _ Hmc Hi))
-          as [[k' [Hk' Hc']] | _];
-        [ left; exists k'; split; [simpl; exact Hk' | apply ContK_Cast; exact Hc']
-        | right; split; apply inert_cast ]
-    end.
+    as [k0 [-> [[_ Hcast] | [_ Hcast]]]];
+    inversion Hcast; subst;
+      try (match goal with [Hu : unspool_app _ _ = _ |- _] => discriminate Hu end);
+      reflexivity.
 Qed.
 
 Lemma merge_contains_k : forall σ S Γ k es ec,
+  sym_scoped S nil es ->
   contains_k σ S k es ec ->
   merge_keeps_k σ S k (merge Γ es) ec.
 Proof.
-  intros σ S Γ k es ec H. destruct es; simpl; try (apply merge_keeps_k_same; exact H).
-  apply ite_contains_k. exact H.
+  intros σ S Γ k es ec Hsc H. destruct es; simpl; try (apply merge_keeps_k_same; exact H).
+  inversion Hsc as [| | | | | | | | | | L1 ec1 et1 ef1 Hscc Hsct Hscf | |]; subst.
+  apply ite_contains_k; assumption.
 Qed.
 
 
