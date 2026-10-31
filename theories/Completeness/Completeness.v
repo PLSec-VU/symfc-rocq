@@ -104,14 +104,6 @@ Context {reduce_prim_literal_law : ReducePrimLiteral} {cast_concore_law : CastCo
   {models_sat_law : ModelsSat} {reduce_prim_contains_law : ReducePrimContains}
   {cast_contains_law : CastContains} {subst_contains_law : SubstContains}.
 
-Lemma contains_merged : forall σ vs_s vs_c,
-  contains_val σ vs_s vs_c -> concrete_value vs_c ->
-  contains_val σ (merge vs_s) (merge vs_c).
-Proof.
-  intros σ vs_s vs_c Hvs Hvsc. rewrite (concrete_merge vs_c Hvsc).
-  apply merge_keeps. exact Hvs.
-Qed.
-
 Lemma forces_complete : forall σ g ts_c vs_c,
   Forall2 (complete_force σ g pc_true) ts_c vs_c -> Forall concrete_thunk ts_c ->
   forall Φ ts_s vs_s, Forall2 (force g Φ) ts_s vs_s -> σ ⊨ Φ ->
@@ -127,12 +119,6 @@ Proof.
     + eapply IH; eauto.
 Qed.
 
-Ltac refute_prune :=
-  match goal with
-  | Hs : sat ?Φ = false, Hm : _ ⊨ ?Φ |- _ =>
-      rewrite (models_sat _ _ Hm) in Hs; discriminate Hs
-  end.
-
 Ltac refute_leaf :=
   match goal with
   | Hl : leaf_value (VIf _ _ _) |- _ => destruct Hl
@@ -143,12 +129,7 @@ Ltac invert_sym H := inversion H; subst; try refute_prune; try refute_leaf.
 
 Ltac discharge_complete :=
   solve
-    [ eassumption
-    | unfold extend_env in *; eauto with concrete
-    | constructor; eassumption
-    | unfold extend_env; constructor; [constructor |]; eassumption
-    | apply Forall2_app; [eassumption | constructor; [constructor; eassumption | constructor]]
-    | apply contains_bind_fields; eassumption
+    [ discharge_lockstep_premise
     | apply contains_merged; eauto with concrete
     | apply models_and; split; eassumption ].
 

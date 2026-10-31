@@ -73,7 +73,30 @@ Proof.
   - inversion Hts; subst. constructor; [exact (concrete_force_output g t v Ht ltac:(assumption)) | auto].
 Qed.
 
+Lemma contains_merged : forall σ vs_s vs_c,
+  contains_val σ vs_s vs_c -> concrete_value vs_c ->
+  contains_val σ (merge vs_s) (merge vs_c).
+Proof.
+  intros σ vs_s vs_c Hvs Hvsc. rewrite (concrete_merge vs_c Hvsc).
+  apply merge_keeps. exact Hvs.
+Qed.
+
 End Transport.
+
+Ltac discharge_lockstep_premise :=
+  solve
+    [ eassumption
+    | unfold extend_env; constructor; [constructor |]; eassumption
+    | apply Forall2_app; [eassumption | constructor; [constructor; eassumption | constructor]]
+    | constructor; eassumption
+    | apply contains_bind_fields; eassumption
+    | unfold extend_env in *; eauto with concrete ].
+
+Ltac refute_prune :=
+  match goal with
+  | Hs : sat ?Φ = false, Hm : _ ⊨ ?Φ |- _ =>
+      rewrite (models_sat _ _ Hm) in Hs; discriminate Hs
+  end.
 
 Section Soundness.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
@@ -128,13 +151,7 @@ Ltac enter_sound_case :=
   unfold sound_eval, sound_apply, sound_prim, sound_force, sound_select, sound_fold in *.
 
 Ltac discharge_premise :=
-  solve
-    [ eassumption
-    | unfold extend_env; constructor; [constructor |]; eassumption
-    | apply Forall2_app; [eassumption | constructor; [constructor; eassumption | constructor]]
-    | constructor; eassumption
-    | apply contains_bind_fields; eassumption
-    | unfold extend_env in *; eauto with concrete ].
+  solve [ discharge_lockstep_premise | apply contains_merged; eauto with concrete ].
 
 Ltac fire IH := edestruct IH as [?v_c [?Hrun ?Hrel]]; [discharge_premise .. |].
 
@@ -180,15 +197,12 @@ Proof.
     eexists; split; [constructor | constructor; assumption].
   - intros f Φ Γ es alts vs v Hes IHs Hfold IHfold Hm Γc e_c HΓ He HΓc Hec.
     inversion He; subst. inversion Hec; subst. fire IHs.
-    assert (Hvsc : concrete_value v_c) by eauto with concrete.
-    pose proof (merge_keeps σ vs v_c Hrel) as Hmerged.
-    fire IHfold. exists v_c0. split; [| exact Hrel0].
-    econstructor; [exact Hrun | rewrite concrete_merge by exact Hvsc; exact Hrun0].
+    fire IHfold. exists v_c0. split; [econstructor; eassumption | exact Hrel0].
   - intros f Φ Γ γ Hm Γc e_c HΓ He HΓc Hec. inversion He; subst.
     eexists; split; [constructor | rewrite (subst_coerc_contains σ Γ Γc γ HΓ); constructor].
   - intros f Φ Γ τ Hm Γc e_c HΓ He HΓc Hec. inversion He; subst.
     eexists; split; [constructor | rewrite (subst_type_contains σ Γ Γc τ HΓ); constructor].
-  - intros f Φ Γ e Hs Hm. rewrite (models_sat σ Φ Hm) in Hs. discriminate.
+  - intros f Φ Γ e Hs Hm. refute_prune.
   - intros Φ Γ e Hm Γc e_c HΓ He HΓc Hec.
     eexists; split; [constructor | repeat constructor].
   - intros g Φ Γ d ts e Hm Γc vf_c e_c HΓ Hvf He HΓc Hvfc Hec. inversion Hvf; subst.
