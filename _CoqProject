@@ -13,3 +13,5 @@ theories/Soundness/Instance.v
 theories/Soundness/MergeKeeps.v
 theories/Soundness/Soundness.v
 theories/Soundness/Laws.v
+theories/Completeness/Statement.v
+theories/Completeness/Completeness.v
