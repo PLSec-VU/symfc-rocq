@@ -38,7 +38,7 @@ The files build in the order that `_CoqProject` lists. A file can use the files 
 | `Syntax.v` | Variables, literals, types, coercions, expressions, values, thunks, bottoms, environments and path conditions. The class `SymCoreSorts` holds the abstract sorts. |
 | `Solver.v` | The solver class `SymCoreSolver`. |
 | `Merge.v` | Merging two leaves of a branch: `ite_leaf`, `ite` and `merge`. |
-| `Eval.v` | Fuel, the six evaluation relations and the induction principle `eval_mut_ind`. |
+| `Eval.v` | Fuel, the six evaluation relations, the notation for concrete runs and the induction principle `eval_mut_ind`. |
 | `Inversion.v` | Inversion lemmas for the evaluation relations. |
 | `Budget.v` | A run with no bound is also a run at every large finite bound (`eval_inf_has_budget`). |
 
@@ -46,7 +46,7 @@ The files build in the order that `_CoqProject` lists. A file can use the files 
 
 | File | Contents |
 | --- | --- |
-| `Programs.v` | ConCore expressions (`concore_expr`), concrete values and environments, and the concrete evaluation notation. |
+| `Programs.v` | ConCore expressions (`concore_expr`), concrete values, thunks and environments. |
 | `Preservation.v` | The proof that evaluation stays inside ConCore. |
 | `Determinism.v` | Concrete determinism. |
 
