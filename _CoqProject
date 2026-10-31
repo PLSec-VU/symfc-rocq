@@ -17,3 +17,9 @@ theories/Completeness/Statement.v
 theories/Completeness/Completeness.v
 theories/Model/Reducer.v
 theories/Model/Model.v
+theories/NonVacuity/SelfApplication.v
+theories/NonVacuity/SoundnessInstances.v
+theories/NonVacuity/LoopingArm.v
+theories/NonVacuity/RuntimeBranch.v
+theories/NonVacuity/PruningModel.v
+theories/NonVacuity/FromJust.v
