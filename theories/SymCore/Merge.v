@@ -15,10 +15,6 @@ Fixpoint zip_tif (p : prim) (ts1 ts2 : list thunk) : list thunk :=
 Definition same_shape {A : Type} (l1 l2 : list A) : bool :=
   Nat.eqb (length l1) (length l2).
 
-Definition same_coerc_ends (γ1 γ2 : coercion) : bool :=
-  dec_eqb type_fc_eq_dec (coerc_src γ1) (coerc_src γ2) &&
-  dec_eqb type_fc_eq_dec (coerc_dst γ1) (coerc_dst γ2).
-
 Definition ite_leaf (p : prim) (vt vf : value) : value :=
   match vt, vf with
   | VCon d1 ts1, VCon d2 ts2 =>
@@ -41,7 +37,7 @@ Definition ite_leaf (p : prim) (vt vf : value) : value :=
 Fixpoint ite (p : prim) (vt vf : value) {struct vt} : value :=
   match vt, vf with
   | VCast v1 γ1, VCast v2 γ2 =>
-      if same_coerc_ends γ1 γ2 then VCast (ite p v1 v2) γ1 else VIf p vt vf
+      if dec_eqb coercion_eq_dec γ1 γ2 then VCast (ite p v1 v2) γ1 else VIf p vt vf
   | _, _ => ite_leaf p vt vf
   end.
 
