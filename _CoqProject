@@ -23,3 +23,4 @@ theories/NonVacuity/LoopingArm.v
 theories/NonVacuity/RuntimeBranch.v
 theories/NonVacuity/PruningModel.v
 theories/NonVacuity/FromJust.v
+theories/Theorems.v
