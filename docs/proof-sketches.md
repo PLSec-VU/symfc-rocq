@@ -26,7 +26,9 @@ Concrete values never contain a symbolic branch. So the rules that need a symbol
 
 Theorem: `concore_soundness`, in `theories/Soundness/Soundness.v`.
 
-Assume a symbolic run of `e_s` gives `v_s`. Assume `σ ⊨ Φ` and that `e_s` contains a concrete program `e_c`. Then `e_c` has a concrete run, and its value `v_c` is contained in `v_s`.
+Assume a symbolic run of `e_s` gives `v_s`. Assume `σ ⊨ Φ` and that `e_s` contains `e_c`. Assume also that `contains_env σ Γs Γc` holds (the symbolic environment contains the concrete one), that `e_c` is a concrete program (`concore_expr e_c`) and that `Γc` is a concrete environment (`concrete_env Γc`). The symbolic run is at unlimited fuel. Then `e_c` has a concrete run, and its value `v_c` is contained in `v_s`.
+
+The theorem is at unlimited fuel. The lemma `lockstep_sound` proves it at every fuel, with both runs at the same fuel.
 
 The proof is the lemma `lockstep_sound`. It is an induction on the symbolic run, over the same six relations, at equal fuel for both runs.
 
@@ -38,7 +40,7 @@ Two facts finish the proof. First, `ite_keeps`: if `σ` makes `p` true or false,
 
 Theorems: `concore_completeness_forall`, `concore_completeness_budget` and `concore_completeness_exists`, in `theories/Completeness/Completeness.v`. The hypothesis `budget_total` is defined in `theories/Completeness/Statement.v`.
 
-Start from a concrete run of `e_c` that gives `v_c`. Let `e_s` contain `e_c`. There are three conclusions.
+Start from a concrete run of `e_c` that gives `v_c`. Let `e_s` contain `e_c`. Assume `σ ⊨ Φ`, `contains_env σ Γs Γc`, `concore_expr e_c` and `concrete_env Γc`, as in soundness. There are three conclusions.
 
 - Forall form. There is a fuel `h` such that, at every fuel `n >= h`, every symbolic run of `e_s` gives a value that contains `v_c`.
 - Budget form. Assume `budget_total Φ Γs e_s`. This means that a symbolic run exists at every large enough finite fuel. Then there is a fuel `h` such that, at every `n >= h`, a symbolic run exists and its value contains `v_c`.
@@ -46,7 +48,7 @@ Start from a concrete run of `e_c` that gives `v_c`. Let `e_s` contain `e_c`. Th
 
 The forall form is the base. A concrete run at `Unlimited` fuel is also a run at every large finite fuel. This is `eval_inf_has_budget` in `theories/SymCore/Budget.v`. It gives the fuel `h`. Then `lockstep_complete` proves the claim for any symbolic run at fuel `n`.
 
-The lemma `lockstep_complete` is an induction on the concrete run, at equal fuel. As in soundness, lifting over a symbolic branch spends no fuel. The leaf that `σ` selects runs in step with the concrete run. The proof again uses `ite_keeps` and `merge_keeps`. Soundness inducts on the symbolic run. Completeness inducts on the concrete run. This difference is the only change in direction.
+The lemma `lockstep_complete` is an induction on the concrete run, at equal fuel. As in soundness, lifting over a symbolic branch spends no fuel. The leaf that `σ` selects runs in step with the concrete run. The proof again uses `ite_keeps` and `merge_keeps`. Soundness inducts on the symbolic run and builds the concrete run. Completeness inducts on the concrete run and takes any symbolic run at the same fuel.
 
 The budget form needs `budget_total` because a symbolic run may fail to exist. A symbolic run may run out of fuel on a path that `σ` does not take. The assumption rules this out. The proof takes the larger of the fuel from `budget_total` and the fuel `h` from the forall form. At that fuel, a symbolic run exists, and the forall form shows that it contains `v_c`. The exists form takes `n = h` in the budget form.
 
@@ -64,6 +66,6 @@ The files in `theories/NonVacuity` then apply the theorems inside the model to r
 
 1. The instance rule I-Denote has no "has symbolic variables" side condition.
 2. Completeness needs no "bounded SMT terms" assumption.
-3. The function `ite` merges two casts only when their coercions are equal. A coercion in Rocq carries a role. Two casts that differ only in role would otherwise break soundness.
+3. The function `ite` merges two casts only when their coercions are equal. A coercion in Rocq carries a role. Two casts that differ only in role would otherwise break soundness. Example: a branch has a then-arm cast with coercion `γ1` and an else-arm cast with coercion `γ2`, and the two differ only in role. If `ite` kept the coercion of the then-arm for both leaves, a model that takes the else-arm would get the wrong coercion.
 4. Concrete values may contain the out-of-fuel bottom. A run at finite fuel produces it.
 5. The rule `prim` forces every argument of a primitive other than `ite`.

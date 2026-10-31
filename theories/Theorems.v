@@ -11,3 +11,4 @@ Print Assumptions concore_completeness_budget.
 Check concore_completeness_exists.
 Print Assumptions concore_completeness_exists.
 Check model_laws.
+Print Assumptions model_laws.
