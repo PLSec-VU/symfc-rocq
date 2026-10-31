@@ -6,3 +6,6 @@ theories/SymCore/Merge.v
 theories/SymCore/Eval.v
 theories/SymCore/Inversion.v
 theories/SymCore/Budget.v
+theories/ConCore/Programs.v
+theories/ConCore/Preservation.v
+theories/ConCore/Determinism.v
