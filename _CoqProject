@@ -22,5 +22,7 @@ theories/NonVacuity/SoundnessInstances.v
 theories/NonVacuity/LoopingArm.v
 theories/NonVacuity/RuntimeBranch.v
 theories/NonVacuity/PruningModel.v
+theories/NonVacuity/StuckApplication.v
 theories/NonVacuity/FromJust.v
+theories/NonVacuity/MergedJust.v
 theories/Theorems.v

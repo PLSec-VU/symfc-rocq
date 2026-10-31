@@ -368,6 +368,8 @@ Example lookup_shadow :
 Example bind_fields_missing :
   lookup_env (bind_fields EmptyEnv ["a"; "b"] [t1]) "b" = Some (TSusp EmptyEnv (EBot BUndefined)) :=
   eq_refl.
+Example bind_fields_drops_extra :
+  bind_fields EmptyEnv ["a"] [t1; t2] = ExtendEnv "a" t1 EmptyEnv := eq_refl.
 End Examples.
 
 End SymCore.

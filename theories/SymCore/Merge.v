@@ -67,6 +67,7 @@ Definition lift_prim (op : primop) (vs : list value) : value :=
 Section Tests.
 Variables (p s : prim) (d : dcon) (t1 t2 : thunk) (Γ : env) (x : var) (b : expr).
 Variables (op : primop) (y : prim).
+Variables (pa pb : prim) (v1 v2 : value) (γ γ1 γ2 : coercion).
 
 Lemma ite_con_merges : ite p (VCon d [t1]) (VCon d [t2]) = VCon d [TIf p t1 t2].
 Proof.
@@ -81,6 +82,17 @@ Lemma lift_prim_bottom_leaf :
   lift_prim op [VIf s (VBot BUndefined) (VPrim y)]
   = ite s (VBot BUndefined) (reduce_prim op [y]).
 Proof. reflexivity. Qed.
+Lemma ite_cast_equal_merges :
+  ite p (VCast (VPrim pa) γ) (VCast (VPrim pb) γ) = VCast (VPrim (PApp op_ite [p; pa; pb])) γ.
+Proof.
+  simpl. unfold dec_eqb. destruct (coercion_eq_dec γ γ); [reflexivity | contradiction].
+Qed.
+
+Lemma ite_cast_unequal_stays : γ1 <> γ2 ->
+  ite p (VCast v1 γ1) (VCast v2 γ2) = VIf p (VCast v1 γ1) (VCast v2 γ2).
+Proof.
+  intros Hne. simpl. unfold dec_eqb. destruct (coercion_eq_dec γ1 γ2); [contradiction | reflexivity].
+Qed.
 End Tests.
 
 End SymCore.
