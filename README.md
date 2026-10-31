@@ -16,7 +16,7 @@ make
 
 ## Main results
 
-The file `theories/Theorems.v` prints the general statement of each theorem and the axioms it uses. The general statement holds for any solver and lists the solver laws as hypotheses. Every theorem is closed under the global context. The file `docs/proof-sketches.md` explains the proofs.
+The file `theories/Theorems.v` prints the general statement of each theorem and the axioms it uses. The general statement holds for any solver and lists the solver laws as hypotheses. Every theorem is closed under the global context. 
 
 | Paper | Rocq name | File |
 | --- | --- | --- |
@@ -91,7 +91,3 @@ A theorem is *vacuous* when its hypotheses can never hold together, so it says n
 ### `theories/Theorems.v`
 
 The entry point. It prints the general statements of the five main theorems and `model_laws`, with the axioms of each.
-
-## Differences from the paper
-
-The file `docs/proof-sketches.md` lists six places where the Rocq development differs from the paper.
