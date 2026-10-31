@@ -55,18 +55,6 @@ Ltac invert_second_derivation :=
   | H : fold_alts _ pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
   end.
 
-Ltac invert_concrete_inputs :=
-  repeat match goal with
-  | H : concore_expr (_ _) |- _ => inversion H; subst; clear H
-  | H : concore_expr (_ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_value (_ _) |- _ => inversion H; subst; clear H
-  | H : concrete_value (_ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_value (_ _ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_thunk (_ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_thunk (_ _ _ _) |- _ => inversion H; subst; clear H
-  | H : Forall _ (_ :: _) |- _ => inversion H; subst; clear H
-  end.
-
 Ltac refute_rule_overlap :=
   solve
     [ rewrite sat_pc_true in *; discriminate
@@ -81,11 +69,6 @@ Ltac unify_lookups :=
   | H1 : ?a = Some ?x, H2 : ?a = Some ?y |- _ =>
       rewrite H1 in H2; injection H2; clear H2; intros; subst
   end.
-
-Hint Constructors concrete_value concrete_thunk concrete_env concore_expr concore_bottom
-  concore_alt Forall : concrete.
-Hint Resolve concrete_lookup concrete_bind_fields concore_find_alt concrete_merged
-  concrete_eval_output concrete_apply_output concrete_force_output forall_snoc : concrete.
 
 Ltac discharge_input_premises :=
   repeat match goal with
@@ -113,7 +96,7 @@ Ltac unify_outputs :=
   end.
 
 Ltac close_functional_case :=
-  enter_functional_case; invert_second_derivation; invert_concrete_inputs;
+  enter_functional_case; invert_second_derivation; invert_concrete_shapes;
   try refute_rule_overlap; unify_lookups; discharge_input_premises; unify_outputs;
   try reflexivity.
 

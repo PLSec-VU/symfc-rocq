@@ -2,6 +2,39 @@ From SymCoreTheory Require Export ConCore.Programs.
 From Stdlib Require Import Strings.String Lists.List Lia Arith.PeanoNat.
 Import ListNotations.
 
+Section ConcreteShapes.
+Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
+
+Lemma forall_snoc : forall (A : Type) (P : A -> Prop) xs x,
+  Forall P xs -> P x -> Forall P (xs ++ [x]).
+Proof.
+  intros A P xs x Hxs Hx. apply Forall_app. split; [exact Hxs | constructor; [exact Hx | constructor]].
+Qed.
+
+Lemma concrete_merged : forall v, concrete_value v -> concrete_value (merge v).
+Proof.
+  intros v Hv. rewrite concrete_merge by exact Hv. exact Hv.
+Qed.
+
+End ConcreteShapes.
+
+Ltac invert_concrete_shapes :=
+  repeat match goal with
+  | H : concore_expr (_ _) |- _ => inversion H; subst; clear H
+  | H : concore_expr (_ _ _) |- _ => inversion H; subst; clear H
+  | H : concrete_value (_ _) |- _ => inversion H; subst; clear H
+  | H : concrete_value (_ _ _) |- _ => inversion H; subst; clear H
+  | H : concrete_value (_ _ _ _) |- _ => inversion H; subst; clear H
+  | H : concrete_thunk (_ _ _) |- _ => inversion H; subst; clear H
+  | H : concrete_thunk (_ _ _ _) |- _ => inversion H; subst; clear H
+  | H : Forall _ (_ :: _) |- _ => inversion H; subst; clear H
+  end.
+
+#[export] Hint Constructors concrete_value concrete_thunk concrete_env concore_expr
+  concore_bottom concore_alt Forall : concrete.
+#[export] Hint Resolve concrete_lookup concrete_bind_fields concore_find_alt forall_snoc
+  concrete_merged : concrete.
+
 Section ConCore.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 
@@ -68,29 +101,6 @@ Ltac use_preserve_hyps :=
   | IH : pc_true = pc_true -> _ |- _ => specialize (IH eq_refl)
   end.
 
-Ltac invert_concrete_shapes :=
-  repeat match goal with
-  | H : concore_expr (_ _) |- _ => inversion H; subst; clear H
-  | H : concore_expr (_ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_value (_ _) |- _ => inversion H; subst; clear H
-  | H : concrete_value (_ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_value (_ _ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_thunk (_ _ _) |- _ => inversion H; subst; clear H
-  | H : concrete_thunk (_ _ _ _) |- _ => inversion H; subst; clear H
-  | H : Forall _ (_ :: _) |- _ => inversion H; subst; clear H
-  end.
-
-Lemma forall_snoc : forall (A : Type) (P : A -> Prop) xs x,
-  Forall P xs -> P x -> Forall P (xs ++ [x]).
-Proof.
-  intros A P xs x Hxs Hx. apply Forall_app. split; [exact Hxs | constructor; [exact Hx | constructor]].
-Qed.
-
-Lemma concrete_merged : forall v, concrete_value v -> concrete_value (merge v).
-Proof.
-  intros v Hv. rewrite concrete_merge by exact Hv. exact Hv.
-Qed.
-
 Lemma concrete_reduced : forall op ts vs,
   length ts = primop_arity op ->
   Forall2 (concrete_force_result pc_true) ts vs -> Forall concrete_thunk ts ->
@@ -101,10 +111,7 @@ Proof.
   - exact (forces_preserve_concrete ts vs Hall Hts).
 Qed.
 
-Hint Constructors concrete_value concrete_thunk concrete_env concore_expr concore_bottom
-  concore_alt Forall : concrete.
-Hint Resolve concrete_lookup concrete_bind_fields concore_find_alt cast_concore forall_snoc
-  concrete_merged concrete_reduced : concrete.
+Hint Resolve cast_concore concrete_reduced : concrete.
 
 Ltac close_preserve_case :=
   enter_preserve_case; use_preserve_hyps; unfold extend_env in *; invert_concrete_shapes;
@@ -181,3 +188,6 @@ Proof.
 Qed.
 
 End ConCore.
+
+#[export] Hint Resolve concrete_eval_output concrete_apply_output concrete_force_output
+  : concrete.
