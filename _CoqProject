@@ -3,3 +3,6 @@
 theories/SymCore/Syntax.v
 theories/SymCore/Solver.v
 theories/SymCore/Merge.v
+theories/SymCore/Eval.v
+theories/SymCore/Inversion.v
+theories/SymCore/Budget.v
