@@ -2,3 +2,4 @@
 
 theories/SymCore/Syntax.v
 theories/SymCore/Solver.v
+theories/SymCore/Merge.v
