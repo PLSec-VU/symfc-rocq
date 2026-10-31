@@ -148,13 +148,6 @@ Proof.
   exact (proj1 (proj2 eval_preserves_concrete) _ _ _ _ _ _ Happ eq_refl HΓ Hvf He).
 Qed.
 
-Lemma concrete_prim_output : forall g op ts v,
-  prim_app g pc_true op ts v -> Forall concrete_thunk ts -> concrete_value v.
-Proof.
-  intros g op ts v Hprim Hts.
-  exact (proj1 (proj2 (proj2 eval_preserves_concrete)) _ _ _ _ _ Hprim eq_refl Hts).
-Qed.
-
 Lemma concrete_force_output : forall g t v,
   force g pc_true t v -> concrete_thunk t -> concrete_value v.
 Proof.
@@ -163,28 +156,12 @@ Proof.
     Ht).
 Qed.
 
-Lemma concrete_select_output : forall g c tthen telse v,
-  select g pc_true c tthen telse v -> concrete_value c -> concrete_thunk tthen ->
-  concrete_thunk telse -> concrete_value v.
+Lemma concrete_forces_output : forall g ts vs,
+  Forall2 (force g pc_true) ts vs -> Forall concrete_thunk ts -> Forall concrete_value vs.
 Proof.
-  intros g c tthen telse v Hselect Hc Hthen Helse.
-  exact (proj1 (proj2 (proj2 (proj2 (proj2 eval_preserves_concrete))))
-    _ _ _ _ _ _ Hselect eq_refl Hc Hthen Helse).
-Qed.
-
-Lemma concrete_fold_output : forall g Γ vs alts v,
-  fold_alts g pc_true Γ vs alts v -> concrete_env Γ -> concrete_value vs ->
-  Forall concore_alt alts -> concrete_value v.
-Proof.
-  intros g Γ vs alts v Hfold HΓ Hvs Halts.
-  exact (proj2 (proj2 (proj2 (proj2 (proj2 eval_preserves_concrete))))
-    _ _ _ _ _ _ Hfold eq_refl HΓ Hvs Halts).
-Qed.
-
-Lemma concore_eval_concrete : forall Γ e v,
-  concrete_env Γ -> concore_expr e -> Γ ⊢ᶜ e ⇓ᶜ v -> concrete_value v.
-Proof.
-  intros Γ e v HΓ He Heval. exact (concrete_eval_output Inf Γ e v Heval HΓ He).
+  intros g ts vs Hall. apply forces_preserve_concrete.
+  eapply Forall2_impl; [| exact Hall]. intros t v Hforce _ Ht.
+  exact (concrete_force_output g t v Hforce Ht).
 Qed.
 
 End ConCore.

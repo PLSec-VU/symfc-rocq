@@ -22,7 +22,7 @@ Proof.
   eapply Eval_Case.
   - unfold loop_guard, ite_expr. run_ite_spine.
     + constructor. constructor.
-    + apply select_true_literal. constructor. constructor.
+    + refine (Select_True _ _ _ _ _ _). constructor. constructor.
   - cbn. eapply Fold_Con; [reflexivity | constructor].
 Qed.
 

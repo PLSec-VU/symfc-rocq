@@ -33,7 +33,6 @@ Inductive contains_prim (σ : valuation) : prim -> prim -> Prop :=
 
 Inductive contains_expr (σ : valuation) : expr -> expr -> Prop :=
   | Contains_EVar : forall x, contains_expr σ (EVar x) (EVar x)
-  | Contains_ESym : forall s, contains_expr σ (ESym s) (ESym s)
   | Contains_ESymLit : forall s, contains_expr σ (ESym s) (ELit (σ s))
   | Contains_ELit : forall l, contains_expr σ (ELit l) (ELit l)
   | Contains_EPrimOp : forall op, contains_expr σ (EPrimOp op) (EPrimOp op)

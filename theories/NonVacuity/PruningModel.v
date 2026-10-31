@@ -45,8 +45,10 @@ Proof.
   unfold models in Hmq, Hmr. simpl in Hmr. rewrite Hmq in Hmr. discriminate Hmr.
 Qed.
 
-#[local] Instance pruning_subst_contains : SubstContains.
-Proof. split; intros σ Γs Γc x _; reflexivity. Qed.
+#[local] Instance pruning_subst_contains : SubstContains :=
+  @Build_SubstContains model_sorts pruning_solver
+    (@subst_type_contains _ _ Model.Model.model_subst_contains)
+    (@subst_coerc_contains _ _ Model.Model.model_subst_contains).
 
 #[local] Instance pruning_model_laws : @ConCoreLaws model_sorts pruning_solver :=
   @concore_laws model_sorts pruning_solver Model.Model.model_reduce_prim_literal
@@ -96,20 +98,16 @@ Proof.
   - reflexivity.
 Qed.
 
-Lemma pruning_select_true : forall g Φ tthen telse v,
-  force g Φ tthen v -> select g Φ (VPrim (PLit true)) tthen telse v.
-Proof. intros g Φ tthen telse v H. exact (Select_True g Φ tthen telse v H). Qed.
-
 Lemma repeat_con_run : forall σ, σ repeat_var = true ->
   EmptyEnv ⊢ᶜ repeat_con σ ⇓ᶜ VCon "C" [].
 Proof.
   intros σ Hs. unfold repeat_con. rewrite Hs. eapply Eval_Case.
   - unfold repeat_branch, ite_expr. run_ite_spine.
     + constructor. constructor.
-    + apply pruning_select_true. constructor. constructor.
+    + refine (Select_True _ _ _ _ _ _). constructor. constructor.
   - cbn. eapply Fold_Con; [reflexivity |]. unfold inner_branch, ite_expr. run_ite_spine.
     + constructor. constructor.
-    + apply pruning_select_true. constructor. constructor.
+    + refine (Select_True _ _ _ _ _ _). constructor. constructor.
 Qed.
 
 Lemma repeat_contains : forall σ : valuation, contains_expr σ repeat_sym (repeat_con σ).
@@ -118,29 +116,15 @@ Proof. intros σ. repeat constructor. Qed.
 Lemma repeat_concore : forall σ : valuation, concore_expr (repeat_con σ).
 Proof. intros σ. repeat constructor. Qed.
 
-Lemma models_pruning_pc_true : forall σ : valuation, σ ⊨ pc_true.
-Proof. intros σ. reflexivity. Qed.
-
 Theorem pruning_soundness : forall σ : valuation, σ repeat_var = true ->
   exists v_c, EmptyEnv ⊢ᶜ repeat_con σ ⇓ᶜ v_c /\
     contains_val σ repeat_sym_value v_c /\ v_c = VCon "C" [].
 Proof.
   intros σ Hs.
   destruct (concore_soundness pc_true EmptyEnv EmptyEnv σ repeat_sym (repeat_con σ)
-    repeat_sym_value (models_pruning_pc_true σ) (Contains_Empty σ) (repeat_contains σ)
+    repeat_sym_value (Model.Model.models_pc_true σ) (Contains_Empty σ) (repeat_contains σ)
     (repeat_concore σ) Concrete_Empty repeat_sym_run_prunes) as [v_c [Hrun Hrel]].
   exists v_c. split; [exact Hrun | split; [exact Hrel |]].
   exact (concore_eval_deterministic EmptyEnv (repeat_con σ) v_c (VCon "C" []) Concrete_Empty
     (repeat_concore σ) Hrun (repeat_con_run σ Hs)).
-Qed.
-
-Theorem app_lit_stuck :
-  ~ exists v, eval (Fin 2) pc_true EmptyEnv (EApp (ELit true) (ELit true)) v.
-Proof.
-  intros [v H].
-  inversion H as [| | | | | f Φ Γ ef ea vf w Hfun Happ | | | | | | | f Φ Γ e Hpruned |];
-    subst; [| discriminate Hpruned].
-  inversion Hfun as [| f Φ Γ l | | | | | | | | | | | f Φ Γ e Hpruned |]; subst;
-    [| discriminate Hpruned].
-  inversion Happ.
 Qed.

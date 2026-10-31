@@ -93,14 +93,4 @@ Proof.
   intros p Hp. inversion Hp. reflexivity.
 Qed.
 
-Lemma concrete_not_if : forall p vt vf, ~ concrete_value (VIf p vt vf).
-Proof.
-  intros p vt vf H. inversion H.
-Qed.
-
-Lemma concrete_not_tif : forall p tt tf, ~ concrete_thunk (TIf p tt tf).
-Proof.
-  intros p tt tf H. inversion H.
-Qed.
-
 End ConCore.

@@ -131,27 +131,6 @@ Proof.
   intros Φ Γ e v Heval. exact (proj1 inf_has_budget_mutual _ _ _ _ _ Heval eq_refl).
 Qed.
 
-Lemma apply_inf_has_budget : forall Φ Γ vf e v,
-  apply Inf Φ Γ vf e v -> exists h, forall n, h <= n -> apply (Fin n) Φ Γ vf e v.
-Proof.
-  intros Φ Γ vf e v Happ.
-  exact (proj1 (proj2 inf_has_budget_mutual) _ _ _ _ _ _ Happ eq_refl).
-Qed.
-
-Lemma prim_app_inf_has_budget : forall Φ op ts v,
-  prim_app Inf Φ op ts v -> exists h, forall n, h <= n -> prim_app (Fin n) Φ op ts v.
-Proof.
-  intros Φ op ts v Hprim.
-  exact (proj1 (proj2 (proj2 inf_has_budget_mutual)) _ _ _ _ _ Hprim eq_refl).
-Qed.
-
-Lemma force_inf_has_budget : forall Φ t v,
-  force Inf Φ t v -> exists h, forall n, h <= n -> force (Fin n) Φ t v.
-Proof.
-  intros Φ t v Hforce.
-  exact (proj1 (proj2 (proj2 (proj2 inf_has_budget_mutual))) _ _ _ _ Hforce eq_refl).
-Qed.
-
 Lemma select_inf_has_budget : forall Φ c tthen telse v,
   select Inf Φ c tthen telse v ->
   exists h, forall n, h <= n -> select (Fin n) Φ c tthen telse v.

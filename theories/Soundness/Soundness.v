@@ -65,14 +65,6 @@ Proof.
   exact (contains_find_alt_none σ d alts_s alts_c Halts Hno).
 Qed.
 
-Lemma concrete_forces_output : forall g ts vs,
-  Forall2 (force g pc_true) ts vs -> Forall concrete_thunk ts -> Forall concrete_value vs.
-Proof.
-  intros g ts vs Hall. induction Hall as [| t v ts' vs' Ht _ IH]; intros Hts.
-  - constructor.
-  - inversion Hts; subst. constructor; [exact (concrete_force_output g t v Ht ltac:(assumption)) | auto].
-Qed.
-
 Lemma contains_merged : forall σ vs_s vs_c,
   contains_val σ vs_s vs_c -> concrete_value vs_c ->
   contains_val σ (merge vs_s) (merge vs_c).
@@ -178,7 +170,7 @@ Proof.
     exists vc. split; [econstructor; eassumption | exact Hvc].
   - intros f Φ Γ l Hm Γc e_c HΓ He HΓc Hec. inversion He; subst.
     eexists; split; [constructor | repeat constructor].
-  - intros f Φ Γ s Hm Γc e_c HΓ He HΓc Hec. inversion He; subst; [inversion Hec |].
+  - intros f Φ Γ s Hm Γc e_c HΓ He HΓc Hec. inversion He; subst.
     eexists; split; [constructor | repeat constructor].
   - intros f Φ Γ d Hm Γc e_c HΓ He HΓc Hec. inversion He; subst.
     eexists; split; [constructor | repeat constructor].

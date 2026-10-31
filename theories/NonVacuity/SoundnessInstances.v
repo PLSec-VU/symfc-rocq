@@ -7,13 +7,6 @@ Open Scope string_scope.
 Definition sym_s : var := "s".
 Definition branch_var : var := "b".
 
-Lemma select_true_literal : forall g Φ tthen telse v,
-  force g Φ tthen v -> select g Φ (VPrim (PLit true)) tthen telse v.
-Proof. intros g Φ tthen telse v H. exact (Select_True g Φ tthen telse v H). Qed.
-
-Lemma models_pc_true : forall σ, σ ⊨ pc_true.
-Proof. intros σ. reflexivity. Qed.
-
 Theorem soundness_on_symbol : forall σ,
   exists v_c, EmptyEnv ⊢ᶜ ELit (σ sym_s) ⇓ᶜ v_c /\
     contains_val σ (VPrim (PSym sym_s)) v_c /\ v_c = VPrim (PLit (σ sym_s)).

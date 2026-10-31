@@ -52,6 +52,9 @@ Proof.
   split; intros σ Γs Γc x _; reflexivity.
 Qed.
 
+Lemma models_pc_true : forall σ, σ ⊨ pc_true.
+Proof. intros σ. reflexivity. Qed.
+
 #[export] Instance model_laws : ConCoreLaws :=
   concore_laws model_reduce_prim_literal model_cast_concore model_models_sat
     model_reduce_prim_contains model_cast_contains model_subst_contains.
