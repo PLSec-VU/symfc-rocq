@@ -1,113 +1,44 @@
-From Stdlib Require Import Strings.String Lists.List ZArith.ZArith Bool.Bool Arith.PeanoNat Lia.
+From Stdlib Require Import Strings.String Lists.List Bool.Bool Arith.PeanoNat.
 Import ListNotations.
 Open Scope string_scope.
-Open Scope Z_scope.
-
-Section SymCore.
-
-(** ========================================================================= *)
-(** Variables and Data Constructors (§3.1)                                    *)
-(** ========================================================================= *)
 
 Definition var : Set := string.
 Definition dcon : Set := string.
 
-(** ========================================================================= *)
-(** Literals and Primitive Operations (§3.1)                                  *)
-(** ========================================================================= *)
-
 Class SymCoreSorts : Type := {
-
-(** Literals mirror those found in SMT solvers; a parameter from external SMT (§3.1) *)
-lit : Set;
-
-(** Primitive operations mirror SMT solver primitives; a parameter from external SMT (§3.1) *)
-primop : Set;
-
-(** SMT boolean primitives for path condition connectives *)
-op_and : primop;
-op_not : primop;
-
-(**
-  SMT if-then-else. This is the solver's own three-place term, not the
-  evaluator's branch EIf. Section 3.3's merge turns a branch between two
-  solvable arms into this term, which is the point at which a branch stops
-  being a tree the evaluator walks and becomes a formula the solver reads.
-*)
-op_ite : primop;
-
-(** Arity of a primitive operation: the number of arguments it is applied to (§3.1) *)
-primop_arity : primop -> nat;
-
-(** if-then-else takes a condition and two arms *)
-op_ite_arity : primop_arity op_ite = 3%nat;
-
-(**
-  Literals and primitive operations have decidable equality.
-
-  Merge needs it: Section 3.3 merges two arms only when they are the same
-  shape carrying the same payload, and "the same payload" has to be a test
-  the definition can run. Equality of expressions is built from these two
-  and from tycon_eq_dec below.
-*)
-lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2};
-primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2};
-
-(** Type Constructors (e.g. Int, Bool, SMT.BitVec), used by Section 3; left abstract *)
-tycon : Set;
-
-(** Type constructors have decidable equality; merge compares whole types *)
-tycon_eq_dec : forall (t1 t2 : tycon), {t1 = t2} + {t1 <> t2};
-
-(**
-  The SMT theory's own reading of a primitive operation: the literal the
-  solver gives to that operation applied to literal arguments. It is external
-  to this development in exactly the way lit and primop already are.
-*)
-prim_value : primop -> list lit -> lit;
-
-(** The literal the SMT theory reads as truth. External in the same way. *)
-lit_true : lit;
-
-(**
-  The data constructors that Boolean control flow scrutinises. Rule Case turns
-  a scrutinee that is an SMT boolean formula into a match on these two, so a
-  program that compares symbolic values (for example inside Map.insert) reaches
-  a real branch. A concrete formula picks the True or False constructor; a
-  symbolic one folds both alternatives under the formula and its negation.
-*)
-dcon_true : dcon;
-dcon_false : dcon;
-
-(**
-  The SMT theory's reading of negation and if-then-else. These describe the
-  theory, not the solver, so they live here beside prim_value rather than in a
-  law class. They are what lets Rule Case read the truth value of a merged
-  boolean and select the arm the model takes.
-*)
-prim_value_not : forall l, prim_value op_not (l :: nil) = lit_true <-> l <> lit_true;
-prim_value_ite : forall c t f,
-  prim_value op_ite (c :: t :: f :: nil) = if lit_eq_dec c lit_true then t else f
+  lit : Set;
+  primop : Set;
+  op_and : primop;
+  op_not : primop;
+  op_ite : primop;
+  primop_arity : primop -> nat;
+  op_ite_arity : primop_arity op_ite = 3%nat;
+  lit_eq_dec : forall (l1 l2 : lit), {l1 = l2} + {l1 <> l2};
+  primop_eq_dec : forall (p1 p2 : primop), {p1 = p2} + {p1 <> p2};
+  tycon : Set;
+  tycon_eq_dec : forall (t1 t2 : tycon), {t1 = t2} + {t1 <> t2};
+  prim_value : primop -> list lit -> lit;
+  lit_true : lit;
+  prim_value_and : forall a b,
+    prim_value op_and [a; b] = lit_true <-> a = lit_true /\ b = lit_true;
+  prim_value_not : forall l, prim_value op_not [l] = lit_true <-> l <> lit_true;
+  prim_value_ite : forall c t f,
+    prim_value op_ite [c; t; f] = if lit_eq_dec c lit_true then t else f
 }.
 
+Section SymCore.
 Context {sorts : SymCoreSorts}.
 
-(** ========================================================================= *)
-(** Types and Coercions in System FC / SymCore (§3.1)                         *)
-(** ========================================================================= *)
-
-(** System FC Types with arrow types for higher-order coercions *)
 Inductive type_fc : Set :=
-  | TyVar   : var -> type_fc
-  | TyCon   : tycon -> type_fc
+  | TyVar : var -> type_fc
+  | TyCon : tycon -> type_fc
   | TyArrow : type_fc -> type_fc -> type_fc
-  | TyApp   : type_fc -> type_fc -> type_fc.
+  | TyApp : type_fc -> type_fc -> type_fc.
 
-(** Roles in System FC / SymCore (§3.1, [Breitner et al. 2016]) *)
 Inductive role : Set :=
-  | RoleNominal             (** N: exact type equality *)
-  | RoleRepresentational    (** R: same runtime representation *)
-  | RolePhantom.            (** P: phantom types *)
+  | RoleNominal
+  | RoleRepresentational
+  | RolePhantom.
 
 Definition role_eq_dec : forall (r1 r2 : role), {r1 = r2} + {r1 <> r2}.
 Proof.
@@ -119,7 +50,6 @@ Proof.
   decide equality; [apply string_dec | apply tycon_eq_dec].
 Defined.
 
-(** A test that runs a decision procedure and reports the verdict as a Boolean *)
 Definition dec_eqb {A : Type} (d : forall x y : A, {x = y} + {x <> y}) (x y : A) : bool :=
   if d x y then true else false.
 
@@ -129,14 +59,12 @@ Proof.
   intros A d x y H. unfold dec_eqb in H. destruct (d x y); [assumption | discriminate].
 Qed.
 
-(** Coercions witnessing type equality with endpoints (Section 3.1: γ : τ1 ~ρ τ2) *)
 Record coercion : Set := MkCoercion {
-  coerc_src  : type_fc;     (** τ1 *)
-  coerc_dst  : type_fc;     (** τ2 *)
-  coerc_role : role         (** ρ *)
+  coerc_src : type_fc;
+  coerc_dst : type_fc;
+  coerc_role : role
 }.
 
-(** Symmetry of a coercion: sym γ witnesses τ2 ~ρ τ1 (Fig. 3, Rule App-Cast) *)
 Definition sym_coerc (γ : coercion) : coercion :=
   MkCoercion (coerc_dst γ) (coerc_src γ) (coerc_role γ).
 
@@ -145,103 +73,130 @@ Proof.
   decide equality; [apply role_eq_dec | apply type_fc_eq_dec | apply type_fc_eq_dec].
 Defined.
 
-(** Decomposition of arrow coercion: (γa -> γr) = γ (Fig. 3, Rule App-Cast) *)
 Definition decomp_coerc_arrow (γ : coercion) : option (coercion * coercion) :=
   match coerc_src γ, coerc_dst γ with
   | TyArrow s1 s2, TyArrow d1 d2 =>
-      Some (MkCoercion s1 d1 (coerc_role γ),
-            MkCoercion s2 d2 (coerc_role γ))
+      Some (MkCoercion s1 d1 (coerc_role γ), MkCoercion s2 d2 (coerc_role γ))
   | _, _ => None
   end.
 
-(** ========================================================================= *)
-(** Expressions, Bottom, Closures, and Environment (Figures 1 & 2)            *)
-(** ========================================================================= *)
+Inductive expr : Type :=
+  | EVar : var -> expr
+  | ESym : var -> expr
+  | ELit : lit -> expr
+  | EPrimOp : primop -> expr
+  | ECon : dcon -> expr
+  | EApp : expr -> expr -> expr
+  | ELam : var -> expr -> expr
+  | ECase : expr -> list alt -> expr
+  | ECast : expr -> coercion -> expr
+  | ECoercion : coercion -> expr
+  | EType : type_fc -> expr
+  | EBot : bottom -> expr
 
-(**
-  Expressions (Fig. 1) and Environment Γ ::= {x ↦ (Γ, e)} (Fig. 2).
-  Extended with runtime thunks (Γ, e). Rule Con produces them for the fields
-  of a constructor value and Rule Thunk forces them. Rule Lam produces the
-  thunk (Γ, λx. e), which is the closure of a lambda, and Rule App-Abs
-  applies it.
-*)
-
-Inductive bottom : Type :=
-  | BRaise : expr -> bottom      (** raise e: error throw *)
-  | BUnreachable : bottom        (** ∅: unreachable *)
-  | BUndefined : bottom          (** ?: undefined behavior *)
-  | BOutOfFuel : bottom          (** ⊥ₖ: the evaluation budget ran out *)
-
-with expr : Type :=
-  | EVar : var -> expr                            (** x: variable *)
-  | ELit : lit -> expr                            (** l: literal *)
-  | EPrimOp : primop -> expr                      (** ⊗: primitive operation *)
-  | ECon : dcon -> expr                           (** D: data constructor *)
-  | EApp : expr -> expr -> expr                   (** ef ea: application *)
-  | ELam : var -> expr -> expr                    (** λx. e: abstraction *)
-  | ECase : expr -> list alt -> expr              (** case e of a⃗: case split *)
-  | ECast : expr -> coercion -> expr              (** e ⊲ γ: cast *)
-  | ECoercion : coercion -> expr                  (** γ: coercion *)
-  | EType : type_fc -> expr                       (** τ: type *)
-  | EIf : expr -> expr -> expr -> expr            (** if ec then et else ef: symbolic branch *)
-  | EBot : bottom -> expr                         (** b: bottom *)
-  | EThunk : environment -> expr -> expr          (** (Γ, e): runtime thunk (Rules Con and Thunk) *)
+with bottom : Type :=
+  | BRaise : expr -> bottom
+  | BUnreachable : bottom
+  | BUndefined : bottom
+  | BOutOfFuel : bottom
 
 with alt : Type :=
-  | Alt : dcon -> list var -> expr -> alt         (** D x⃗ → e: pattern *)
+  | Alt : dcon -> list var -> expr -> alt.
 
-with closure : Type :=
-  | MkClosure : environment -> expr -> closure    (** (Γ, e) from Fig. 2 *)
+Inductive prim : Type :=
+  | PLit : lit -> prim
+  | PSym : var -> prim
+  | PApp : primop -> list prim -> prim.
 
-with environment : Type :=
-  | EmptyEnv : environment                        (** empty substitution map *)
-  | ExtendEnv : var -> closure -> environment -> environment.
-                                                  (** Γ{x ↦ (Γ', e)}: substitution map *)
+Inductive value : Type :=
+  | VPrim : prim -> value
+  | VClos : env -> var -> expr -> value
+  | VCon : dcon -> list thunk -> value
+  | VPartial : primop -> list thunk -> value
+  | VType : type_fc -> value
+  | VCoercion : coercion -> value
+  | VCast : value -> coercion -> value
+  | VBot : bottom -> value
+  | VIf : prim -> value -> value -> value
 
-End SymCore.
+with thunk : Type :=
+  | TSusp : env -> expr -> thunk
+  | TIf : prim -> thunk -> thunk -> thunk
 
-Notation "'·'" := EmptyEnv.
+with env : Type :=
+  | EmptyEnv : env
+  | ExtendEnv : var -> thunk -> env -> env.
 
-Section SymCore.
-Context {sorts : SymCoreSorts}.
+Definition path_condition : Type := prim.
 
-(**
-  Syntactic equality of expressions, as a test the merge definition can run.
+Definition pc_and (a b : prim) : prim := PApp op_and [a; b].
+Definition pc_not (a : prim) : prim := PApp op_not [a].
 
-  Section 3.3 merges two bottoms only when they are the same bottom, and a
-  bottom may carry a whole expression (raise e), so the test has to descend
-  into expressions, alternatives and environments at once. Only the direction
-  "the test says yes, so the two really are equal" is proved below, and only
-  that direction is used: a false answer just leaves the branch unmerged.
-*)
+Fixpoint lookup_env (Γ : env) (x : var) : option thunk :=
+  match Γ with
+  | EmptyEnv => None
+  | ExtendEnv y t rest => if string_dec x y then Some t else lookup_env rest x
+  end.
+
+Definition extend_env (Γ : env) (x : var) (t : thunk) : env := ExtendEnv x t Γ.
+
+Definition missing_field : thunk := TSusp EmptyEnv (EBot BUndefined).
+
+Fixpoint bind_fields (Γ : env) (xs : list var) (ts : list thunk) : env :=
+  match xs, ts with
+  | x :: xs', t :: ts' => extend_env (bind_fields Γ xs' ts') x t
+  | x :: xs', [] => extend_env (bind_fields Γ xs' []) x missing_field
+  | [], _ => Γ
+  end.
+
+Fixpoint find_alt (d : dcon) (alts : list alt) : option (list var * expr) :=
+  match alts with
+  | [] => None
+  | Alt d' xs e :: rest => if string_dec d d' then Some (xs, e) else find_alt d rest
+  end.
+
+Definition is_plit (p : prim) : bool :=
+  match p with
+  | PLit _ => true
+  | _ => false
+  end.
+
+Fixpoint vars_eqb (xs1 xs2 : list var) : bool :=
+  match xs1, xs2 with
+  | [], [] => true
+  | x1 :: r1, x2 :: r2 => String.eqb x1 x2 && vars_eqb r1 r2
+  | _, _ => false
+  end.
+
+Lemma vars_eqb_eq : forall xs1 xs2, vars_eqb xs1 xs2 = true -> xs1 = xs2.
+Proof.
+  induction xs1 as [| x xs IH]; intros [| y ys] H; simpl in H;
+    try discriminate; try reflexivity.
+  apply andb_prop in H as [Hxy Hrest]. apply String.eqb_eq in Hxy. subst y.
+  f_equal. apply IH. exact Hrest.
+Qed.
+
 Fixpoint expr_eqb (e1 e2 : expr) {struct e1} : bool :=
   match e1, e2 with
   | EVar x1, EVar x2 => String.eqb x1 x2
+  | ESym s1, ESym s2 => String.eqb s1 s2
   | ELit l1, ELit l2 => dec_eqb lit_eq_dec l1 l2
   | EPrimOp p1, EPrimOp p2 => dec_eqb primop_eq_dec p1 p2
   | ECon d1, ECon d2 => String.eqb d1 d2
-  | EApp f1 a1, EApp f2 a2 => andb (expr_eqb f1 f2) (expr_eqb a1 a2)
-  | ELam x1 b1, ELam x2 b2 => andb (String.eqb x1 x2) (expr_eqb b1 b2)
+  | EApp f1 a1, EApp f2 a2 => expr_eqb f1 f2 && expr_eqb a1 a2
+  | ELam x1 b1, ELam x2 b2 => String.eqb x1 x2 && expr_eqb b1 b2
   | ECase s1 alts1, ECase s2 alts2 =>
-      andb (expr_eqb s1 s2)
-        ((fix alts_eqb (l1 l2 : list alt) {struct l1} : bool :=
-            match l1, l2 with
-            | nil, nil => true
-            | Alt d1 xs1 p1 :: t1, Alt d2 xs2 p2 :: t2 =>
-                andb (andb (andb (andb
-                  (String.eqb d1 d2)
-                  (forallb (fun p => String.eqb (fst p) (snd p)) (combine xs1 xs2)))
-                  (Nat.eqb (length xs1) (length xs2)))
-                  (expr_eqb p1 p2)) (alts_eqb t1 t2)
-            | _, _ => false
-            end) alts1 alts2)
-  | ECast b1 γ1, ECast b2 γ2 => andb (expr_eqb b1 b2) (dec_eqb coercion_eq_dec γ1 γ2)
+      expr_eqb s1 s2 &&
+      (fix alts_eqb (l1 l2 : list alt) {struct l1} : bool :=
+         match l1, l2 with
+         | [], [] => true
+         | a1 :: t1, a2 :: t2 => alt_eqb a1 a2 && alts_eqb t1 t2
+         | _, _ => false
+         end) alts1 alts2
+  | ECast b1 γ1, ECast b2 γ2 => expr_eqb b1 b2 && dec_eqb coercion_eq_dec γ1 γ2
   | ECoercion γ1, ECoercion γ2 => dec_eqb coercion_eq_dec γ1 γ2
   | EType τ1, EType τ2 => dec_eqb type_fc_eq_dec τ1 τ2
-  | EIf c1 t1 f1, EIf c2 t2 f2 =>
-      andb (andb (expr_eqb c1 c2) (expr_eqb t1 t2)) (expr_eqb f1 f2)
   | EBot b1, EBot b2 => bottom_eqb b1 b2
-  | EThunk Γ1 b1, EThunk Γ2 b2 => andb (env_eqb Γ1 Γ2) (expr_eqb b1 b2)
   | _, _ => false
   end
 with bottom_eqb (b1 b2 : bottom) {struct b1} : bool :=
@@ -252,37 +207,21 @@ with bottom_eqb (b1 b2 : bottom) {struct b1} : bool :=
   | BOutOfFuel, BOutOfFuel => true
   | _, _ => false
   end
-with env_eqb (Γ1 Γ2 : environment) {struct Γ1} : bool :=
-  match Γ1, Γ2 with
-  | EmptyEnv, EmptyEnv => true
-  | ExtendEnv x1 (MkClosure Γ1' e1) r1, ExtendEnv x2 (MkClosure Γ2' e2) r2 =>
-      andb (andb (andb (String.eqb x1 x2) (env_eqb Γ1' Γ2')) (expr_eqb e1 e2))
-           (env_eqb r1 r2)
-  | _, _ => false
+with alt_eqb (a1 a2 : alt) {struct a1} : bool :=
+  match a1, a2 with
+  | Alt d1 xs1 p1, Alt d2 xs2 p2 =>
+      String.eqb d1 d2 && vars_eqb xs1 xs2 && expr_eqb p1 p2
   end.
 
-(** Two binder lists that agree pairwise and in length are the same list *)
-Lemma vars_eqb_eq : forall xs1 xs2,
-  forallb (fun p => String.eqb (fst p) (snd p)) (combine xs1 xs2) = true ->
-  Nat.eqb (length xs1) (length xs2) = true ->
-  xs1 = xs2.
-Proof.
-  induction xs1 as [| x xs IH]; intros xs2 Hall Hlen.
-  - destruct xs2; [reflexivity | discriminate].
-  - destruct xs2 as [| y ys]; [discriminate |].
-    simpl in Hall, Hlen. apply andb_prop in Hall as [Hxy Hrest].
-    apply String.eqb_eq in Hxy. subst y. f_equal. apply IH; assumption.
-Qed.
-
-(** The test only says yes to equal terms *)
 Fixpoint expr_eqb_eq (e1 : expr) {struct e1} :
   forall e2, expr_eqb e1 e2 = true -> e1 = e2
 with bottom_eqb_eq (b1 : bottom) {struct b1} :
   forall b2, bottom_eqb b1 b2 = true -> b1 = b2
-with env_eqb_eq (Γ1 : environment) {struct Γ1} :
-  forall Γ2, env_eqb Γ1 Γ2 = true -> Γ1 = Γ2.
+with alt_eqb_eq (a1 : alt) {struct a1} :
+  forall a2, alt_eqb a1 a2 = true -> a1 = a2.
 Proof.
   - destruct e1; intros e2 H; destruct e2; simpl in H; try discriminate.
+    + apply String.eqb_eq in H. subst. reflexivity.
     + apply String.eqb_eq in H. subst. reflexivity.
     + apply dec_eqb_eq in H. subst. reflexivity.
     + apply dec_eqb_eq in H. subst. reflexivity.
@@ -293,170 +232,153 @@ Proof.
       rewrite (expr_eqb_eq _ _ H2). reflexivity.
     + apply andb_prop in H as [H1 H2].
       rewrite (expr_eqb_eq _ _ H1). f_equal.
-      revert l0 H2. induction l as [| [d1 xs1 p1] t1 IH]; intros l0 H2.
-      * destruct l0; [reflexivity | discriminate].
-      * destruct l0 as [| [d2 xs2 p2] t2]; [discriminate |].
-        apply andb_prop in H2 as [H1234 H5]. apply andb_prop in H1234 as [H123 H4].
-        apply andb_prop in H123 as [H12 H3]. apply andb_prop in H12 as [Hd Hxs].
-        apply String.eqb_eq in Hd. subst d2.
-        rewrite (vars_eqb_eq xs1 xs2 Hxs H3).
-        rewrite (expr_eqb_eq _ _ H4). f_equal. apply IH. exact H5.
+      revert l0 H2. induction l as [| a t IH]; intros [| a' t'] H2; simpl in H2;
+        try discriminate; try reflexivity.
+      apply andb_prop in H2 as [Ha Ht].
+      rewrite (alt_eqb_eq _ _ Ha). f_equal. apply IH. exact Ht.
     + apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H2. subst.
       rewrite (expr_eqb_eq _ _ H1). reflexivity.
     + apply dec_eqb_eq in H. subst. reflexivity.
     + apply dec_eqb_eq in H. subst. reflexivity.
-    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
-      rewrite (expr_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2), (expr_eqb_eq _ _ H3).
-      reflexivity.
     + rewrite (bottom_eqb_eq _ _ H). reflexivity.
-    + apply andb_prop in H as [H1 H2].
-      rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2). reflexivity.
   - destruct b1; intros b2 H; destruct b2; simpl in H;
       try discriminate; try reflexivity.
     rewrite (expr_eqb_eq _ _ H). reflexivity.
-  - destruct Γ1 as [| x1 [Γ1' e1] r1]; intros Γ2 H;
-      destruct Γ2 as [| x2 [Γ2' e2] r2]; simpl in H;
-      try discriminate; try reflexivity.
-    apply andb_prop in H as [H123 H4]. apply andb_prop in H123 as [H12 H3].
-    apply andb_prop in H12 as [H1 H2].
-    apply String.eqb_eq in H1. subst x2.
-    rewrite (env_eqb_eq _ _ H2), (expr_eqb_eq _ _ H3), (env_eqb_eq _ _ H4).
-    reflexivity.
+  - destruct a1 as [d1 xs1 p1]; intros [d2 xs2 p2] H; simpl in H.
+    apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+    apply String.eqb_eq in H1. subst d2.
+    rewrite (vars_eqb_eq _ _ H2), (expr_eqb_eq _ _ H3). reflexivity.
 Qed.
 
-Fixpoint mentions_out_of_fuel (e : expr) {struct e} : bool :=
-  match e with
-  | EApp f a => orb (mentions_out_of_fuel f) (mentions_out_of_fuel a)
-  | ELam _ body => mentions_out_of_fuel body
-  | ECase es alts =>
-      orb (mentions_out_of_fuel es)
-        ((fix alts_mention (l : list alt) {struct l} : bool :=
-            match l with
-            | nil => false
-            | Alt _ _ ep :: rest => orb (mentions_out_of_fuel ep) (alts_mention rest)
-            end) alts)
-  | ECast body _ => mentions_out_of_fuel body
-  | EIf ec et ef =>
-      orb (mentions_out_of_fuel ec)
-        (orb (mentions_out_of_fuel et) (mentions_out_of_fuel ef))
-  | EBot b => bottom_mentions_out_of_fuel b
-  | EThunk Γ body => orb (env_mentions_out_of_fuel Γ) (mentions_out_of_fuel body)
-  | _ => false
-  end
-with bottom_mentions_out_of_fuel (b : bottom) {struct b} : bool :=
-  match b with
-  | BRaise e => mentions_out_of_fuel e
-  | BOutOfFuel => true
-  | _ => false
-  end
-with env_mentions_out_of_fuel (Γ : environment) {struct Γ} : bool :=
-  match Γ with
-  | EmptyEnv => false
-  | ExtendEnv _ (MkClosure Γ' e) rest =>
-      orb (orb (env_mentions_out_of_fuel Γ') (mentions_out_of_fuel e))
-        (env_mentions_out_of_fuel rest)
+Fixpoint prim_eqb (p1 p2 : prim) {struct p1} : bool :=
+  match p1, p2 with
+  | PLit l1, PLit l2 => dec_eqb lit_eq_dec l1 l2
+  | PSym s1, PSym s2 => String.eqb s1 s2
+  | PApp o1 as1, PApp o2 as2 =>
+      dec_eqb primop_eq_dec o1 o2 &&
+      (fix prims_eqb (l1 l2 : list prim) {struct l1} : bool :=
+         match l1, l2 with
+         | [], [] => true
+         | q1 :: r1, q2 :: r2 => prim_eqb q1 q2 && prims_eqb r1 r2
+         | _, _ => false
+         end) as1 as2
+  | _, _ => false
   end.
 
-(** Environment lookup: (Γ', e) = Γ(x) (Fig. 3, Rule Var) *)
-Fixpoint lookup_env (Γ : environment) (x : var) : option (environment * expr) :=
-  match Γ with
-  | · => None
-  | ExtendEnv y (MkClosure Γ' e) rest =>
-      if string_dec x y then Some (Γ', e) else lookup_env rest x
-  end.
-
-(** Single-variable environment extension: Γ{x ↦ (Γ', e)} (Fig. 3, Rule App-Abs) *)
-Definition extend_env (Γ : environment) (x : var) (Γ' : environment) (e : expr) : environment :=
-  ExtendEnv x (MkClosure Γ' e) Γ.
-
-(** Multi-variable environment extension for pattern matching: Γ{x⃗ ↦ (Γ', e⃗)} (Fig. 3, fold-alts) *)
-Definition missing_field : expr := EBot BUndefined.
-
-Fixpoint extend_env_multi (Γ : environment) (xs : list var) (args : list expr) (Γ_arg : environment) : environment :=
-  match xs, args with
-  | x :: xs', a :: args' =>
-      extend_env (extend_env_multi Γ xs' args' Γ_arg) x Γ_arg a
-  | x :: xs', [] =>
-      extend_env (extend_env_multi Γ xs' [] Γ_arg) x Γ_arg missing_field
-  | [], _ => Γ
-  end.
-
-(** ========================================================================= *)
-(** Path Condition Φ (Figure 2)                                               *)
-(** ========================================================================= *)
-
-(**
-  Path Condition (Fig. 2):
-    Φ ::= x | l | ⊗ Φ⃗
-*)
-Inductive path_condition : Set :=
-  | PCVar  : var -> path_condition
-  | PCLit  : lit -> path_condition
-  | PCPrim : primop -> list path_condition -> path_condition.
-
-(** Conjunction of path conditions: Φ1 ∧ Φ2 *)
-Definition pc_and (Φ1 Φ2 : path_condition) : path_condition :=
-  PCPrim op_and [Φ1; Φ2].
-
-(** Negation of a path condition: ¬Φ *)
-Definition pc_not (Φ : path_condition) : path_condition :=
-  PCPrim op_not [Φ].
-
-(** A model assigns every symbolic variable a literal value. *)
-Definition valuation : Type := var -> lit.
-
-(** The fixed set of symbolic variables of a run. *)
-Definition symvars : Type := var -> bool.
-
-(** The SMT value of a formula under a model. Rule Case reads the truth value
-    of a boolean scrutinee with it. *)
-Fixpoint pc_value (σ : valuation) (pc : path_condition) : lit :=
-  match pc with
-  | PCVar x => σ x
-  | PCLit l => l
-  | PCPrim p args => prim_value p (map (pc_value σ) args)
-  end.
-
-(** A formula mentions a variable. *)
-Fixpoint pc_has_var (pc : path_condition) : bool :=
-  match pc with
-  | PCVar _ => true
-  | PCLit _ => false
-  | PCPrim _ args => existsb pc_has_var args
-  end.
-
-(** Every primitive application in a formula has exactly its arity. *)
-Fixpoint pc_arities_ok (pc : path_condition) : bool :=
-  match pc with
-  | PCVar _ | PCLit _ => true
-  | PCPrim p args => andb (Nat.eqb (length args) (primop_arity p)) (forallb pc_arities_ok args)
-  end.
-
-(** The value of a formula with no variable, read against any model at all. *)
-Definition pc_closed_value (pc : path_condition) : lit := pc_value (fun _ => lit_true) pc.
-
-(** The constructor a literal boolean scrutinises to. *)
-Definition truth_constructor (l : lit) : dcon :=
-  if lit_eq_dec l lit_true then dcon_true else dcon_false.
-
-(** A formula with no variable has the same value under every model. *)
-Fixpoint pc_value_no_var (σ1 σ2 : valuation) (pc : path_condition) {struct pc} :
-  pc_has_var pc = false -> pc_value σ1 pc = pc_value σ2 pc.
+Fixpoint prim_eqb_eq (p1 : prim) {struct p1} :
+  forall p2, prim_eqb p1 p2 = true -> p1 = p2.
 Proof.
-  destruct pc as [x | l | p args]; intros H; simpl in *.
-  - discriminate.
-  - reflexivity.
-  - f_equal. induction args as [| a args IH]; simpl in *; [reflexivity |].
-    apply orb_false_elim in H as [Ha Hargs].
-    rewrite (pc_value_no_var σ1 σ2 a Ha), (IH Hargs). reflexivity.
+  destruct p1; intros p2 H; destruct p2; simpl in H; try discriminate.
+  - apply dec_eqb_eq in H. subst. reflexivity.
+  - apply String.eqb_eq in H. subst. reflexivity.
+  - apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H1. subst.
+    f_equal. revert l0 H2. induction l as [| q r IH]; intros [| q' r'] H2;
+      simpl in H2; try discriminate; try reflexivity.
+    apply andb_prop in H2 as [Hq Hr].
+    rewrite (prim_eqb_eq _ _ Hq). f_equal. apply IH. exact Hr.
 Qed.
 
-(** So the value of a variable-free formula is its closed value. *)
-Lemma pc_value_closed : forall σ pc,
-  pc_has_var pc = false -> pc_value σ pc = pc_closed_value pc.
-Proof. intros σ pc H. exact (pc_value_no_var σ (fun _ => lit_true) pc H). Qed.
+Fixpoint thunk_eqb (t1 t2 : thunk) {struct t1} : bool :=
+  match t1, t2 with
+  | TSusp Γ1 e1, TSusp Γ2 e2 => env_eqb Γ1 Γ2 && expr_eqb e1 e2
+  | TIf p1 a1 b1, TIf p2 a2 b2 =>
+      prim_eqb p1 p2 && thunk_eqb a1 a2 && thunk_eqb b1 b2
+  | _, _ => false
+  end
+with env_eqb (Γ1 Γ2 : env) {struct Γ1} : bool :=
+  match Γ1, Γ2 with
+  | EmptyEnv, EmptyEnv => true
+  | ExtendEnv x1 t1 r1, ExtendEnv x2 t2 r2 =>
+      String.eqb x1 x2 && thunk_eqb t1 t2 && env_eqb r1 r2
+  | _, _ => false
+  end.
+
+Fixpoint value_eqb (v1 v2 : value) {struct v1} : bool :=
+  match v1, v2 with
+  | VPrim p1, VPrim p2 => prim_eqb p1 p2
+  | VClos Γ1 x1 b1, VClos Γ2 x2 b2 =>
+      env_eqb Γ1 Γ2 && String.eqb x1 x2 && expr_eqb b1 b2
+  | VCon d1 ts1, VCon d2 ts2 => String.eqb d1 d2 &&
+      (fix thunks_eqb (l1 l2 : list thunk) {struct l1} : bool :=
+         match l1, l2 with
+         | [], [] => true
+         | t1 :: r1, t2 :: r2 => thunk_eqb t1 t2 && thunks_eqb r1 r2
+         | _, _ => false
+         end) ts1 ts2
+  | VPartial o1 ts1, VPartial o2 ts2 =>
+      dec_eqb primop_eq_dec o1 o2 &&
+      (fix thunks_eqb (l1 l2 : list thunk) {struct l1} : bool :=
+         match l1, l2 with
+         | [], [] => true
+         | t1 :: r1, t2 :: r2 => thunk_eqb t1 t2 && thunks_eqb r1 r2
+         | _, _ => false
+         end) ts1 ts2
+  | VType τ1, VType τ2 => dec_eqb type_fc_eq_dec τ1 τ2
+  | VCoercion γ1, VCoercion γ2 => dec_eqb coercion_eq_dec γ1 γ2
+  | VCast w1 γ1, VCast w2 γ2 => value_eqb w1 w2 && dec_eqb coercion_eq_dec γ1 γ2
+  | VBot b1, VBot b2 => bottom_eqb b1 b2
+  | VIf p1 a1 b1, VIf p2 a2 b2 =>
+      prim_eqb p1 p2 && value_eqb a1 a2 && value_eqb b1 b2
+  | _, _ => false
+  end.
+
+Fixpoint thunk_eqb_eq (t1 : thunk) {struct t1} :
+  forall t2, thunk_eqb t1 t2 = true -> t1 = t2
+with env_eqb_eq (Γ1 : env) {struct Γ1} :
+  forall Γ2, env_eqb Γ1 Γ2 = true -> Γ1 = Γ2.
+Proof.
+  - destruct t1; intros t2 H; destruct t2; simpl in H; try discriminate.
+    + apply andb_prop in H as [H1 H2].
+      rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H2). reflexivity.
+    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+      rewrite (prim_eqb_eq _ _ H1), (thunk_eqb_eq _ _ H2), (thunk_eqb_eq _ _ H3).
+      reflexivity.
+  - destruct Γ1 as [| x1 t1 r1]; intros Γ2 H; destruct Γ2 as [| x2 t2 r2];
+      simpl in H; try discriminate; try reflexivity.
+    apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+    apply String.eqb_eq in H1. subst x2.
+    rewrite (thunk_eqb_eq _ _ H2), (env_eqb_eq _ _ H3). reflexivity.
+Qed.
+
+Fixpoint value_eqb_eq (v1 : value) {struct v1} :
+  forall v2, value_eqb v1 v2 = true -> v1 = v2.
+Proof.
+  destruct v1; intros v2 H; destruct v2; simpl in H; try discriminate.
+    + rewrite (prim_eqb_eq _ _ H). reflexivity.
+    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+      apply String.eqb_eq in H2. subst.
+      rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H3). reflexivity.
+    + apply andb_prop in H as [H1 H2]. apply String.eqb_eq in H1. subst.
+      f_equal.
+      revert l0 H2. induction l as [| t r IH]; intros [| t' r'] H2; simpl in H2;
+        try discriminate; try reflexivity.
+      apply andb_prop in H2 as [Ht Hr].
+      rewrite (thunk_eqb_eq _ _ Ht). f_equal. apply IH. exact Hr.
+    + apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H1. subst.
+      f_equal.
+      revert l0 H2. induction l as [| t r IH]; intros [| t' r'] H2; simpl in H2;
+        try discriminate; try reflexivity.
+      apply andb_prop in H2 as [Ht Hr].
+      rewrite (thunk_eqb_eq _ _ Ht). f_equal. apply IH. exact Hr.
+    + apply dec_eqb_eq in H. subst. reflexivity.
+    + apply dec_eqb_eq in H. subst. reflexivity.
+    + apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H2. subst.
+      rewrite (value_eqb_eq _ _ H1). reflexivity.
+    + rewrite (bottom_eqb_eq _ _ H). reflexivity.
+    + apply andb_prop in H as [H12 H3]. apply andb_prop in H12 as [H1 H2].
+      rewrite (prim_eqb_eq _ _ H1), (value_eqb_eq _ _ H2), (value_eqb_eq _ _ H3).
+      reflexivity.
+Qed.
+
+Section Examples.
+Variables t1 t2 : thunk.
+
+Example lookup_shadow :
+  lookup_env (ExtendEnv "x" t1 (ExtendEnv "x" t2 EmptyEnv)) "x" = Some t1 := eq_refl.
+
+Example bind_fields_missing :
+  lookup_env (bind_fields EmptyEnv ["a"; "b"] [t1]) "b" = Some (TSusp EmptyEnv (EBot BUndefined)) :=
+  eq_refl.
+End Examples.
 
 End SymCore.
-
-Notation "Φ1 '∧' Φ2" := (pc_and Φ1 Φ2) (at level 40, left associativity).
-Notation "'¬' Φ" := (pc_not Φ) (at level 35, right associativity).
