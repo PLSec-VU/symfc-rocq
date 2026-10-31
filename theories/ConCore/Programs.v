@@ -39,6 +39,7 @@ Inductive concrete_value : value -> Prop :=
   | Concrete_Coercion : forall γ, concrete_value (VCoercion γ)
   | Concrete_Cast : forall v γ, concrete_value v -> concrete_value (VCast v γ)
   | Concrete_Bot : forall b, concore_bottom b -> concrete_value (VBot b)
+  | Concrete_OutOfFuel : concrete_value (VBot BOutOfFuel)
 
 with concrete_thunk : thunk -> Prop :=
   | Concrete_Susp : forall Γ e,

@@ -6,30 +6,30 @@ Section ConCore.
 Context {sorts : SymCoreSorts} {solver : SymCoreSolver}.
 Context {reduce_prim_literal_law : ReducePrimLiteral} {cast_concore_law : CastConcore}.
 
-Definition functional_eval g Φ Γ e v : Prop :=
-  g = Inf -> Φ = pc_true -> concrete_env Γ -> concore_expr e ->
+Definition functional_eval (g : fuel) Φ Γ e v : Prop :=
+  Φ = pc_true -> concrete_env Γ -> concore_expr e ->
   forall v', eval g Φ Γ e v' -> v = v'.
-Definition functional_apply g Φ Γ vf e v : Prop :=
-  g = Inf -> Φ = pc_true -> concrete_env Γ -> concrete_value vf -> concore_expr e ->
+Definition functional_apply (g : fuel) Φ Γ vf e v : Prop :=
+  Φ = pc_true -> concrete_env Γ -> concrete_value vf -> concore_expr e ->
   forall v', apply g Φ Γ vf e v' -> v = v'.
-Definition functional_prim g Φ op ts v : Prop :=
-  g = Inf -> Φ = pc_true -> Forall concrete_thunk ts ->
+Definition functional_prim (g : fuel) Φ op ts v : Prop :=
+  Φ = pc_true -> Forall concrete_thunk ts ->
   forall v', prim_app g Φ op ts v' -> v = v'.
-Definition functional_force g Φ t v : Prop :=
-  g = Inf -> Φ = pc_true -> concrete_thunk t ->
+Definition functional_force (g : fuel) Φ t v : Prop :=
+  Φ = pc_true -> concrete_thunk t ->
   forall v', force g Φ t v' -> v = v'.
-Definition functional_select g Φ c tthen telse v : Prop :=
-  g = Inf -> Φ = pc_true -> concrete_value c -> concrete_thunk tthen -> concrete_thunk telse ->
+Definition functional_select (g : fuel) Φ c tthen telse v : Prop :=
+  Φ = pc_true -> concrete_value c -> concrete_thunk tthen -> concrete_thunk telse ->
   forall v', select g Φ c tthen telse v' -> v = v'.
-Definition functional_fold g Φ Γ vs alts v : Prop :=
-  g = Inf -> Φ = pc_true -> concrete_env Γ -> concrete_value vs -> Forall concore_alt alts ->
+Definition functional_fold (g : fuel) Φ Γ vs alts v : Prop :=
+  Φ = pc_true -> concrete_env Γ -> concrete_value vs -> Forall concore_alt alts ->
   forall v', fold_alts g Φ Γ vs alts v' -> v = v'.
 
-Lemma forces_functional : forall ts vs,
-  Forall2 (functional_force Inf pc_true) ts vs -> Forall concrete_thunk ts ->
-  forall vs', Forall2 (force Inf pc_true) ts vs' -> vs = vs'.
+Lemma forces_functional : forall g ts vs,
+  Forall2 (functional_force g pc_true) ts vs -> Forall concrete_thunk ts ->
+  forall vs', Forall2 (force g pc_true) ts vs' -> vs = vs'.
 Proof.
-  intros ts vs Hall. induction Hall as [| t v ts' vs' Ht _ IH]; intros Hts ws Hws.
+  intros g ts vs Hall. induction Hall as [| t v ts' vs' Ht _ IH]; intros Hts ws Hws.
   - inversion Hws. reflexivity.
   - inversion Hts; subst. inversion Hws; subst. f_equal; [apply Ht; auto | apply IH; auto].
 Qed.
@@ -39,29 +39,21 @@ Ltac enter_functional_case :=
     functional_select, functional_fold in *;
   intros;
   match goal with
-  | Hfuel : Spent = Inf |- _ => discriminate Hfuel
-  | Hfuel : Live _ = Inf |- _ => injection Hfuel as ->
-  | Hfuel : ?g = Inf |- _ => subst g
-  end;
-  match goal with
   | HΦ : ?Φ = pc_true |- _ => subst Φ
   end;
-  simpl dec in *;
   repeat match goal with
-  | IH : Inf = Inf -> _ |- _ => specialize (IH eq_refl)
   | IH : pc_true = pc_true -> _ |- _ => specialize (IH eq_refl)
   end.
 
 Ltac invert_second_derivation :=
   match goal with
-  | H : eval Inf pc_true _ _ ?w |- _ = ?w => inversion H; subst
-  | H : apply Inf pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
-  | H : prim_app Inf pc_true _ _ ?w |- _ = ?w => inversion H; subst
-  | H : force Inf pc_true _ ?w |- _ = ?w => inversion H; subst
-  | H : select Inf pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
-  | H : fold_alts Inf pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
-  end;
-  simpl dec in *.
+  | H : eval _ pc_true _ _ ?w |- _ = ?w => inversion H; subst
+  | H : apply _ pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
+  | H : prim_app _ pc_true _ _ ?w |- _ = ?w => inversion H; subst
+  | H : force _ pc_true _ ?w |- _ = ?w => inversion H; subst
+  | H : select _ pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
+  | H : fold_alts _ pc_true _ _ _ ?w |- _ = ?w => inversion H; subst
+  end.
 
 Ltac invert_concrete_inputs :=
   repeat match goal with
@@ -114,9 +106,9 @@ Ltac unify_outputs :=
       end
   end;
   repeat match goal with
-  | Hall : Forall2 _ ?ts ?vs, Hws : Forall2 (force Inf pc_true) ?ts ?ws |- _ =>
+  | Hall : Forall2 _ ?ts ?vs, Hws : Forall2 (force _ pc_true) ?ts ?ws |- _ =>
       let Heq := fresh in
-      pose proof (forces_functional ts vs Hall ltac:(assumption) ws Hws) as Heq;
+      pose proof (forces_functional _ ts vs Hall ltac:(assumption) ws Hws) as Heq;
       clear Hall; subst
   end.
 
@@ -142,7 +134,7 @@ Theorem concore_eval_deterministic : forall Γ e v1 v2,
   concrete_env Γ -> concore_expr e -> Γ ⊢ᶜ e ⇓ᶜ v1 -> Γ ⊢ᶜ e ⇓ᶜ v2 -> v1 = v2.
 Proof.
   intros Γ e v1 v2 HΓ He H1 H2.
-  exact (proj1 eval_functional _ _ _ _ _ H1 eq_refl eq_refl HΓ He v2 H2).
+  exact (proj1 eval_functional _ _ _ _ _ H1 eq_refl HΓ He v2 H2).
 Qed.
 
 End ConCore.
