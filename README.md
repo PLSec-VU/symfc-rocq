@@ -16,7 +16,7 @@ make
 
 ## Main results
 
-The file `theories/Theorems.v` prints the statement of each theorem and the axioms it uses. Every theorem is closed under the global context. The file `docs/proof-sketches.md` explains the proofs.
+The file `theories/Theorems.v` prints the general statement of each theorem and the axioms it uses. The general statement holds for any solver and lists the solver laws as hypotheses. Every theorem is closed under the global context. The file `docs/proof-sketches.md` explains the proofs.
 
 | Paper | Rocq name | File |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ The files build in the order that `_CoqProject` lists. A file can use the files 
 | --- | --- |
 | `Syntax.v` | Variables, literals, types, coercions, expressions, values, thunks, bottoms, environments and path conditions. The class `SymCoreSorts` holds the abstract sorts. |
 | `Solver.v` | The solver class `SymCoreSolver`. |
-| `Merge.v` | Merging two leaves of a branch: `ite_leaf`, `ite` and `merge`. |
+| `Merge.v` | Merging two leaves of a branch: `ite_leaf`, `ite` and `merge`. The function `lift_prim` applies a primitive operation in each leaf of its arguments. |
 | `Eval.v` | Fuel, the six evaluation relations, the notation for concrete runs and the induction principle `eval_mut_ind`. |
 | `Inversion.v` | Inversion lemmas for the evaluation relations. |
 | `Budget.v` | A run with no bound is also a run at every large finite bound (`eval_inf_has_budget`). |
@@ -83,13 +83,15 @@ A theorem is *vacuous* when its hypotheses can never hold together, so it says n
 | `SoundnessInstances.v` | Soundness applied to symbolic variables, branches and a primitive that computes, and proof that the instance relation still tells different values apart. |
 | `LoopingArm.v` | Completeness on a `case` whose other alternative, which the model does not take, loops. |
 | `RuntimeBranch.v` | Soundness and completeness on a `case` whose scrutinee is a formula computed at run time. |
-| `PruningModel.v` | A solver that prunes, and a program that is not budget-total. |
+| `PruningModel.v` | A solver that prunes a path whose path condition contradicts itself, and soundness on a run that prunes inside a branch. |
+| `StuckApplication.v` | A program that applies a literal to a literal. At every fuel of 2 or more, no evaluation rule applies to it, so it has no run. So the hypothesis `budget_total` is false for it (`app_lit_not_budget_total`). |
 | `FromJust.v` | Soundness and completeness on a `case` that extracts the field of a symbolic `Just`. |
+| `MergedJust.v` | Soundness on a `case` whose scrutinee is a branch between two `Just` values. Merging makes one `Just` whose field is a branch, so the `case` runs one alternative (`merged_just_soundness`). |
 
 ### `theories/Theorems.v`
 
-The entry point. It prints the five main theorems and `model_laws`, with the axioms of each.
+The entry point. It prints the general statements of the five main theorems and `model_laws`, with the axioms of each.
 
 ## Differences from the paper
 
-The file `docs/proof-sketches.md` lists five places where the Rocq development differs from the paper.
+The file `docs/proof-sketches.md` lists six places where the Rocq development differs from the paper.
