@@ -161,19 +161,27 @@ Definition is_plit (p : prim) : bool :=
   | _ => false
   end.
 
-Fixpoint vars_eqb (xs1 xs2 : list var) : bool :=
-  match xs1, xs2 with
+Fixpoint list_eqb {A : Type} (f : A -> A -> bool) (l1 l2 : list A) : bool :=
+  match l1, l2 with
   | [], [] => true
-  | x1 :: r1, x2 :: r2 => String.eqb x1 x2 && vars_eqb r1 r2
+  | x1 :: r1, x2 :: r2 => f x1 x2 && list_eqb f r1 r2
   | _, _ => false
   end.
 
+Lemma list_eqb_eq : forall (A : Type) (f : A -> A -> bool),
+  (forall x y, f x y = true -> x = y) ->
+  forall l1 l2, list_eqb f l1 l2 = true -> l1 = l2.
+Proof.
+  intros A f Hf. induction l1 as [| x r IH]; intros [| y s] H; simpl in H;
+    try discriminate; try reflexivity.
+  apply andb_prop in H as [Hxy Hrest]. rewrite (Hf _ _ Hxy). f_equal. apply IH. exact Hrest.
+Qed.
+
+Definition vars_eqb : list var -> list var -> bool := list_eqb String.eqb.
+
 Lemma vars_eqb_eq : forall xs1 xs2, vars_eqb xs1 xs2 = true -> xs1 = xs2.
 Proof.
-  induction xs1 as [| x xs IH]; intros [| y ys] H; simpl in H;
-    try discriminate; try reflexivity.
-  apply andb_prop in H as [Hxy Hrest]. apply String.eqb_eq in Hxy. subst y.
-  f_equal. apply IH. exact Hrest.
+  exact (list_eqb_eq _ _ (fun x y => proj1 (String.eqb_eq x y))).
 Qed.
 
 Fixpoint expr_eqb (e1 e2 : expr) {struct e1} : bool :=
@@ -298,21 +306,10 @@ Fixpoint value_eqb (v1 v2 : value) {struct v1} : bool :=
   | VPrim p1, VPrim p2 => prim_eqb p1 p2
   | VClos Γ1 x1 b1, VClos Γ2 x2 b2 =>
       env_eqb Γ1 Γ2 && String.eqb x1 x2 && expr_eqb b1 b2
-  | VCon d1 ts1, VCon d2 ts2 => String.eqb d1 d2 &&
-      (fix thunks_eqb (l1 l2 : list thunk) {struct l1} : bool :=
-         match l1, l2 with
-         | [], [] => true
-         | t1 :: r1, t2 :: r2 => thunk_eqb t1 t2 && thunks_eqb r1 r2
-         | _, _ => false
-         end) ts1 ts2
+  | VCon d1 ts1, VCon d2 ts2 => String.eqb d1 d2 && list_eqb thunk_eqb ts1 ts2
   | VPartial o1 ts1, VPartial o2 ts2 =>
       dec_eqb primop_eq_dec o1 o2 &&
-      (fix thunks_eqb (l1 l2 : list thunk) {struct l1} : bool :=
-         match l1, l2 with
-         | [], [] => true
-         | t1 :: r1, t2 :: r2 => thunk_eqb t1 t2 && thunks_eqb r1 r2
-         | _, _ => false
-         end) ts1 ts2
+      list_eqb thunk_eqb ts1 ts2
   | VType τ1, VType τ2 => dec_eqb type_fc_eq_dec τ1 τ2
   | VCoercion γ1, VCoercion γ2 => dec_eqb coercion_eq_dec γ1 γ2
   | VCast w1 γ1, VCast w2 γ2 => value_eqb w1 w2 && dec_eqb coercion_eq_dec γ1 γ2
@@ -349,17 +346,9 @@ Proof.
       apply String.eqb_eq in H2. subst.
       rewrite (env_eqb_eq _ _ H1), (expr_eqb_eq _ _ H3). reflexivity.
     + apply andb_prop in H as [H1 H2]. apply String.eqb_eq in H1. subst.
-      f_equal.
-      revert l0 H2. induction l as [| t r IH]; intros [| t' r'] H2; simpl in H2;
-        try discriminate; try reflexivity.
-      apply andb_prop in H2 as [Ht Hr].
-      rewrite (thunk_eqb_eq _ _ Ht). f_equal. apply IH. exact Hr.
+      rewrite (list_eqb_eq _ _ thunk_eqb_eq _ _ H2). reflexivity.
     + apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H1. subst.
-      f_equal.
-      revert l0 H2. induction l as [| t r IH]; intros [| t' r'] H2; simpl in H2;
-        try discriminate; try reflexivity.
-      apply andb_prop in H2 as [Ht Hr].
-      rewrite (thunk_eqb_eq _ _ Ht). f_equal. apply IH. exact Hr.
+      rewrite (list_eqb_eq _ _ thunk_eqb_eq _ _ H2). reflexivity.
     + apply dec_eqb_eq in H. subst. reflexivity.
     + apply dec_eqb_eq in H. subst. reflexivity.
     + apply andb_prop in H as [H1 H2]. apply dec_eqb_eq in H2. subst.
