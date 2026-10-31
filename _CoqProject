@@ -9,3 +9,7 @@ theories/SymCore/Budget.v
 theories/ConCore/Programs.v
 theories/ConCore/Preservation.v
 theories/ConCore/Determinism.v
+theories/Soundness/Instance.v
+theories/Soundness/MergeKeeps.v
+theories/Soundness/Soundness.v
+theories/Soundness/Laws.v
