@@ -15,3 +15,5 @@ theories/Soundness/Soundness.v
 theories/Soundness/Laws.v
 theories/Completeness/Statement.v
 theories/Completeness/Completeness.v
+theories/Model/Reducer.v
+theories/Model/Model.v
